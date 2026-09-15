@@ -104,8 +104,12 @@ futures-util = "0.3"
 silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "26a6460", package = "silero" }
 
 # Parakeet (ONNX-based fast transcription) dependencies
-ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Parakeet models
+ort = { version = "2.0.0-rc.10" }  # ONNX Runtime shared by Parakeet, Silero, and GigaAM
 thiserror = "2.0.16"                # Error handling for Parakeet
+transcribe-rs = { version = "=0.3.0", features = ["onnx"] } # GigaAM v3; shares ORT rc.10
+flate2 = "1.0"
+tar = "0.4"
+sha2 = "0.10"
 
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }

@@ -871,6 +871,19 @@ pub async fn stop_recording<R: Runtime>(
                 warn!("⚠️ No Parakeet engine found to unload model");
             }
         }
+        Some("gigaam") => {
+            info!("🎙️ Unloading GigaAM model...");
+            let engine = crate::gigaam_engine::GIGAAM_ENGINE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .cloned();
+            if let Some(engine) = engine {
+                if engine.unload_model().await {
+                    info!("✅ GigaAM model unloaded successfully");
+                }
+            }
+        }
         _ => {
             // Default to Whisper
             info!("🎤 Unloading Whisper model...");

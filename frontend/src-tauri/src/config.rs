@@ -11,6 +11,9 @@ pub const DEFAULT_WHISPER_MODEL: &str = "large-v3-turbo";
 /// This is the quantized version optimized for speed.
 pub const DEFAULT_PARAKEET_MODEL: &str = "parakeet-tdt-0.6b-v3-int8";
 
+/// GigaAM v3 Russian E2E-CTC model used by the local GigaAM provider.
+pub const DEFAULT_GIGAAM_MODEL: &str = "gigaam-v3-e2e-ctc";
+
 /// Whisper model catalog with metadata for all supported models.
 /// Used by both WhisperEngine::discover_models() and discover_models_standalone().
 ///

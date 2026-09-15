@@ -266,7 +266,7 @@ pub async fn start_import<R: Runtime>(
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
-    let use_parakeet = provider.as_deref() == Some("parakeet");
+    let provider_to_unload = provider.clone();
     let result = run_import(
         app.clone(),
         source_path,
@@ -278,7 +278,7 @@ pub async fn start_import<R: Runtime>(
     .await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
-    super::common::unload_engine_after_batch(use_parakeet).await;
+    super::common::unload_engine_after_batch(provider_to_unload.as_deref()).await;
 
     // Guard will automatically clear flag on drop
     // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -331,6 +331,7 @@ async fn run_import<R: Runtime>(
 
     // Determine which provider to use (default to whisper)
     let use_parakeet = provider.as_deref() == Some("parakeet");
+    let use_gigaam = provider.as_deref() == Some("gigaam");
 
     emit_progress(&app, "copying", 5, "Creating meeting folder...");
 
@@ -509,13 +510,18 @@ async fn run_import<R: Runtime>(
     emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
 
     // Initialize the appropriate engine
-    let whisper_engine = if !use_parakeet && total_segments > 0 {
+    let whisper_engine = if !use_parakeet && !use_gigaam && total_segments > 0 {
         Some(get_or_init_whisper(&app, model.as_deref()).await?)
     } else {
         None
     };
     let parakeet_engine = if use_parakeet && total_segments > 0 {
         Some(get_or_init_parakeet(&app, model.as_deref()).await?)
+    } else {
+        None
+    };
+    let gigaam_engine = if use_gigaam && total_segments > 0 {
+        Some(get_or_init_gigaam(model.as_deref()).await?)
     } else {
         None
     };
@@ -580,7 +586,12 @@ async fn run_import<R: Runtime>(
         }
 
         // Transcribe
-        let (text, conf) = if use_parakeet {
+        let (text, conf) = if use_gigaam {
+            let text = gigaam_engine.as_ref().unwrap()
+                .transcribe_audio(segment.samples.clone()).await
+                .map_err(|e| anyhow!("GigaAM transcription failed on segment {}: {}", i, e))?;
+            (text, 0.9f32)
+        } else if use_parakeet {
             let engine = parakeet_engine.as_ref().unwrap();
             let text = engine
                 .transcribe_audio(segment.samples.clone())
@@ -672,6 +683,15 @@ async fn run_import<R: Runtime>(
         segments_count: segments.len(),
         duration_seconds,
     })
+}
+
+async fn get_or_init_gigaam(requested_model: Option<&str>) -> Result<Arc<crate::gigaam_engine::GigaAmEngine>> {
+    crate::gigaam_engine::gigaam_init().await.map_err(|e| anyhow!(e))?;
+    let engine = crate::gigaam_engine::GIGAAM_ENGINE
+        .lock().unwrap_or_else(|e| e.into_inner()).as_ref().cloned()
+        .ok_or_else(|| anyhow!("GigaAM engine not initialized"))?;
+    engine.load_model(requested_model.unwrap_or(crate::config::DEFAULT_GIGAAM_MODEL)).await?;
+    Ok(engine)
 }
 
 /// Emit progress event

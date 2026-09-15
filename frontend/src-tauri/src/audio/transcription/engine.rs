@@ -135,10 +135,17 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
                 }
             }
         }
+        "gigaam" => {
+            info!("🔍 Validating GigaAM v3 model...");
+            crate::gigaam_engine::gigaam_init().await?;
+            crate::gigaam_engine::gigaam_validate_model_ready_with_config(app)
+                .await
+                .map(|model_name| info!("✅ GigaAM model '{}' is ready", model_name))
+        }
         other => {
             warn!("❌ Unsupported transcription provider for local recording: {}", other);
             Err(format!(
-                "Provider '{}' is not supported for local transcription. Please select 'localWhisper' or 'parakeet'.",
+                "Provider '{}' is not supported for local transcription. Please select 'localWhisper', 'parakeet', or 'gigaam'.",
                 other
             ))
         }
@@ -211,6 +218,19 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
                     Err("Parakeet engine not initialized. This should not happen after validation.".to_string())
                 }
             }
+        }
+        "gigaam" => {
+            info!("🎙️ Initializing GigaAM v3 transcription engine");
+            let engine = crate::gigaam_engine::GIGAAM_ENGINE
+                .lock()
+                .unwrap()
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| "GigaAM engine is not initialized".to_string())?;
+            if !engine.is_model_loaded().await {
+                return Err("GigaAM engine initialized but no model is loaded".to_string());
+            }
+            Ok(TranscriptionEngine::Provider(engine))
         }
         "localWhisper" | _ => {
             info!("🎤 Initializing Whisper transcription engine");

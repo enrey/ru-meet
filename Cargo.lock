@@ -1902,6 +1902,19 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
+dependencies = [
+ "humantime",
+ "is-terminal",
+ "log",
+ "regex",
+ "termcolor",
+]
+
+[[package]]
+name = "env_logger"
 version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0621c04f2196ac3f488dd583365b9c09be011a4ab8b9f37248ffcc8f6198b56a"
@@ -2804,6 +2817,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "humantime"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
+
+[[package]]
 name = "hyper"
 version = "0.14.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3628,9 +3647,10 @@ dependencies = [
  "dasp",
  "dirs 5.0.1",
  "ebur128",
- "env_logger",
+ "env_logger 0.11.10",
  "esaxx-rs",
  "ffmpeg-sidecar",
+ "flate2",
  "futures",
  "futures-channel",
  "futures-util",
@@ -3677,6 +3697,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "transcribe-rs",
  "url",
  "uuid",
  "whatlang",
@@ -7475,6 +7496,27 @@ dependencies = [
  "thread_local",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "transcribe-rs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a62f952d29d4ecf5883ac880572096e7afbefbfa384ba260ff95baf083a321b4"
+dependencies = [
+ "base64 0.22.1",
+ "derive_builder",
+ "env_logger 0.10.2",
+ "hound",
+ "log",
+ "ndarray",
+ "once_cell",
+ "ort",
+ "regex",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

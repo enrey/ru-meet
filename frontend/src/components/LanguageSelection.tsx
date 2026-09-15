@@ -10,7 +10,7 @@ export interface Language {
 }
 
 // ISO 639-1 language codes supported by Whisper
-const LANGUAGES: Language[] = [
+export const LANGUAGES: Language[] = [
   { code: 'auto', name: 'Auto Detect (Original Language)' },
   { code: 'auto-translate', name: 'Auto Detect (Translate to English)' },
   { code: 'en', name: 'English' },
@@ -118,7 +118,7 @@ interface LanguageSelectionProps {
   selectedLanguage: string;
   onLanguageChange: (language: string) => void;
   disabled?: boolean;
-  provider?: 'localWhisper' | 'parakeet' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
+  provider?: 'localWhisper' | 'parakeet' | 'gigaam' | 'deepgram' | 'elevenLabs' | 'groq' | 'openai';
 }
 
 export function LanguageSelection({
@@ -132,7 +132,10 @@ export function LanguageSelection({
 
   // Parakeet only supports auto-detection (doesn't support manual language selection)
   const isParakeet = provider === 'parakeet';
-  const availableLanguages = isParakeet
+  const isGigaAM = provider === 'gigaam';
+  const availableLanguages = isGigaAM
+    ? LANGUAGES.filter(lang => lang.code === 'ru')
+    : isParakeet
     ? LANGUAGES.filter(lang => lang.code === 'auto' || lang.code === 'auto-translate')
     : LANGUAGES;
 
@@ -169,8 +172,9 @@ export function LanguageSelection({
   };
 
   // Find the selected language name for display
+  const effectiveLanguage = isGigaAM ? 'ru' : selectedLanguage;
   const selectedLanguageName = LANGUAGES.find(
-    lang => lang.code === selectedLanguage
+    lang => lang.code === effectiveLanguage
   )?.name || 'Auto Detect (Original Language)';
 
   return (
@@ -184,9 +188,9 @@ export function LanguageSelection({
 
       <div className="space-y-2">
         <select
-          value={selectedLanguage}
+          value={isGigaAM ? 'ru' : selectedLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
-          disabled={disabled || saving}
+          disabled={disabled || saving || isGigaAM}
           className="w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
         >
           {availableLanguages.map((language) => (
@@ -204,25 +208,30 @@ export function LanguageSelection({
             <p className="mt-1 text-xs">Parakeet currently only supports automatic language detection. Manual language selection is not available. Use Whisper if you need to specify a particular language.</p>
           </div>
         )}
+        {isGigaAM && (
+          <div className="mt-2 rounded-md bg-blue-50 p-2 text-blue-800">
+            <p className="text-xs">GigaAM v3 supports Russian speech only.</p>
+          </div>
+        )}
 
         {/* Info text */}
         <div className="text-xs space-y-2 pt-2">
           <p className="text-gray-600">
             <strong>Current:</strong> {selectedLanguageName}
           </p>
-          {selectedLanguage === 'auto' && (
+          {effectiveLanguage === 'auto' && (
             <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-yellow-800">
               <p className="font-medium">⚠️ Auto Detect may produce incorrect results</p>
               <p className="mt-1">For best accuracy, select your specific language (e.g., English, Spanish, etc.)</p>
             </div>
           )}
-          {selectedLanguage === 'auto-translate' && (
+          {effectiveLanguage === 'auto-translate' && (
             <div className="p-2 bg-blue-50 border border-blue-200 rounded text-blue-800">
               <p className="font-medium">🌐 Translation Mode Active</p>
               <p className="mt-1">All audio will be automatically translated to English. Best for multilingual meetings where you need English output.</p>
             </div>
           )}
-          {selectedLanguage !== 'auto' && selectedLanguage !== 'auto-translate' && (
+          {effectiveLanguage !== 'auto' && effectiveLanguage !== 'auto-translate' && (
             <p className="text-gray-600">
               Transcription will be optimized for <strong>{selectedLanguageName}</strong>
             </p>

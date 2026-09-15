@@ -2,7 +2,8 @@ import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptVie
 import { PermissionWarning } from '@/components/PermissionWarning';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
-import { Copy, GlobeIcon } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { AudioLines, Copy, GlobeIcon } from 'lucide-react';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
@@ -70,7 +71,17 @@ export function TranscriptPanel({
                     </span>
                   </Button>
                 )}
-                {transcriptModelConfig.provider === "localWhisper" &&
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => showModal('deviceSettings')}
+                  title="Audio devices"
+                >
+                  <AudioLines />
+                  <span className="hidden md:inline">Devices</span>
+                </Button>
+                {(transcriptModelConfig.provider === 'localWhisper' ||
+                  transcriptModelConfig.provider === 'gigaam') && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -78,11 +89,30 @@ export function TranscriptPanel({
                     title="Language"
                   >
                     <GlobeIcon />
-                    <span className='hidden md:inline'>
-                      Language
-                    </span>
+                    <span className="hidden md:inline">Language</span>
                   </Button>
-                }
+                )}
+                {transcriptModelConfig.provider === 'parakeet' && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex cursor-not-allowed">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled
+                          aria-label="Language selection is unavailable for Parakeet"
+                          className="rounded-l-none border-l-0"
+                        >
+                          <GlobeIcon />
+                          <span className="hidden md:inline">Language</span>
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Parakeet detects the spoken language automatically and does not support manual language selection.
+                    </TooltipContent>
+                  </Tooltip>
+                )}
               </ButtonGroup>
             </div>
           </div>

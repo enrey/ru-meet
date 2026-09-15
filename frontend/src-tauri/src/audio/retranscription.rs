@@ -102,11 +102,11 @@ pub async fn start_retranscription<R: Runtime>(
     // Reset cancellation flag
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
 
-    let use_parakeet = provider.as_deref() == Some("parakeet");
+    let provider_to_unload = provider.clone();
     let result = run_retranscription(app.clone(), meeting_id.clone(), meeting_folder_path, language, model, provider).await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
-    super::common::unload_engine_after_batch(use_parakeet).await;
+    super::common::unload_engine_after_batch(provider_to_unload.as_deref()).await;
 
     // Guard will automatically clear flag on drop
     // No need for manual: RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -183,6 +183,7 @@ async fn run_retranscription<R: Runtime>(
 
     // Determine which provider to use (default to whisper)
     let use_parakeet = provider.as_deref() == Some("parakeet");
+    let use_gigaam = provider.as_deref() == Some("gigaam");
 
     info!(
         "Starting retranscription for meeting {} with language {:?}, model {:?}, provider {:?}",
@@ -300,13 +301,18 @@ async fn run_retranscription<R: Runtime>(
     emit_progress(&app, &meeting_id, "transcribing", 25, "Loading transcription engine...");
 
     // Initialize the appropriate engine once (not per-segment)
-    let whisper_engine = if !use_parakeet {
+    let whisper_engine = if !use_parakeet && !use_gigaam {
         Some(get_or_init_whisper(&app, model.as_deref()).await?)
     } else {
         None
     };
     let parakeet_engine = if use_parakeet {
         Some(get_or_init_parakeet(&app, model.as_deref()).await?)
+    } else {
+        None
+    };
+    let gigaam_engine = if use_gigaam {
+        Some(get_or_init_gigaam(model.as_deref()).await?)
     } else {
         None
     };
@@ -369,7 +375,12 @@ async fn run_retranscription<R: Runtime>(
         }
 
         // Transcribe this segment
-        let (text, conf) = if use_parakeet {
+        let (text, conf) = if use_gigaam {
+            let text = gigaam_engine.as_ref().unwrap()
+                .transcribe_audio(segment.samples.clone()).await
+                .map_err(|e| anyhow!("GigaAM transcription failed on segment {}: {}", i, e))?;
+            (text, 0.9f32)
+        } else if use_parakeet {
             let engine = parakeet_engine.as_ref().unwrap();
             let text = engine
                 .transcribe_audio(segment.samples.clone())
@@ -497,6 +508,15 @@ async fn run_retranscription<R: Runtime>(
         duration_seconds,
         language,
     })
+}
+
+async fn get_or_init_gigaam(requested_model: Option<&str>) -> Result<Arc<crate::gigaam_engine::GigaAmEngine>> {
+    crate::gigaam_engine::gigaam_init().await.map_err(|e| anyhow!(e))?;
+    let engine = crate::gigaam_engine::GIGAAM_ENGINE
+        .lock().unwrap_or_else(|e| e.into_inner()).as_ref().cloned()
+        .ok_or_else(|| anyhow!("GigaAM engine not initialized"))?;
+    engine.load_model(requested_model.unwrap_or(crate::config::DEFAULT_GIGAAM_MODEL)).await?;
+    Ok(engine)
 }
 
 /// Emit progress event

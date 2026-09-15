@@ -14,6 +14,7 @@ export const DEFAULT_WHISPER_MODEL = 'large-v3-turbo';
  * This is the quantized version optimized for speed.
  */
 export const DEFAULT_PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
+export const DEFAULT_GIGAAM_MODEL = 'gigaam-v3-e2e-ctc';
 
 /**
  * Model defaults by provider type
@@ -22,4 +23,5 @@ export const MODEL_DEFAULTS = {
   whisper: DEFAULT_WHISPER_MODEL,
   localWhisper: DEFAULT_WHISPER_MODEL,
   parakeet: DEFAULT_PARAKEET_MODEL,
+  gigaam: DEFAULT_GIGAAM_MODEL,
 } as const;
