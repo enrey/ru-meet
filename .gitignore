@@ -28,6 +28,8 @@
 # misc
 .DS_Store
 *.pem
+tauri-update.key
+tauri-update.key.pub
 
 # debug
 npm-debug.log*
