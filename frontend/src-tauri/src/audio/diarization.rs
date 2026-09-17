@@ -15,6 +15,7 @@ use polyvoice::{ModelRegistry, Pipeline, Profile, SampleRate};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::PathBuf, sync::Mutex, time::Duration};
 use tauri::{AppHandle, Emitter, Runtime};
+use tauri_plugin_store::StoreExt;
 use tokio::io::AsyncWriteExt;
 
 const PYANNOTE_WESPEAKER_ENGINE: &str = "pyannote-wespeaker";
@@ -67,9 +68,10 @@ struct PyannoteWeSpeakerEngine;
 
 impl PyannoteWeSpeakerEngine {
     fn model_registry() -> Result<ModelRegistry> {
-        let root = dirs::data_local_dir()
+        let root = crate::portable::data_root()
+            .cloned()
+            .or_else(|| dirs::data_local_dir().map(|path| path.join("Meetily")))
             .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
-            .join("Meetily")
             .join("models")
             .join("diarization");
         ModelRegistry::with_cache_dir(root).map_err(Into::into)
@@ -110,9 +112,10 @@ struct NvidiaSortformerV2Engine;
 
 impl NvidiaSortformerV2Engine {
     fn model_dir() -> Result<PathBuf> {
-        Ok(dirs::data_local_dir()
+        Ok(crate::portable::data_root()
+            .cloned()
+            .or_else(|| dirs::data_local_dir().map(|path| path.join("Meetily")))
             .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
-            .join("Meetily")
             .join("models")
             .join("diarization")
             .join("sortformer-v2"))
@@ -173,9 +176,35 @@ static JOB_STATUS: Lazy<Mutex<DiarizationJobStatus>> = Lazy::new(|| {
 });
 static CANCELLED_RERUNS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
+pub fn load_diarization_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let store = app
+        .store(crate::portable::store_path("diarization-settings.json"))
+        .map_err(|error| error.to_string())?;
+    if let Some(value) = store.get("settings") {
+        let settings: DiarizationSettings =
+            serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+        engine_for_id(&settings.engine).map_err(|error| error.to_string())?;
+        *SETTINGS
+            .lock()
+            .map_err(|_| "Diarization settings lock is unavailable")? = settings;
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub fn set_diarization_settings(settings: DiarizationSettings) -> Result<(), String> {
+pub fn set_diarization_settings<R: Runtime>(
+    app: AppHandle<R>,
+    settings: DiarizationSettings,
+) -> Result<(), String> {
     engine_for_id(&settings.engine).map_err(|error| error.to_string())?;
+    let store = app
+        .store(crate::portable::store_path("diarization-settings.json"))
+        .map_err(|error| error.to_string())?;
+    store.set(
+        "settings",
+        serde_json::to_value(&settings).map_err(|error| error.to_string())?,
+    );
+    store.save().map_err(|error| error.to_string())?;
     *SETTINGS
         .lock()
         .map_err(|_| "Diarization settings lock is unavailable")? = settings;

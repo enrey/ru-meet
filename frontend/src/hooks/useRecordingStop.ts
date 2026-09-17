@@ -416,7 +416,7 @@ export function useRecordingStop(
             await Analytics.updateMeetingCount();
 
             // Check for activation (first meeting)
-            const { Store } = await import('@tauri-apps/plugin-store');
+            const { Store } = await import('@/lib/portableStore');
             const store = await Store.load('analytics.json');
             const totalMeetings = await store.get<number>('total_meetings');
 

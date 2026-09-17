@@ -61,7 +61,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   useEffect(() => {
     const loadNotificationPref = async () => {
       try {
-        const { Store } = await import('@tauri-apps/plugin-store');
+        const { Store } = await import('@/lib/portableStore');
         const store = await Store.load('preferences.json');
         const show = await store.get<boolean>('show_recording_notification') ?? true;
         setShowRecordingNotification(show);
@@ -138,7 +138,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const handleNotificationToggle = async (enabled: boolean) => {
     try {
       setShowRecordingNotification(enabled);
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('preferences.json');
       await store.set('show_recording_notification', enabled);
       await store.save();

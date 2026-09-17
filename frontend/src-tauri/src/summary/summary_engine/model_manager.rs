@@ -145,10 +145,16 @@ impl ModelManager {
             } else {
                 // Production mode fallback (caller should provide path)
                 log::warn!("ModelManager: No models directory provided, using fallback path");
-                dirs::data_dir()
+                crate::portable::data_root()
+                    .cloned()
+                    .or_else(dirs::data_dir)
                     .or_else(|| dirs::home_dir())
                     .ok_or_else(|| anyhow!("Could not find system data directory"))?
-                    .join("Meetily")
+                    .join(if crate::portable::data_root().is_some() {
+                        ""
+                    } else {
+                        "Meetily"
+                    })
                     .join("models")
                     .join("summary")
             }

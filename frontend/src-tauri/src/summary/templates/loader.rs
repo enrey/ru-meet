@@ -23,6 +23,9 @@ pub fn set_bundled_templates_dir(path: PathBuf) {
 /// - Windows: %APPDATA%\Meetily\templates\
 /// - Linux: ~/.config/Meetily/templates/
 fn get_custom_templates_dir() -> Option<PathBuf> {
+    if let Some(root) = crate::portable::data_root() {
+        return Some(root.join("templates"));
+    }
     let mut path = dirs::data_dir()?;
     path.push("Meetily");
     path.push("templates");

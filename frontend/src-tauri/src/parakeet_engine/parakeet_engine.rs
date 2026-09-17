@@ -322,10 +322,16 @@ impl ParakeetEngine {
                 current_dir.join("models").join("parakeet")
             } else {
                 // Production mode
-                dirs::data_dir()
+                crate::portable::data_root()
+                    .cloned()
+                    .or_else(dirs::data_dir)
                     .or_else(|| dirs::home_dir())
                     .ok_or_else(|| anyhow!("Could not find system data directory"))?
-                    .join("Meetily")
+                    .join(if crate::portable::data_root().is_some() {
+                        ""
+                    } else {
+                        "Meetily"
+                    })
                     .join("models")
                     .join("parakeet")
             }
@@ -1071,7 +1077,7 @@ impl ParakeetEngine {
                         })?;
                         return Err(DownloadCancelled.into());
                     }
-                    chunk = timeout(Duration::from_secs(30), stream.next()) => chunk,
+                    chunk = timeout(Duration::from_secs(120), stream.next()) => chunk,
                 };
                 let chunk = match next_chunk {
                     Err(_) => {
@@ -1083,7 +1089,7 @@ impl ParakeetEngine {
                             )
                         })?;
                         return Err(anyhow!(
-                            "Download timeout for {}: no data received for 30 seconds",
+                            "Download timeout for {}: no data received for 120 seconds",
                             artifact.filename
                         ));
                     }

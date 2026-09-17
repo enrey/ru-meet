@@ -12,7 +12,7 @@ import Analytics from '@/lib/analytics';
  */
 export async function showRecordingNotification(): Promise<void> {
   try {
-    const { Store } = await import('@tauri-apps/plugin-store');
+    const { Store } = await import('@/lib/portableStore');
     const store = await Store.load('preferences.json');
     const showNotification = await store.get<boolean>('show_recording_notification') ?? true;
 
@@ -38,7 +38,7 @@ export async function showRecordingNotification(): Promise<void> {
             <button
               onClick={async () => {
                 if (dontShowAgain) {
-                  const { Store } = await import('@tauri-apps/plugin-store');
+                  const { Store } = await import('@/lib/portableStore');
                   const store = await Store.load('preferences.json');
                   await store.set('show_recording_notification', false);
                   await store.save();

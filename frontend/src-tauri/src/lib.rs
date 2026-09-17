@@ -46,6 +46,7 @@ pub mod onboarding;
 pub mod openai;
 pub mod openrouter;
 pub mod parakeet_engine;
+pub mod portable;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -62,12 +63,54 @@ use tokio::sync::RwLock;
 static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
-static ONNX_RUNTIME_INIT_ERROR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+enum OnnxRuntimeState {
+    Pending,
+    Ready,
+    Failed(String),
+}
 
+#[cfg(target_os = "windows")]
+static ONNX_RUNTIME_STATE: std::sync::LazyLock<(
+    StdMutex<OnnxRuntimeState>,
+    std::sync::Condvar,
+)> = std::sync::LazyLock::new(|| {
+    (
+        StdMutex::new(OnnxRuntimeState::Pending),
+        std::sync::Condvar::new(),
+    )
+});
+
+/// Blocks (with a timeout) until the background ONNX Runtime init started in
+/// `setup()` has finished. On some Windows machines, ONNX Runtime's native
+/// `CreateEnv` call itself can hang indefinitely (independent of model, file,
+/// optimization level, or telemetry setting - reproduced with a minimal,
+/// single-threaded `ort` session builder outside Tauri entirely). When that
+/// happens there's no code-level fix on our side; the best we can do is fail
+/// fast with a clear error instead of leaving the caller (e.g. start_recording)
+/// hanging forever, which previously showed up as an infinite "Start Recording"
+/// spinner with no feedback at all.
 pub(crate) fn ensure_onnx_runtime_available() -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
-    if let Some(error) = ONNX_RUNTIME_INIT_ERROR.get() {
-        anyhow::bail!("{error}");
+    {
+        let (lock, cvar) = &*ONNX_RUNTIME_STATE;
+        let state = lock.lock().unwrap();
+        let (state, wait_result) = cvar
+            .wait_timeout_while(
+                state,
+                std::time::Duration::from_secs(20),
+                |s| matches!(s, OnnxRuntimeState::Pending),
+            )
+            .unwrap();
+        if wait_result.timed_out() {
+            anyhow::bail!(
+                "ONNX Runtime failed to initialize (timed out). This can happen if security \
+                 software is intercepting the process; try adding an exclusion for Meetily, or \
+                 restart the app."
+            );
+        }
+        if let OnnxRuntimeState::Failed(error) = &*state {
+            anyhow::bail!("{error}");
+        }
     }
 
     Ok(())
@@ -95,7 +138,16 @@ where
 #[cfg(target_os = "windows")]
 fn record_onnx_runtime_failure(error: String) {
     log::error!("{error}");
-    let _ = ONNX_RUNTIME_INIT_ERROR.set(error);
+    let (lock, cvar) = &*ONNX_RUNTIME_STATE;
+    *lock.lock().unwrap() = OnnxRuntimeState::Failed(error);
+    cvar.notify_all();
+}
+
+#[cfg(target_os = "windows")]
+fn record_onnx_runtime_success() {
+    let (lock, cvar) = &*ONNX_RUNTIME_STATE;
+    *lock.lock().unwrap() = OnnxRuntimeState::Ready;
+    cvar.notify_all();
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -433,19 +485,30 @@ pub fn get_language_preference_internal() -> Option<String> {
 pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
 
+    let mut context = tauri::generate_context!();
+    #[cfg(target_os = "windows")]
+    let portable_window = if portable::data_root().is_some() {
+        // Create the window in setup so its WebView profile can live beside the exe.
+        Some(context.config_mut().app.windows.remove(0))
+    } else {
+        None
+    };
+
     let mut builder = tauri::Builder::default();
 
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-            log_info!(
-                "Second app instance requested with args: {:?}, cwd: {:?}",
-                args,
-                cwd
-            );
+        if portable::data_root().is_none() {
+            builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+                log_info!(
+                    "Second app instance requested with args: {:?}, cwd: {:?}",
+                    args,
+                    cwd
+                );
 
-            tray::focus_main_window(app);
-        }));
+                tray::focus_main_window(app);
+            }));
+        }
     }
 
     builder
@@ -462,7 +525,16 @@ pub fn run() {
         .manage(summary::summary_engine::ModelManagerState(Arc::new(
             tokio::sync::Mutex::new(None),
         )))
-        .setup(|_app| {
+        .setup(move |_app| {
+            #[cfg(target_os = "windows")]
+            if let (Some(root), Some(window_config)) =
+                (portable::data_root(), portable_window.as_ref())
+            {
+                _app.asset_protocol_scope().allow_directory(root, true)?;
+                tauri::WebviewWindowBuilder::from_config(_app, window_config)?
+                    .data_directory(root.join("webview"))
+                    .build()?;
+            }
             #[cfg(target_os = "windows")]
             match _app
                 .path()
@@ -477,13 +549,18 @@ pub fn run() {
                         .name("onnx-runtime-init".to_string())
                         .spawn(move || {
                             match catch_onnx_runtime_init(|| {
-                                ort::init_from(&runtime_path)?.with_telemetry(false).commit();
+                                ort::init_from(&runtime_path)?
+                                    .with_telemetry(false)
+                                    .commit();
                                 Ok::<(), ort::Error>(())
                             }) {
-                                Ok(()) => log::info!(
-                                    "Initialized bundled ONNX Runtime from {}",
-                                    runtime_path
-                                ),
+                                Ok(()) => {
+                                    log::info!(
+                                        "Initialized bundled ONNX Runtime from {}",
+                                        runtime_path
+                                    );
+                                    record_onnx_runtime_success();
+                                }
                                 Err(error) => record_onnx_runtime_failure(format!(
                                     "Failed to initialize bundled ONNX Runtime from {}: {}",
                                     runtime_path, error
@@ -559,6 +636,10 @@ pub fn run() {
                     log::error!("Failed to initialize Parakeet engine on startup: {}", e);
                 }
             });
+
+            if let Err(error) = audio::diarization::load_diarization_settings(&_app.handle()) {
+                log::warn!("Failed to load diarization settings: {}", error);
+            }
 
             // GigaAM uses the same app data model root as the other local engines.
             gigaam_engine::set_models_directory(&_app.handle());
@@ -875,7 +956,7 @@ pub fn run() {
             audio::import::cancel_import_command,
             audio::import::is_import_in_progress_command,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
             match event {

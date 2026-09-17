@@ -13,10 +13,7 @@ static MODELS_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// Initialize the models directory path using app_data_dir
 /// This should be called during app setup before parakeet_init
 pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .expect("Failed to get app data dir");
+    let app_data_dir = crate::portable::app_data_dir(&app).expect("Failed to get app data dir");
 
     let models_dir = app_data_dir.join("models");
 
@@ -396,47 +393,62 @@ pub async fn parakeet_download_model<R: Runtime>(
 
     if let Some(engine) = engine {
         // Create progress callback that emits detailed events
-        let app_handle_clone = app_handle.clone();
-        let model_name_clone = model_name.clone();
+        // Each attempt gets its own callback; a failed transfer keeps the partial file.
+        // The next attempt requests the remaining bytes with HTTP Range.
+        let mut result = Err(anyhow::anyhow!("Download was not started"));
 
-        let progress_callback = Box::new(move |progress: DownloadProgress| {
-            log::info!(
-                "Parakeet download progress for {}: {:.1} MB / {:.1} MB ({:.1} MB/s) - {}%",
-                model_name_clone,
-                progress.downloaded_mb,
-                progress.total_mb,
-                progress.speed_mbps,
-                progress.percent
-            );
-
-            // Emit download progress event with detailed info
-            if let Err(e) = app_handle_clone.emit(
-                "parakeet-model-download-progress",
-                serde_json::json!({
-                    "modelName": model_name_clone,
-                    "progress": progress.percent,
-                    "downloaded_bytes": progress.downloaded_bytes,
-                    "total_bytes": progress.total_bytes,
-                    "downloaded_mb": progress.downloaded_mb,
-                    "total_mb": progress.total_mb,
-                    "speed_mbps": progress.speed_mbps,
-                    "status": if progress.percent == 100 { "completed" } else { "downloading" }
-                }),
-            ) {
-                log::error!("Failed to emit parakeet download progress event: {}", e);
-            }
-        });
-
-        // Ensure models are discovered before downloading
-        // This populates available_models so we don't get "Model not found" error
+        // Ensure models are discovered before downloading.
         if let Err(e) = engine.discover_models().await {
             log::warn!("Failed to discover models before download: {}", e);
-            // Continue anyway, maybe it will work if the model is already known
         }
 
-        let result = engine
-            .download_model_detailed(&model_name, Some(progress_callback))
-            .await;
+        for attempt in 1..=3 {
+            let app_handle_clone = app_handle.clone();
+            let model_name_clone = model_name.clone();
+            let progress_callback = Box::new(move |progress: DownloadProgress| {
+                log::info!(
+                    "Parakeet download progress for {}: {:.1} MB / {:.1} MB ({:.1} MB/s) - {}%",
+                    model_name_clone,
+                    progress.downloaded_mb,
+                    progress.total_mb,
+                    progress.speed_mbps,
+                    progress.percent
+                );
+
+                // Emit download progress event with detailed info
+                if let Err(e) = app_handle_clone.emit(
+                    "parakeet-model-download-progress",
+                    serde_json::json!({
+                        "modelName": model_name_clone,
+                        "progress": progress.percent,
+                        "downloaded_bytes": progress.downloaded_bytes,
+                        "total_bytes": progress.total_bytes,
+                        "downloaded_mb": progress.downloaded_mb,
+                        "total_mb": progress.total_mb,
+                        "speed_mbps": progress.speed_mbps,
+                        "status": if progress.percent == 100 { "completed" } else { "downloading" }
+                    }),
+                ) {
+                    log::error!("Failed to emit parakeet download progress event: {}", e);
+                }
+            });
+            result = engine
+                .download_model_detailed(&model_name, Some(progress_callback))
+                .await;
+            let retryable = result.as_ref().err().is_some_and(|error| {
+                let message = error.to_string();
+                message.contains("no data received") || message.contains("Download stream failed")
+            });
+            if !retryable || attempt == 3 {
+                break;
+            }
+            log::warn!(
+                "Parakeet download interrupted (attempt {}): {}. Resuming...",
+                attempt,
+                result.as_ref().unwrap_err()
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(2 * attempt)).await;
+        }
 
         match result {
             Ok(()) => {

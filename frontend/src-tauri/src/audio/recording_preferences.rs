@@ -41,6 +41,10 @@ impl Default for RecordingPreferences {
 
 /// Get the default recordings folder based on platform
 pub fn get_default_recordings_folder() -> PathBuf {
+    if let Some(root) = crate::portable::data_root() {
+        return root.join("recordings");
+    }
+
     #[cfg(target_os = "windows")]
     {
         // Windows: %USERPROFILE%\Music\meetily-recordings
@@ -97,7 +101,7 @@ pub async fn load_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<RecordingPreferences> {
     // Try to load from Tauri store
-    let store = match app.store("recording_preferences.json") {
+    let store = match app.store(crate::portable::store_path("recording_preferences.json")) {
         Ok(store) => store,
         Err(e) => {
             warn!("Failed to access store: {}, using defaults", e);
@@ -147,7 +151,7 @@ pub async fn save_recording_preferences<R: Runtime>(
 
     // Get or create store
     let store = app
-        .store("recording_preferences.json")
+        .store(crate::portable::store_path("recording_preferences.json"))
         .map_err(|e| anyhow::anyhow!("Failed to access store: {}", e))?;
 
     // Serialize preferences to JSON value

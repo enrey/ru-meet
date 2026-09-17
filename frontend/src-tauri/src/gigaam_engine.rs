@@ -273,7 +273,7 @@ fn directory_size(path: &Path) -> u64 {
 }
 
 pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
-    if let Ok(path) = app.path().app_data_dir() {
+    if let Ok(path) = crate::portable::app_data_dir(&app) {
         *MODELS_DIR.lock().unwrap() = Some(path.join("models"));
     }
 }

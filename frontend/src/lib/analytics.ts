@@ -168,7 +168,7 @@ export class Analytics {
   static async getPersistentUserId(): Promise<string> {
     try {
       // First check if we have a stored user ID
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
       
       let userId = await store.get<string>('user_id');
@@ -197,7 +197,7 @@ export class Analytics {
 
   static async checkAndTrackFirstLaunch(): Promise<void> {
     try {
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
       
       const isFirstLaunch = await store.get<boolean>('is_first_launch');
@@ -220,7 +220,7 @@ export class Analytics {
 
   static async checkAndTrackDailyUsage(): Promise<void> {
     try {
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
       
       const today = new Date().toISOString().split('T')[0];
@@ -305,7 +305,7 @@ export class Analytics {
   // Helper methods for analytics.json store
   static async calculateDaysSince(dateKey: string): Promise<number | null> {
     try {
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
       const dateStr = await store.get<string>(dateKey);
       if (!dateStr) return null;
@@ -319,7 +319,7 @@ export class Analytics {
 
   static async updateMeetingCount(): Promise<void> {
     try {
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
 
       const totalMeetings = (await store.get<number>('total_meetings') || 0) + 1;
@@ -339,7 +339,7 @@ export class Analytics {
 
   static async getMeetingsCountToday(): Promise<number> {
     try {
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
       const today = new Date().toISOString().split('T')[0];
       const dailyCounts = await store.get<Record<string, number>>('daily_meeting_counts') || {};
@@ -352,7 +352,7 @@ export class Analytics {
 
   static async hasUsedFeatureBefore(featureName: string): Promise<boolean> {
     try {
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
       const features = await store.get<Record<string, any>>('features_used') || {};
       return !!features[featureName];
@@ -364,7 +364,7 @@ export class Analytics {
 
   static async markFeatureUsed(featureName: string): Promise<void> {
     try {
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
       const features = await store.get<Record<string, any>>('features_used') || {};
 
@@ -392,7 +392,7 @@ export class Analytics {
       const deviceInfo = await this.getDeviceInfo();
       const daysSinceLast = await this.calculateDaysSince('last_meeting_date');
 
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
       const totalMeetings = await store.get<number>('total_meetings') || 0;
 
@@ -498,7 +498,7 @@ export class Analytics {
 
     try {
       const deviceInfo = await this.getDeviceInfo();
-      const { Store } = await import('@tauri-apps/plugin-store');
+      const { Store } = await import('@/lib/portableStore');
       const store = await Store.load('analytics.json');
 
       // Get today's date

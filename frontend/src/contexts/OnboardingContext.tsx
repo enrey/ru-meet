@@ -8,11 +8,19 @@ import { resolveOnboardingSummaryModelStatus } from '@/lib/onboarding-summary-mo
 import type { ParakeetDownloadProgressEvent } from '@/lib/parakeet';
 
 const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
+const GIGAAM_MODEL = 'gigaam-v3-e2e-ctc';
+type TranscriptionProvider = 'gigaam' | 'parakeet';
+type DiarizationEngine = 'pyannote-wespeaker' | 'nvidia-sortformer-v2';
 
 interface OnboardingStatus {
   version: string;
   completed: boolean;
   current_step: number;
+  transcription_provider?: TranscriptionProvider;
+  download_transcription?: boolean;
+  download_summary?: boolean;
+  download_diarization?: boolean;
+  diarization_engine?: DiarizationEngine;
   model_status: {
     parakeet: string;
     summary: string;
@@ -37,6 +45,16 @@ interface ParakeetProgressInfo {
 
 interface OnboardingContextType {
   currentStep: number;
+  transcriptionProvider: TranscriptionProvider;
+  setTranscriptionProvider: (value: TranscriptionProvider) => void;
+  downloadTranscription: boolean;
+  setDownloadTranscription: (value: boolean) => void;
+  downloadSummary: boolean;
+  setDownloadSummary: (value: boolean) => void;
+  downloadDiarization: boolean;
+  setDownloadDiarization: (value: boolean) => void;
+  diarizationEngine: DiarizationEngine;
+  setDiarizationEngine: (value: DiarizationEngine) => void;
   parakeetDownloaded: boolean;
   parakeetProgress: number;
   parakeetProgressInfo: ParakeetProgressInfo;
@@ -68,6 +86,7 @@ interface OnboardingContextType {
 
 interface StartBackgroundDownloadsOptions {
   includeParakeet: boolean;
+  includeGigaam?: boolean;
   includeSummary: boolean;
   summaryModel?: string;
 }
@@ -76,7 +95,13 @@ const OnboardingContext = createContext<OnboardingContextType | undefined>(undef
 
 export function OnboardingProvider({ children }: { children: React.ReactNode }) {
   const [currentStep, setCurrentStep] = useState(1);
+  const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider>('gigaam');
+  const [downloadTranscription, setDownloadTranscription] = useState(true);
+  const [downloadSummary, setDownloadSummary] = useState(false);
+  const [downloadDiarization, setDownloadDiarization] = useState(true);
+  const [diarizationEngine, setDiarizationEngine] = useState<DiarizationEngine>('pyannote-wespeaker');
   const [completed, setCompleted] = useState(false);
+  const [statusLoaded, setStatusLoaded] = useState(false);
   const [parakeetDownloaded, setParakeetDownloaded] = useState(false);
   const [parakeetProgress, setParakeetProgress] = useState(0);
   const [parakeetProgressInfo, setParakeetProgressInfo] = useState<ParakeetProgressInfo>({
@@ -222,7 +247,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
     // Don't auto-save if completed (to avoid overwriting completion status)
     // Also don't auto-save if we are currently in the process of completing
-    if (completed || isCompletingRef.current) return;
+    if (!statusLoaded || completed || isCompletingRef.current) return;
 
     saveTimeoutRef.current = setTimeout(() => {
       saveOnboardingStatus();
@@ -231,7 +256,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [currentStep, parakeetDownloaded, summaryModelDownloaded, completed]);
+  }, [statusLoaded, currentStep, parakeetDownloaded, summaryModelDownloaded, completed, transcriptionProvider, downloadTranscription, downloadSummary, downloadDiarization, diarizationEngine, selectedSummaryModel]);
 
   // Listen to Parakeet download progress
   useEffect(() => {
@@ -344,6 +369,11 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       const status = await invoke<OnboardingStatus | null>('get_onboarding_status');
       if (status) {
         console.log('[OnboardingContext] Loaded saved status:', status);
+        setTranscriptionProvider(status.transcription_provider === 'parakeet' ? 'parakeet' : 'gigaam');
+        setDownloadTranscription(status.download_transcription ?? true);
+        setDownloadSummary(status.download_summary ?? false);
+        setDownloadDiarization(status.download_diarization ?? false);
+        setDiarizationEngine(status.diarization_engine === 'nvidia-sortformer-v2' ? 'nvidia-sortformer-v2' : 'pyannote-wespeaker');
 
         if (status.completed) {
           setCurrentStep(status.current_step);
@@ -377,6 +407,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       }
     } catch (error) {
       console.error('[OnboardingContext] Failed to load onboarding status:', error);
+    } finally {
+      setStatusLoaded(true);
     }
   };
 
@@ -455,6 +487,11 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
           version: '1.0',
           completed: completed,
           current_step: currentStep,
+          transcription_provider: transcriptionProvider,
+          download_transcription: downloadTranscription,
+          download_summary: downloadSummary,
+          download_diarization: downloadDiarization,
+          diarization_engine: diarizationEngine,
           model_status: {
             parakeet: parakeetDownloaded ? 'downloaded' : 'not_downloaded',
             summary: summaryModelDownloaded ? 'downloaded' : 'not_downloaded',
@@ -479,24 +516,24 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         saveTimeoutRef.current = undefined;
       }
 
-      let modelToSave = selectedSummaryModel;
-      if (!modelToSave) {
-        modelToSave = await invoke<string>('builtin_ai_get_recommended_model');
-        setSelectedSummaryModel(modelToSave);
+      let modelToSave: string | undefined;
+      if (downloadSummary) {
+        modelToSave = selectedSummaryModel || await invoke<string>('builtin_ai_get_recommended_model');
+        const selectedModelReady = await invoke<boolean>('builtin_ai_is_model_ready', {
+          modelName: modelToSave,
+          refresh: true,
+        });
+        setSummaryModelDownloaded(selectedModelReady);
+        if (!selectedModelReady) requestSummaryModelDownload(modelToSave);
       }
 
-      const selectedModelReady = await invoke<boolean>('builtin_ai_is_model_ready', {
-        modelName: modelToSave,
-        refresh: true,
-      });
-      setSummaryModelDownloaded(selectedModelReady);
-      if (!selectedModelReady) {
-        requestSummaryModelDownload(modelToSave);
-      }
-
-      // Onboarding always uses builtin-ai with selected model
       await invoke('complete_onboarding', {
-        model: modelToSave,
+        model: modelToSave ?? null,
+        transcriptionProvider,
+        downloadTranscription,
+        downloadSummary,
+        downloadDiarization,
+        diarizationEngine,
       });
       setCompleted(true);
       console.log('[OnboardingContext] Onboarding completed with model:', modelToSave);
@@ -513,6 +550,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   // Start background downloads for models.
   const startBackgroundDownloads = async ({
     includeParakeet,
+    includeGigaam = false,
     includeSummary,
     summaryModel,
   }: StartBackgroundDownloadsOptions) => {
@@ -524,9 +562,10 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
     try {
       const shouldStartParakeet = includeParakeet && !parakeetDownloaded;
+      const shouldStartGigaam = includeGigaam;
       const shouldStartSummary = includeSummary && !summaryModelDownloaded && !!summaryModel;
 
-      if (!shouldStartParakeet && !shouldStartSummary) {
+      if (!shouldStartParakeet && !shouldStartGigaam && !shouldStartSummary) {
         if (includeSummary && !summaryModelDownloaded && !summaryModel) {
           console.warn('[OnboardingContext] Summary Model download skipped until recommendation is loaded');
         }
@@ -540,6 +579,10 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         console.log('[OnboardingContext] Starting Parakeet download');
         invoke('parakeet_download_model', { modelName: PARAKEET_MODEL })
           .catch(err => console.error('[OnboardingContext] Parakeet download failed:', err));
+      }
+      if (shouldStartGigaam) {
+        invoke('gigaam_download_model', { modelName: GIGAAM_MODEL })
+          .catch(err => console.error('[OnboardingContext] GigaAM download failed:', err));
       }
 
       // Start selected Summary Model download immediately so completion cannot race the request.
@@ -612,6 +655,16 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     <OnboardingContext.Provider
       value={{
         currentStep,
+        transcriptionProvider,
+        setTranscriptionProvider,
+        downloadTranscription,
+        setDownloadTranscription,
+        downloadSummary,
+        setDownloadSummary,
+        downloadDiarization,
+        setDownloadDiarization,
+        diarizationEngine,
+        setDiarizationEngine,
         parakeetDownloaded,
         parakeetProgress,
         parakeetProgressInfo,

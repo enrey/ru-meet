@@ -75,6 +75,8 @@ node_modules/
 experiments/
 .cursor/
 target/
+/portable/
+/frontend/.dev-onboarding/
 
 frontend/src-tauri/binaries/
 AGENTS.override.md

@@ -8,6 +8,14 @@ rustflags = [
     "-C", "link-arg=-mmacosx-version-min=14.2",
 ]
 
+# MSVC's link.exe is the dominant cost on the last few build units (the
+# meetily binary itself, which statically links whisper.cpp + onnxruntime +
+# tauri) because it serializes and writes a full PDB. rust-lld ships with
+# every rustup toolchain and is a drop-in replacement that links this binary
+# several times faster with no loss of debug info.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
 [env]
 MACOSX_DEPLOYMENT_TARGET = { value = "14.2", force = true }
 CMAKE_OSX_DEPLOYMENT_TARGET = "14.2"

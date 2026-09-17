@@ -210,7 +210,7 @@ pub struct Profile {
 // Helper function to get auth token from store (optional)
 #[allow(dead_code)]
 async fn get_auth_token<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
-    let store = match app.store("store.json") {
+    let store = match app.store(crate::portable::store_path("store.json")) {
         Ok(store) => store,
         Err(_) => return None,
     };

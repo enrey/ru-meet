@@ -76,10 +76,14 @@ fn ensure_silero_model() -> Result<PathBuf> {
         ));
     }
 
-    let models_dir = dirs::data_dir()
-        .ok_or_else(|| anyhow!("could not determine the application data directory"))?
-        .join("Meetily")
-        .join("models");
+    let models_dir = if let Some(root) = crate::portable::data_root() {
+        root.join("models")
+    } else {
+        dirs::data_dir()
+            .ok_or_else(|| anyhow!("could not determine the application data directory"))?
+            .join("Meetily")
+            .join("models")
+    };
     let model_path = models_dir.join("silero_vad.onnx");
     if model_path.is_file() {
         return Ok(model_path);

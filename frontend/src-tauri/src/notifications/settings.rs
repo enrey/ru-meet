@@ -112,6 +112,9 @@ impl<R: Runtime> ConsentManager<R> {
 
     /// Get the path where notification settings are stored
     fn get_settings_path() -> Result<PathBuf> {
+        if let Some(root) = crate::portable::data_root() {
+            return Ok(root.join("notifications.json"));
+        }
         let mut path =
             dirs::config_dir().ok_or_else(|| anyhow!("Could not find config directory"))?;
 
