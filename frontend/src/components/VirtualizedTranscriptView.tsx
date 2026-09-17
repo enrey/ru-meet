@@ -31,9 +31,13 @@ export interface VirtualizedTranscriptViewProps {
     // Pagination props (infinite scroll)
     hasMore?: boolean;
     isLoadingMore?: boolean;
+    isLoadingPrevious?: boolean;
+    hasPrevious?: boolean;
     totalCount?: number;
     loadedCount?: number;
     onLoadMore?: () => void;
+    onLoadPrevious?: () => void;
+    scrollTarget?: { id: string; request: number } | null;
 }
 
 // Threshold for enabling virtualization (below this, use simple rendering)
@@ -69,6 +73,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
     timestamp,
     text,
     confidence,
+    speaker,
+    isHighlighted,
     isStreaming,
     showConfidence,
 }: {
@@ -76,13 +82,15 @@ const TranscriptSegment = memo(function TranscriptSegment({
     timestamp: number;
     text: string;
     confidence?: number;
+    speaker?: string;
+    isHighlighted?: boolean;
     isStreaming: boolean;
     showConfidence: boolean;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
     return (
-        <div id={`segment-${id}`} className="mb-3">
+        <div id={`segment-${id}`} className={`mb-3 rounded-md ${isHighlighted ? 'bg-blue-50 ring-2 ring-blue-400 ring-offset-2' : ''}`}>
             <div className="flex items-start gap-2">
                 <Tooltip>
                     <TooltipTrigger>
@@ -97,6 +105,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
+                    {speaker && <p className="text-xs font-medium text-blue-600 mb-1">{speaker}</p>}
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
                             <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
@@ -121,12 +130,17 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     disableAutoScroll = false,
     hasMore = false,
     isLoadingMore = false,
+    isLoadingPrevious = false,
+    hasPrevious = false,
     totalCount = 0,
     loadedCount = 0,
     onLoadMore,
+    onLoadPrevious,
+    scrollTarget,
 }) => {
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
+    const lastAppliedJumpRef = useRef<string | null>(null);
     // Ref for infinite scroll trigger element
     const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
 
@@ -156,6 +170,20 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         virtualizationThreshold: VIRTUALIZATION_THRESHOLD,
         disableAutoScroll,
     });
+
+    useEffect(() => {
+        if (!scrollTarget || !scrollRef.current) return;
+        const jumpKey = `${scrollTarget.request}:${scrollTarget.id}`;
+        if (lastAppliedJumpRef.current === jumpKey) return;
+        const index = segments.findIndex((segment) => segment.id === scrollTarget.id);
+        if (index < 0) return;
+        lastAppliedJumpRef.current = jumpKey;
+        if (segments.length >= VIRTUALIZATION_THRESHOLD) {
+            virtualizer.scrollToIndex(index, { align: 'center' });
+        } else {
+            document.getElementById(`segment-${scrollTarget.id}`)?.scrollIntoView({ block: 'center' });
+        }
+    }, [scrollTarget, segments, virtualizer]);
 
     // Streaming text effect hook (typewriter animation for new transcripts)
     const { streamingSegmentId, getDisplayText } = useTranscriptStreaming(
@@ -225,6 +253,16 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 
     return (
         <div ref={scrollRef} className="flex flex-col h-full overflow-y-auto px-4 py-2">
+            {hasPrevious && !isRecording && (
+                <button
+                    type="button"
+                    className="mb-2 shrink-0 self-center rounded px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 disabled:text-gray-400"
+                    disabled={isLoadingPrevious}
+                    onClick={onLoadPrevious}
+                >
+                    {isLoadingPrevious ? 'Loading earlier…' : 'Load earlier transcript'}
+                </button>
+            )}
             {/* Recording Status Bar - Sticky at top, always visible when recording */}
             <AnimatePresence>
                 {isRecording && (
@@ -294,6 +332,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
+                                        speaker={segment.speaker}
+                                        isHighlighted={scrollTarget?.id === segment.id}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                     />
@@ -350,6 +390,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         timestamp={segment.timestamp}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
+                                        speaker={segment.speaker}
+                                        isHighlighted={scrollTarget?.id === segment.id}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                     />

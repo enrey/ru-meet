@@ -7,6 +7,7 @@ import { useRecordingState } from './RecordingStateContext';
 import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
+import { listen } from '@tauri-apps/api/event';
 
 interface TranscriptContextType {
   transcripts: Transcript[];
@@ -451,6 +452,32 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
 
       return sorted;
     });
+  }, []);
+
+  // Diarization is completed after recording stops, so speaker labels arrive
+  // separately from streaming ASR updates.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ labels: Array<{ sequenceId: number; speaker: string }> }>('diarization-complete', ({ payload }) => {
+      const speakers = new Map(payload.labels.map((label) => [label.sequenceId, label.speaker]));
+      setTranscripts((previous) => previous.map((transcript) => ({
+        ...transcript,
+        speaker: transcript.sequence_id === undefined ? transcript.speaker : speakers.get(transcript.sequence_id) ?? transcript.speaker,
+      })));
+      toast.success('Speaker labels added to the transcript');
+    }).then((handler) => { unlisten = handler; });
+    return () => unlisten?.();
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>('diarization-error', ({ payload }) => {
+      console.error('Speaker diarization failed:', payload);
+      toast.error('Speaker diarization failed', {
+        description: payload,
+      });
+    }).then((handler) => { unlisten = handler; });
+    return () => unlisten?.();
   }, []);
 
   // Copy transcript to clipboard with recording-relative timestamps

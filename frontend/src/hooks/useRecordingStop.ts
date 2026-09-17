@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { listen } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -54,7 +54,6 @@ export function useRecordingStop(
   const {
     transcriptsRef,
     flushBuffer,
-    clearTranscripts,
     meetingTitle,
     markMeetingAsSaved,
   } = useTranscripts();
@@ -74,6 +73,47 @@ export function useRecordingStop(
 
   // Promise to track recording-stopped event data (fixes race condition with recording-stop-complete)
   const recordingStoppedDataRef = useRef<Promise<void> | null>(null);
+  const savedMeetingIdRef = useRef<string | null>(null);
+  const pendingDiarizationLabelsRef = useRef<{ labels: Array<{ sequenceId: number; speaker: string }>; turns: Array<{ start: number; end: number; speaker: string }> } | null>(null);
+
+  const persistDiarizationLabels = useCallback(async (labels: Array<{ sequenceId: number; speaker: string }>, turns: Array<{ start: number; end: number; speaker: string }>) => {
+    const meetingId = savedMeetingIdRef.current;
+    if (!meetingId) {
+      pendingDiarizationLabelsRef.current = { labels, turns };
+      return;
+    }
+
+    const speakers = new Map(labels.map((label) => [label.sequenceId, label.speaker]));
+    const updates = transcriptsRef.current.flatMap((transcript) => {
+      const speaker = transcript.sequence_id === undefined ? undefined : speakers.get(transcript.sequence_id);
+      if (speaker === undefined || transcript.audio_start_time === undefined || transcript.audio_end_time === undefined) {
+        return [];
+      }
+      return [{
+        audio_start_time: transcript.audio_start_time,
+        audio_end_time: transcript.audio_end_time,
+        speaker,
+      }];
+    });
+
+    try {
+      await storageService.updateTranscriptSpeakers(meetingId, updates, turns);
+      pendingDiarizationLabelsRef.current = null;
+      await emit('diarization-labels-saved');
+    } catch (error) {
+      console.error('Failed to save speaker labels:', error);
+      toast.error('Speaker labels could not be saved to the meeting');
+    }
+  }, [transcriptsRef]);
+
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    void listen<{ labels: Array<{ sequenceId: number; speaker: string }>; turns?: Array<{ start: number; end: number; speaker: string }> }>('diarization-complete', ({ payload }) => {
+      if (payload.turns) void persistDiarizationLabels(payload.labels, payload.turns);
+    }).then((unlisten) => { unlistenFn = unlisten; });
+
+    return () => unlistenFn?.();
+  }, [persistDiarizationLabels]);
 
   // Set up recording-stopped listener for meeting navigation
   useEffect(() => {
@@ -264,6 +304,10 @@ export function useRecordingStop(
             console.error('No meeting_id in response:', responseData);
             throw new Error('No meeting ID received from save operation');
           }
+          savedMeetingIdRef.current = meetingId;
+          if (pendingDiarizationLabelsRef.current) {
+            void persistDiarizationLabels(pendingDiarizationLabelsRef.current.labels, pendingDiarizationLabelsRef.current.turns);
+          }
 
           let shouldDetectSummaryLanguage = false;
           try {
@@ -335,15 +379,9 @@ export function useRecordingStop(
             duration: 10000,
           });
 
-          // Auto-navigate after a short delay with source parameter
-          setTimeout(() => {
-            router.push(`/meeting-details?id=${meetingId}&source=recording`);
-            clearTranscripts()
-            Analytics.trackPageView('meeting_details');
-
-            // Reset to IDLE after navigation
-            setStatus(RecordingStatus.IDLE);
-          }, 2000);
+          // Keep the completed transcript open. The success toast provides an
+          // explicit navigation action when the user wants to open the meeting.
+          setStatus(RecordingStatus.IDLE);
           // Track meeting completion analytics
           try {
             // Calculate meeting duration from transcript timestamps
@@ -426,7 +464,6 @@ export function useRecordingStop(
     setStatus,
     transcriptsRef,
     flushBuffer,
-    clearTranscripts,
     meetingTitle,
     markMeetingAsSaved,
     refetchMeetings,

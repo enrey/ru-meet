@@ -16,3 +16,21 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.32.0", features = ["full"] }
+
+# Workspace-level patches apply to every member.
+[patch.crates-io]
+cpal = { git = "https://github.com/RustAudio/cpal", rev = "51c3b43" }
+
+# Diarization uses CPU-heavy hand-written INT8 kernels. Keep them optimized
+# during `tauri dev`; otherwise a short recording can take minutes to process.
+[profile.dev.package.polyvoice]
+opt-level = 3
+
+[profile.dev.package.polyvoice-kernels]
+opt-level = 3
+
+[profile.dev.package.rten-gemm]
+opt-level = 3
+
+[profile.dev.package.rten-tensor]
+opt-level = 3

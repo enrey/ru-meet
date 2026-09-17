@@ -3,7 +3,7 @@ import { PermissionWarning } from '@/components/PermissionWarning';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { AudioLines, Copy, GlobeIcon } from 'lucide-react';
+import { AudioLines, Cpu, Copy, GlobeIcon } from 'lucide-react';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
@@ -46,6 +46,7 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      speaker: t.speaker,
     })),
     [transcripts]
   );
@@ -71,6 +72,15 @@ export function TranscriptPanel({
                     </span>
                   </Button>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => showModal('modelSelector')}
+                  title="Transcription model"
+                >
+                  <Cpu />
+                  <span className="hidden md:inline">Model</span>
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"

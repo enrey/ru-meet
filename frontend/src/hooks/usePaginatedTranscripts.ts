@@ -16,6 +16,8 @@ interface UsePaginatedTranscriptsReturn {
     transcripts: Transcript[];
     isLoading: boolean;
     isLoadingMore: boolean;
+    isLoadingPrevious: boolean;
+    hasPrevious: boolean;
     hasMore: boolean;
     totalCount: number;
     loadedCount: number;
@@ -23,6 +25,9 @@ interface UsePaginatedTranscriptsReturn {
 
     // Actions
     loadMore: () => Promise<void>;
+    loadPrevious: () => Promise<void>;
+    jumpToSpeakerTime: (speaker: string, time: number) => Promise<string | null>;
+    renameSpeakerLocally: (oldName: string, newName: string) => void;
     reset: () => void;
     refetch: () => Promise<void>;
 }
@@ -37,6 +42,7 @@ function convertTranscriptsToSegments(transcripts: Transcript[]): TranscriptSegm
         endTime: t.audio_end_time,
         text: t.text,
         confidence: t.confidence,
+        speaker: t.speaker,
     }));
 }
 
@@ -49,12 +55,15 @@ export function usePaginatedTranscripts({
     const [totalCount, setTotalCount] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [isLoadingPrevious, setIsLoadingPrevious] = useState(false);
+    const [baseOffset, setBaseOffset] = useState(0);
     const [hasMore, setHasMore] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const offsetRef = useRef(0);
     const activeMeetingIdRef = useRef<string | null>(null);
     const requestIdRef = useRef(0);
+    const jumpRequestRef = useRef(0);
     const isLoadingRef = useRef(false);
     const lastLoadTimeRef = useRef(0); // Debounce protection
 
@@ -66,6 +75,7 @@ export function usePaginatedTranscripts({
     // Reset invalidates pending reads, including same-meeting refetches.
     const reset = useCallback(() => {
         requestIdRef.current += 1;
+        jumpRequestRef.current += 1;
         isLoadingRef.current = false;
         lastLoadTimeRef.current = 0;
         setMetadata(null);
@@ -73,6 +83,8 @@ export function usePaginatedTranscripts({
         setTotalCount(0);
         setIsLoading(true);
         setIsLoadingMore(false);
+        setIsLoadingPrevious(false);
+        setBaseOffset(0);
         setHasMore(false);
         setError(null);
         offsetRef.current = 0;
@@ -171,6 +183,61 @@ export function usePaginatedTranscripts({
         }
     }, [hasMore, meetingId, loadTranscriptsAtOffset, isLoading, isCurrentRequest]);
 
+    const loadPrevious = useCallback(async () => {
+        const requestId = requestIdRef.current;
+        if (!meetingId || !isCurrentRequest(requestId) || baseOffset === 0 || isLoadingPrevious) return;
+        const offset = Math.max(0, baseOffset - DEFAULT_PAGE_SIZE);
+        setIsLoadingPrevious(true);
+        try {
+            const response = await invoke<PaginatedTranscriptsResponse>('api_get_meeting_transcripts', {
+                meetingId, limit: baseOffset - offset, offset,
+            });
+            if (!isCurrentRequest(requestId)) return;
+            setTranscripts((current) => {
+                const ids = new Set(current.map((item) => item.id));
+                return [...response.transcripts.filter((item) => !ids.has(item.id)), ...current];
+            });
+            setBaseOffset(offset);
+        } catch (error) {
+            console.error('Failed to load earlier transcripts:', error);
+        } finally {
+            if (isCurrentRequest(requestId)) setIsLoadingPrevious(false);
+        }
+    }, [meetingId, baseOffset, isLoadingPrevious, isCurrentRequest]);
+
+    const jumpToSpeakerTime = useCallback(async (speaker: string, time: number): Promise<string | null> => {
+        if (!meetingId || !Number.isFinite(time) || activeMeetingIdRef.current !== meetingId) return null;
+        const jumpRequest = ++jumpRequestRef.current;
+        const match = await invoke<{ id: string; offset: number } | null>('api_find_transcript_at_time', {
+            meetingId, speaker, time,
+        });
+        if (!match || jumpRequest !== jumpRequestRef.current || activeMeetingIdRef.current !== meetingId) return null;
+        if (transcripts.some((item) => item.id === match.id)) return match.id;
+        // A jump replaces the loaded window, so invalidate any in-flight
+        // infinite-scroll request before it can append an unrelated page.
+        const requestId = ++requestIdRef.current;
+        isLoadingRef.current = false;
+        setIsLoadingMore(false);
+        const offset = Math.floor(match.offset / DEFAULT_PAGE_SIZE) * DEFAULT_PAGE_SIZE;
+        const response = await invoke<PaginatedTranscriptsResponse>('api_get_meeting_transcripts', {
+            meetingId, limit: DEFAULT_PAGE_SIZE, offset,
+        });
+        if (!isCurrentRequest(requestId) || jumpRequest !== jumpRequestRef.current) return null;
+        if (!response.transcripts.some((item) => item.id === match.id)) return null;
+        setTranscripts(response.transcripts);
+        setHasMore(response.has_more);
+        setTotalCount(response.total_count);
+        offsetRef.current = offset + response.transcripts.length;
+        setBaseOffset(offset);
+        return match.id;
+    }, [meetingId, transcripts, isCurrentRequest]);
+
+    const renameSpeakerLocally = useCallback((oldName: string, newName: string) => {
+        setTranscripts((current) => current.map((item) =>
+            item.speaker === oldName ? { ...item, speaker: newName } : item
+        ));
+    }, []);
+
     // Force refetch of data (e.g., after retranscription)
     const refetch = useCallback(async () => {
         if (!meetingId || activeMeetingIdRef.current !== meetingId) return;
@@ -212,11 +279,16 @@ export function usePaginatedTranscripts({
         transcripts,
         isLoading,
         isLoadingMore,
+        isLoadingPrevious,
+        hasPrevious: baseOffset > 0,
         hasMore,
         totalCount,
         loadedCount: transcripts.length,
         error,
         loadMore,
+        loadPrevious,
+        jumpToSpeakerTime,
+        renameSpeakerLocally,
         reset,
         refetch,
     };

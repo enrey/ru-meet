@@ -12,6 +12,8 @@ import {
 
 interface EmptyStateSummaryProps {
   onGenerate: () => void;
+  customPrompt?: string;
+  onPromptChange?: (value: string) => void;
   hasModel: boolean;
   isGenerating?: boolean;
   error?: string | null;
@@ -19,6 +21,8 @@ interface EmptyStateSummaryProps {
 
 export function EmptyStateSummary({
   onGenerate,
+  customPrompt = '',
+  onPromptChange = () => {},
   hasModel,
   isGenerating = false,
   error = null,
@@ -43,6 +47,13 @@ export function EmptyStateSummary({
           {error}
         </p>
       )}
+
+      <textarea
+        placeholder="Add summary context — people involved, meeting overview, objectives…"
+        className="mb-4 min-h-[96px] w-full max-w-md resize-y rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-left shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        value={customPrompt}
+        onChange={(event) => onPromptChange(event.target.value)}
+      />
 
       <TooltipProvider>
         <Tooltip>

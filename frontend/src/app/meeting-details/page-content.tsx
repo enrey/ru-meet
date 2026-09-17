@@ -7,6 +7,7 @@ import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
+import { SpeakerTimeline } from '@/components/MeetingDetails/SpeakerTimeline';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
 import { MeetingDetailsSplitView, type MeetingDetailsTab } from '@/components/MeetingDetails/MeetingDetailsSplitView';
 import { ModelConfig } from '@/components/ModelSettingsModal';
@@ -31,9 +32,14 @@ export default function PageContent({
   segments,
   hasMore,
   isLoadingMore,
+  isLoadingPrevious,
+  hasPrevious,
   totalCount,
   loadedCount,
   onLoadMore,
+  onLoadPrevious,
+  onJumpToSpeakerTime,
+  onSpeakerRenamed,
 }: {
   meeting: any;
   summaryData: MeetingSummary | null;
@@ -46,9 +52,14 @@ export default function PageContent({
   segments?: any[];
   hasMore?: boolean;
   isLoadingMore?: boolean;
+  isLoadingPrevious?: boolean;
+  hasPrevious?: boolean;
   totalCount?: number;
   loadedCount?: number;
   onLoadMore?: () => void;
+  onLoadPrevious?: () => void;
+  onJumpToSpeakerTime?: (speaker: string, time: number) => Promise<string | null>;
+  onSpeakerRenamed?: (oldName: string, newName: string) => void;
 }) {
   console.log('📄 PAGE CONTENT: Initializing with data:', {
     meetingId: meeting.id,
@@ -60,6 +71,7 @@ export default function PageContent({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const isRecording = false;
   const [activeTab, setActiveTab] = useState<MeetingDetailsTab>('transcript');
+  const [transcriptJump, setTranscriptJump] = useState<{ id: string; request: number } | null>(null);
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
@@ -192,6 +204,24 @@ export default function PageContent({
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="flex flex-col h-screen min-w-0 bg-gray-50"
     >
+      <SpeakerTimeline
+        meetingId={meeting.id}
+        onSpeakerRenamed={onSpeakerRenamed}
+        onSelectTurn={async (speaker, time) => {
+          if (!onJumpToSpeakerTime) return;
+          try {
+            const id = await onJumpToSpeakerTime(speaker, time);
+            if (id) {
+              setActiveTab('transcript');
+              setTranscriptJump((current) => ({ id, request: (current?.request ?? 0) + 1 }));
+            } else {
+              toast.info('No transcript phrase was found at this time');
+            }
+          } catch (error) {
+            toast.error('Could not jump to transcript', { description: String(error) });
+          }
+        }}
+      />
       <div className="flex flex-1 min-w-0 overflow-hidden">
         <MeetingDetailsSplitView
           activeTab={activeTab}
@@ -202,8 +232,6 @@ export default function PageContent({
           transcript={
             <TranscriptPanel
               transcripts={meetingData.transcripts}
-              customPrompt={customPrompt}
-              onPromptChange={setCustomPrompt}
               onCopyTranscript={copyOperations.handleCopyTranscript}
               onOpenMeetingFolder={meetingOperations.handleOpenMeetingFolder}
               isRecording={isRecording}
@@ -212,9 +240,13 @@ export default function PageContent({
               segments={segments}
               hasMore={hasMore}
               isLoadingMore={isLoadingMore}
+              isLoadingPrevious={isLoadingPrevious}
+              hasPrevious={hasPrevious}
               totalCount={totalCount}
               loadedCount={loadedCount}
               onLoadMore={onLoadMore}
+              onLoadPrevious={onLoadPrevious}
+              scrollTarget={transcriptJump}
               meetingId={meeting.id}
               meetingFolderPath={meeting.folder_path}
               onRefetchTranscripts={onRefetchTranscripts}
@@ -238,6 +270,7 @@ export default function PageContent({
               onGenerateSummary={summaryGeneration.handleGenerateSummary}
               onStopGeneration={summaryGeneration.handleStopGeneration}
               customPrompt={customPrompt}
+              onPromptChange={setCustomPrompt}
               onSaveSummary={meetingData.handleSaveSummary}
               onSummaryChange={meetingData.handleSummaryChange}
               onDirtyChange={meetingData.setIsSummaryDirty}

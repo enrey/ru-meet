@@ -7,6 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 
 type modalType = "modelSettings" | "deviceSettings" | "languageSettings" | "modelSelector" | "errorAlert" | "chunkDropWarning";
 
@@ -39,6 +41,9 @@ export function SettingsModals({
   messages,
   onClose,
 }: SettingsModalsProps) {
+  const [diarizationEnabled, setDiarizationEnabled] = useState(false);
+  const [diarizationEngine, setDiarizationEngine] = useState('pyannote-wespeaker');
+  const [isDownloadingDiarization, setIsDownloadingDiarization] = useState(false);
   // Contexts
   const {
     modelConfig,
@@ -57,6 +62,38 @@ export function SettingsModals({
   } = useConfig();
 
   const { isRecording } = useRecordingState();
+
+  useEffect(() => {
+    invoke<{ enabled: boolean; engine: string }>('get_diarization_settings')
+      .then((settings) => {
+        setDiarizationEnabled(settings.enabled);
+        setDiarizationEngine(settings.engine);
+      })
+      .catch((error) => console.warn('Failed to load diarization settings:', error));
+  }, []);
+
+  const saveDiarizationSettings = (enabled: boolean, engine = diarizationEngine) => {
+    setDiarizationEnabled(enabled);
+    setDiarizationEngine(engine);
+    invoke('set_diarization_settings', { settings: { enabled, engine } })
+      .catch((error) => {
+        console.error('Failed to save diarization settings:', error);
+        toast.error('Could not save speaker diarization settings');
+      });
+  };
+
+  const downloadDiarizationModels = async () => {
+    setIsDownloadingDiarization(true);
+    try {
+      await invoke('download_diarization_models', { engine: diarizationEngine });
+      toast.success('Speaker diarization models are ready');
+    } catch (error) {
+      console.error('Failed to download diarization models:', error);
+      toast.error('Could not download speaker diarization models');
+    } finally {
+      setIsDownloadingDiarization(false);
+    }
+  };
 
   return <>
     {/* Legacy Settings Modal */}
@@ -271,6 +308,39 @@ export function SettingsModals({
 
           {/* Fixed Footer */}
           <div className="p-6 pt-4 border-t border-gray-200 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={diarizationEnabled}
+                  disabled={isRecording}
+                  onChange={(e) => saveDiarizationSettings(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600 peer-disabled:opacity-50"></div>
+              </label>
+              <div>
+                <p className="text-sm font-medium text-gray-700">Speaker diarization</p>
+                <p className="text-xs text-gray-500">Identify speakers after the recording is saved</p>
+                <select
+                  value={diarizationEngine}
+                  disabled={isRecording}
+                  onChange={(e) => saveDiarizationSettings(diarizationEnabled, e.target.value)}
+                  className="mt-1 text-xs border border-gray-300 rounded px-2 py-1 disabled:bg-gray-100"
+                >
+                  <option value="pyannote-wespeaker">PyAnnote + WeSpeaker</option>
+                  <option value="nvidia-sortformer-v2">NVIDIA Sortformer v2</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={downloadDiarizationModels}
+                  disabled={isRecording || isDownloadingDiarization}
+                  className="ml-2 text-xs text-blue-600 hover:text-blue-700 disabled:text-gray-400"
+                >
+                  {isDownloadingDiarization ? 'Downloading…' : 'Download models'}
+                </button>
+              </div>
+            </div>
             {/* Confidence Indicator Toggle */}
             <div className="flex items-center gap-3">
               <label className="relative inline-flex items-center cursor-pointer">

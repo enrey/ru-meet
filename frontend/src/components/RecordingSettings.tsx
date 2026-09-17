@@ -97,6 +97,28 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     setSelectedDevices(devices);
     await savePreferences(newPreferences);
 
+    if (isRecording) {
+      try {
+        const microphoneChanged = preferences.preferred_mic_device !== devices.micDevice;
+        const systemAudioChanged = preferences.preferred_system_device !== devices.systemDevice;
+        if (microphoneChanged && systemAudioChanged) {
+          await invoke('switch_recording_devices', {
+            micDeviceName: devices.micDevice,
+            systemDeviceName: devices.systemDevice,
+          });
+          toast.success('Microphone and system audio switched');
+        } else if (microphoneChanged) {
+          await invoke('switch_recording_microphone', { micDeviceName: devices.micDevice });
+          toast.success('Microphone switched');
+        } else if (systemAudioChanged) {
+          await invoke('switch_recording_system_audio', { systemDeviceName: devices.systemDevice });
+          toast.success('System audio switched');
+        }
+      } catch (error) {
+        toast.error('Could not switch recording devices', { description: String(error) });
+      }
+    }
+
     // Track default device preference changes
     // Note: Individual device selection analytics are tracked in DeviceSelection component
     await Analytics.track('default_devices_changed', {
@@ -244,15 +266,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
             Set your preferred microphone and system audio devices for recording. These will be automatically selected when starting new recordings.
           </p>
 
-          {isRecording && (
-            <p
-              role="status"
-              aria-live="polite"
-              className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2 mb-4"
-            >
-              Device selection is locked while a recording is in progress. Connecting a new device mid-recording will not switch to it. Stop the current meeting to change devices.
-            </p>
-          )}
+          {isRecording && <p role="status" aria-live="polite" className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-md p-2 mb-4">Changes are applied to the active recording without stopping it.</p>}
 
           <div className="border rounded-lg p-4 bg-gray-50">
             <DeviceSelection
@@ -261,7 +275,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
                 systemDevice: preferences.preferred_system_device
               }}
               onDeviceChange={handleDeviceChange}
-              disabled={saving || isRecording}
+              disabled={saving}
             />
           </div>
         </div>

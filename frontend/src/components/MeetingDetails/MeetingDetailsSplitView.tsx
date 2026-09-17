@@ -74,7 +74,7 @@ export function MeetingDetailsSplitView({
   const onPointerMove = useCallback((event: React.PointerEvent) => {
     if (!dragging.current || !containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    setRatio(clampRatio((event.clientX - rect.left) / rect.width));
+    setRatio(clampRatio((event.clientY - rect.top) / rect.height));
   }, []);
 
   const onPointerUp = useCallback(() => {
@@ -89,8 +89,8 @@ export function MeetingDetailsSplitView({
   const onSeparatorKeyDown = useCallback((event: React.KeyboardEvent) => {
     const current = ratio;
     const next =
-      event.key === 'ArrowLeft' ? clampRatio(current - 0.05) :
-      event.key === 'ArrowRight' ? clampRatio(current + 0.05) :
+      event.key === 'ArrowUp' ? clampRatio(current - 0.05) :
+      event.key === 'ArrowDown' ? clampRatio(current + 0.05) :
       event.key === 'Home' ? MIN_RATIO :
       event.key === 'End' ? MAX_RATIO :
       null;
@@ -132,8 +132,8 @@ export function MeetingDetailsSplitView({
       </div>
       <div
         ref={containerRef}
-        className="flex flex-1 min-h-0 min-w-0 flex-col md:flex-row"
-        style={{ '--transcript-pane-width': `${ratio * 100}%` } as CSSProperties}
+        className="flex flex-1 min-h-0 min-w-0 flex-col"
+        style={{ '--transcript-pane-height': `${ratio * 100}%` } as CSSProperties}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
@@ -141,25 +141,25 @@ export function MeetingDetailsSplitView({
         <TabsContent
           value="transcript"
           forceMount
-          className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden md:w-[var(--transcript-pane-width)] md:flex-none md:data-[state=inactive]:flex"
+          className="mt-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden md:h-[var(--transcript-pane-height)] md:flex-none md:data-[state=inactive]:flex"
           {...transcriptPanelProps}
         >
           {transcript}
         </TabsContent>
         <div
           role="separator"
-          aria-orientation="vertical"
+          aria-orientation="horizontal"
           aria-valuenow={Math.round(ratio * 100)}
           aria-valuemin={Math.round(MIN_RATIO * 100)}
           aria-valuemax={Math.round(MAX_RATIO * 100)}
-          aria-valuetext={`Transcript panel ${Math.round(ratio * 100)} percent`}
-          aria-label="Resize transcript and summary"
+          aria-valuetext={`Transcript panel ${Math.round(ratio * 100)} percent tall`}
+          aria-label="Resize transcript and summary vertically"
           tabIndex={0}
-          className="group relative z-10 hidden w-2 flex-shrink-0 cursor-col-resize items-stretch justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset md:flex"
+          className="group relative z-10 hidden h-2 w-full flex-shrink-0 cursor-row-resize items-center justify-stretch focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset md:flex"
           onPointerDown={onPointerDown}
           onKeyDown={onSeparatorKeyDown}
         >
-          <div className="h-full w-px bg-gray-200 transition-[width,background-color] duration-150 ease-out group-hover:w-1 group-hover:bg-blue-400 group-active:w-1 group-active:bg-blue-500" />
+          <div className="h-px w-full bg-gray-200 transition-[height,background-color] duration-150 ease-out group-hover:h-1 group-hover:bg-blue-400 group-active:h-1 group-active:bg-blue-500" />
         </div>
         <TabsContent
           value="summary"

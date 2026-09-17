@@ -474,6 +474,24 @@ const Sidebar: React.FC = () => {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
+                onClick={() => {
+                  if (isCollapsed) toggleCollapse();
+                  toggleFolder('meetings');
+                }}
+                className={`p-2 rounded-lg transition-colors duration-150 ${isMeetingPage ? 'bg-gray-100' : 'hover:bg-gray-100'
+                  }`}
+              >
+                <NotebookPen className="w-5 h-5 text-gray-600" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>Meeting Notes</p>
+            </TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
                 onClick={handleRecordingToggle}
                 disabled={isRecording}
                 className={`p-2 ${isRecording ? 'bg-red-500 cursor-not-allowed' : 'bg-red-500 hover:bg-red-600'} rounded-full transition-colors duration-150 shadow-sm`}
@@ -505,24 +523,6 @@ const Sidebar: React.FC = () => {
               </TooltipContent>
             </Tooltip>
           )}
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => {
-                  if (isCollapsed) toggleCollapse();
-                  toggleFolder('meetings');
-                }}
-                className={`p-2 rounded-lg transition-colors duration-150 ${isMeetingPage ? 'bg-gray-100' : 'hover:bg-gray-100'
-                  }`}
-              >
-                <NotebookPen className="w-5 h-5 text-gray-600" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              <p>Meeting Notes</p>
-            </TooltipContent>
-          </Tooltip>
 
           <Tooltip>
             <TooltipTrigger asChild>

@@ -24,6 +24,18 @@ export interface Meeting {
   [key: string]: any; // Allow additional properties from backend
 }
 
+export interface TranscriptSpeakerLabel {
+  audio_start_time: number;
+  audio_end_time: number;
+  speaker: string;
+}
+
+export interface SpeakerTurn {
+  start: number;
+  end: number;
+  speaker: string;
+}
+
 /**
  * Storage Service
  * Singleton service for managing meeting storage operations
@@ -46,6 +58,10 @@ export class StorageService {
       transcripts,
       folderPath,
     });
+  }
+
+  async updateTranscriptSpeakers(meetingId: string, labels: TranscriptSpeakerLabel[], turns: SpeakerTurn[]): Promise<void> {
+    return invoke('api_update_transcript_speakers', { meetingId, labels, turns });
   }
 
   /**

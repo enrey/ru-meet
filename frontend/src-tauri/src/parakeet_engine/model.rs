@@ -31,6 +31,8 @@ pub struct TimestampedResult {
 pub enum ParakeetError {
     #[error("ORT error")]
     Ort(#[from] ort::Error),
+    #[error("ORT session builder error")]
+    OrtBuilder(#[from] ort::Error<ort::session::builder::SessionBuilder>),
     #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error("ndarray shape error")]
@@ -56,7 +58,10 @@ pub struct ParakeetModel {
 
 impl Drop for ParakeetModel {
     fn drop(&mut self) {
-        log::debug!("Dropping ParakeetModel with {} vocab tokens", self.vocab.len());
+        log::debug!(
+            "Dropping ParakeetModel with {} vocab tokens",
+            self.vocab.len()
+        );
     }
 }
 
@@ -101,7 +106,10 @@ impl ParakeetModel {
             let quantized_name = format!("{}.int8.onnx", model_name);
             let quantized_path = model_dir.as_ref().join(&quantized_name);
             if quantized_path.exists() {
-                log::info!("Loading quantized Parakeet model from {}...", quantized_name);
+                log::info!(
+                    "Loading quantized Parakeet model from {}...",
+                    quantized_name
+                );
                 quantized_name
             } else {
                 let regular_name = format!("{}.onnx", model_name);
@@ -130,12 +138,12 @@ impl ParakeetModel {
 
         let session = builder.commit_from_file(model_dir.as_ref().join(&model_filename))?;
 
-        for input in &session.inputs {
+        for input in session.inputs() {
             log::info!(
                 "Parakeet Model '{}' input: name={}, type={:?}",
                 model_filename,
-                input.name,
-                input.input_type
+                input.name(),
+                input.dtype()
             );
         }
 
@@ -232,21 +240,21 @@ impl ParakeetModel {
 
     pub fn create_decoder_state(&self) -> Result<DecoderState, ParakeetError> {
         // Get input shapes from decoder model
-        let inputs = &self.decoder_joint.inputs;
+        let inputs = self.decoder_joint.inputs();
 
         let state1_shape = inputs
             .iter()
-            .find(|input| input.name == "input_states_1")
+            .find(|input| input.name() == "input_states_1")
             .ok_or_else(|| ParakeetError::InputNotFound("input_states_1".to_string()))?
-            .input_type
+            .dtype()
             .tensor_shape()
             .ok_or_else(|| ParakeetError::TensorShape("input_states_1".to_string()))?;
 
         let state2_shape = inputs
             .iter()
-            .find(|input| input.name == "input_states_2")
+            .find(|input| input.name() == "input_states_2")
             .ok_or_else(|| ParakeetError::InputNotFound("input_states_2".to_string()))?
-            .input_type
+            .dtype()
             .tensor_shape()
             .ok_or_else(|| ParakeetError::TensorShape("input_states_2".to_string()))?;
 

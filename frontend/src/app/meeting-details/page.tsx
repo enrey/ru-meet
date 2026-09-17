@@ -42,10 +42,15 @@ function MeetingDetailsContent() {
     transcripts,
     isLoading: isLoadingTranscripts,
     isLoadingMore,
+    isLoadingPrevious,
+    hasPrevious,
     hasMore,
     totalCount,
     loadedCount,
     loadMore,
+    loadPrevious,
+    jumpToSpeakerTime,
+    renameSpeakerLocally,
     refetch,
     error: transcriptError,
   } = usePaginatedTranscripts({ meetingId: meetingId || '' });
@@ -288,9 +293,14 @@ function MeetingDetailsContent() {
     segments={segments}
     hasMore={hasMore}
     isLoadingMore={isLoadingMore}
+    isLoadingPrevious={isLoadingPrevious}
+    hasPrevious={hasPrevious}
     totalCount={totalCount}
     loadedCount={loadedCount}
     onLoadMore={loadMore}
+    onLoadPrevious={loadPrevious}
+    onJumpToSpeakerTime={jumpToSpeakerTime}
+    onSpeakerRenamed={renameSpeakerLocally}
   />;
 }
 

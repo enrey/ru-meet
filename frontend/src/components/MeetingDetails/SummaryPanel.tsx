@@ -43,6 +43,7 @@ interface SummaryPanelProps {
   onGenerateSummary: (customPrompt: string) => Promise<void>;
   onStopGeneration: () => void;
   customPrompt: string;
+  onPromptChange: (value: string) => void;
   onSaveSummary: (summary: MeetingSummary) => Promise<void>;
   onSummaryChange: (summary: Summary) => void;
   onDirtyChange: (isDirty: boolean) => void;
@@ -73,6 +74,7 @@ export function SummaryPanel({
   onGenerateSummary,
   onStopGeneration,
   customPrompt,
+  onPromptChange,
   onSaveSummary,
   onSummaryChange,
   onDirtyChange,
@@ -289,6 +291,8 @@ export function SummaryPanel({
       ) : !hasSummary ? (
         <EmptyStateSummary
           onGenerate={() => onGenerateSummary(customPrompt)}
+          customPrompt={customPrompt}
+          onPromptChange={onPromptChange}
           hasModel={modelConfig.provider !== null && modelConfig.model !== null}
           isGenerating={isSummaryLoading}
           error={summaryError}

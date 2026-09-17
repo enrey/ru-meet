@@ -137,6 +137,8 @@ pub struct MeetingTranscript {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -188,6 +190,8 @@ pub struct TranscriptSegment {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -815,7 +819,10 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
     meeting_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<MeetingMetadata, String> {
-    log_info!("api_get_meeting_metadata called for meeting_id: {}", meeting_id);
+    log_info!(
+        "api_get_meeting_metadata called for meeting_id: {}",
+        meeting_id
+    );
 
     let pool = state.db_manager.pool();
 
@@ -859,7 +866,9 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
 
     let pool = state.db_manager.pool();
 
-    match MeetingsRepository::get_meeting_transcripts_paginated(pool, &meeting_id, limit, offset).await {
+    match MeetingsRepository::get_meeting_transcripts_paginated(pool, &meeting_id, limit, offset)
+        .await
+    {
         Ok((transcripts, total_count)) => {
             log_info!(
                 "Successfully retrieved {} transcripts for meeting {} (total: {})",
@@ -878,6 +887,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     audio_start_time: t.audio_start_time,
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
+                    speaker: t.speaker,
                 })
                 .collect::<Vec<_>>();
 
@@ -890,10 +900,35 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
             })
         }
         Err(e) => {
-            log_error!("Error retrieving transcripts for meeting {}: {}", meeting_id, e);
+            log_error!(
+                "Error retrieving transcripts for meeting {}: {}",
+                meeting_id,
+                e
+            );
             Err(format!("Failed to retrieve transcripts: {}", e))
         }
     }
+}
+
+#[tauri::command]
+pub async fn api_find_transcript_at_time(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    speaker: String,
+    time: f64,
+) -> Result<Option<serde_json::Value>, String> {
+    if !time.is_finite() || time < 0.0 {
+        return Err("Invalid timeline position".into());
+    }
+    TranscriptsRepository::find_transcript_at_time(
+        state.db_manager.pool(),
+        &meeting_id,
+        &speaker,
+        time,
+    )
+    .await
+    .map(|match_| match_.map(|(id, offset)| serde_json::json!({ "id": id, "offset": offset })))
+    .map_err(|error| format!("Failed to find transcript at this time: {error}"))
 }
 
 #[tauri::command]
@@ -958,7 +993,10 @@ pub async fn api_save_transcript<R: Runtime>(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             log_error!("Failed to parse transcript segments: {}", e);
-            format!("Invalid transcript data format: {}. Please check the data structure.", e)
+            format!(
+                "Invalid transcript data format: {}. Please check the data structure.",
+                e
+            )
         })?;
 
     // Log parsed segments count and first segment details
@@ -1001,6 +1039,20 @@ pub async fn api_save_transcript<R: Runtime>(
             Err(format!("Failed to save transcript: {}", e))
         }
     }
+}
+
+/// Save speaker labels once the asynchronous diarization pass has finished.
+#[tauri::command]
+pub async fn api_update_transcript_speakers<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    labels: Vec<crate::database::repositories::transcript::SpeakerLabelUpdate>,
+    turns: Vec<crate::audio::diarization::SpeakerTurn>,
+) -> Result<(), String> {
+    TranscriptsRepository::update_speakers(state.db_manager.pool(), &meeting_id, &labels, &turns)
+        .await
+        .map_err(|error| format!("Failed to save diarization labels: {error}"))
 }
 
 /// Opens the meeting's recording folder in the system file explorer
@@ -1228,7 +1280,10 @@ pub async fn api_save_custom_openai_config<R: Runtime>(
 
     match SettingsRepository::save_custom_openai_config(pool, &config).await {
         Ok(()) => {
-            log_info!("✅ Successfully saved custom OpenAI config for endpoint: {}", config.endpoint);
+            log_info!(
+                "✅ Successfully saved custom OpenAI config for endpoint: {}",
+                config.endpoint
+            );
             Ok(serde_json::json!({
                 "status": "success",
                 "message": "Custom OpenAI configuration saved successfully"
@@ -1254,8 +1309,11 @@ pub async fn api_get_custom_openai_config<R: Runtime>(
     match SettingsRepository::get_custom_openai_config(pool).await {
         Ok(config) => {
             if let Some(ref c) = config {
-                log_info!("✅ Found custom OpenAI config: endpoint='{}', model='{}'",
-                    c.endpoint, c.model);
+                log_info!(
+                    "✅ Found custom OpenAI config: endpoint='{}', model='{}'",
+                    c.endpoint,
+                    c.model
+                );
             } else {
                 log_info!("No custom OpenAI config found");
             }
@@ -1338,7 +1396,7 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
                                             .get("message")
                                             .and_then(|m| {
                                                 m.get("content")
-                                                .or_else(|| m.get("reasoning_content"))
+                                                    .or_else(|| m.get("reasoning_content"))
                                             })
                                             .is_some();
 
@@ -1356,17 +1414,33 @@ pub async fn api_test_custom_openai_connection<R: Runtime>(
                         }
 
                         // Response was 200 but doesn't match OpenAI format
-                        log_warn!("⚠️ Endpoint returned 200 but response doesn't match OpenAI format: {}", response_text);
+                        log_warn!(
+                            "⚠️ Endpoint returned 200 but response doesn't match OpenAI format: {}",
+                            response_text
+                        );
                         Err("Endpoint is reachable but doesn't appear to be OpenAI-compatible. Response is missing 'choices' array or 'message.content' / 'message.reasoning_content' field.".to_string())
                     }
                     Err(e) => {
-                        log_warn!("⚠️ Endpoint returned 200 but response is not valid JSON: {}", e);
-                        Err(format!("Endpoint is reachable but returned invalid JSON: {}. Response: {}", e, response_text))
+                        log_warn!(
+                            "⚠️ Endpoint returned 200 but response is not valid JSON: {}",
+                            e
+                        );
+                        Err(format!(
+                            "Endpoint is reachable but returned invalid JSON: {}. Response: {}",
+                            e, response_text
+                        ))
                     }
                 }
             } else {
-                log_warn!("⚠️ Custom OpenAI connection test failed with status {}: {}", status, response_text);
-                Err(format!("Connection failed with status {}: {}", status, response_text))
+                log_warn!(
+                    "⚠️ Custom OpenAI connection test failed with status {}: {}",
+                    status,
+                    response_text
+                );
+                Err(format!(
+                    "Connection failed with status {}: {}",
+                    status, response_text
+                ))
             }
         }
         Err(e) => {

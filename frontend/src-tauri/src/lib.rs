@@ -28,26 +28,22 @@ macro_rules! perf_trace {
     ($($arg:tt)*) => {};
 }
 
-// Make these macros available to other modules
-pub(crate) use perf_debug;
-pub(crate) use perf_trace;
-
 // Re-export async logging macros for external use (removed due to macro conflicts)
 
 // Declare audio module
 pub mod analytics;
+pub mod anthropic;
 pub mod api;
 pub mod audio;
 pub mod config;
 pub mod console_utils;
 pub mod database;
+pub mod gigaam_engine;
+pub mod groq;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
 pub mod openai;
-pub mod anthropic;
-pub mod groq;
-pub mod gigaam_engine;
 pub mod openrouter;
 pub mod parakeet_engine;
 pub mod state;
@@ -56,7 +52,7 @@ pub mod tray;
 pub mod utils;
 pub mod whisper_engine;
 
-use audio::{list_audio_devices, AudioDevice, trigger_audio_permission};
+use audio::{list_audio_devices, trigger_audio_permission, AudioDevice};
 use log::{error as log_error, info as log_info};
 use notifications::commands::NotificationManagerState;
 use std::sync::Arc;
@@ -182,10 +178,7 @@ async fn start_recording<R: Runtime>(
             )
             .await
             {
-                log_error!(
-                    "Failed to show recording started notification: {}",
-                    e
-                );
+                log_error!("Failed to show recording started notification: {}", e);
             } else {
                 log_info!("Successfully showed recording started notification");
             }
@@ -243,10 +236,7 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
             )
             .await
             {
-                log_error!(
-                    "Failed to show recording stopped notification: {}",
-                    e
-                );
+                log_error!("Failed to show recording stopped notification: {}", e);
             } else {
                 log_info!("Successfully showed recording stopped notification");
             }
@@ -316,8 +306,7 @@ async fn start_audio_level_monitoring<R: Runtime>(
         device_names
     );
 
-    audio::simple_level_monitor::start_monitoring(app, device_names)
-        .await
+    audio::level_monitor::start_monitoring_thread(app, device_names)
         .map_err(|e| format!("Failed to start audio level monitoring: {}", e))
 }
 
@@ -325,14 +314,13 @@ async fn start_audio_level_monitoring<R: Runtime>(
 async fn stop_audio_level_monitoring() -> Result<(), String> {
     log_info!("Stopping audio level monitoring");
 
-    audio::simple_level_monitor::stop_monitoring()
-        .await
+    audio::level_monitor::stop_monitoring()
         .map_err(|e| format!("Failed to stop audio level monitoring: {}", e))
 }
 
 #[tauri::command]
 async fn is_audio_level_monitoring() -> bool {
-    audio::simple_level_monitor::is_monitoring()
+    audio::level_monitor::is_monitoring()
 }
 
 // Analytics commands are now handled by analytics::commands module
@@ -415,10 +403,7 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
             )
             .await
             {
-                log_error!(
-                    "Failed to show recording started notification: {}",
-                    e
-                );
+                log_error!("Failed to show recording started notification: {}", e);
             }
 
             Ok(())
@@ -474,29 +459,42 @@ pub fn run() {
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
         )) as NotificationManagerState<tauri::Wry>)
         .manage(audio::init_system_audio_state())
-        .manage(summary::summary_engine::ModelManagerState(Arc::new(tokio::sync::Mutex::new(None))))
+        .manage(summary::summary_engine::ModelManagerState(Arc::new(
+            tokio::sync::Mutex::new(None),
+        )))
         .setup(|_app| {
             #[cfg(target_os = "windows")]
-            match _app.path().resolve(
-                "onnxruntime.dll",
-                tauri::path::BaseDirectory::Resource,
-            ) {
+            match _app
+                .path()
+                .resolve("onnxruntime.dll", tauri::path::BaseDirectory::Resource)
+            {
                 Ok(runtime_path) => {
-                    match catch_onnx_runtime_init(|| {
-                        ort::init_from(runtime_path.to_string_lossy().into_owned())
-                            .with_telemetry(false)
-                            .commit()
-                            .map(|_| ())
-                    }) {
-                        Ok(()) => log::info!(
-                            "Initialized bundled ONNX Runtime from {}",
-                            runtime_path.display()
-                        ),
-                        Err(error) => record_onnx_runtime_failure(format!(
-                            "Failed to initialize bundled ONNX Runtime from {}: {}",
-                            runtime_path.display(),
+                    let runtime_path = runtime_path.to_string_lossy().into_owned();
+                    // `ort` rc.12 may block while dynamically loading a DLL on
+                    // Windows. Never do that work on Tauri's setup/UI thread: a
+                    // blocked loader otherwise creates a permanent white window.
+                    if let Err(error) = std::thread::Builder::new()
+                        .name("onnx-runtime-init".to_string())
+                        .spawn(move || {
+                            match catch_onnx_runtime_init(|| {
+                                ort::init_from(&runtime_path)?.with_telemetry(false).commit();
+                                Ok::<(), ort::Error>(())
+                            }) {
+                                Ok(()) => log::info!(
+                                    "Initialized bundled ONNX Runtime from {}",
+                                    runtime_path
+                                ),
+                                Err(error) => record_onnx_runtime_failure(format!(
+                                    "Failed to initialize bundled ONNX Runtime from {}: {}",
+                                    runtime_path, error
+                                )),
+                            }
+                        })
+                    {
+                        record_onnx_runtime_failure(format!(
+                            "Failed to start ONNX Runtime initialization thread: {}",
                             error
-                        )),
+                        ));
                     }
                 }
                 Err(error) => record_onnx_runtime_failure(format!(
@@ -517,7 +515,11 @@ pub fn run() {
             let app_for_notif = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let notif_state = app_for_notif.state::<NotificationManagerState<tauri::Wry>>();
-                match notifications::commands::initialize_notification_manager(app_for_notif.clone()).await {
+                match notifications::commands::initialize_notification_manager(
+                    app_for_notif.clone(),
+                )
+                .await
+                {
                     Ok(manager) => {
                         // Set default consent and permissions on first launch
                         if let Err(e) = manager.set_consent(true).await {
@@ -569,7 +571,11 @@ pub fn run() {
             // Initialize ModelManager for summary engine (async, non-blocking)
             let app_handle_for_model_manager = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match summary::summary_engine::commands::init_model_manager_at_startup(&app_handle_for_model_manager).await {
+                match summary::summary_engine::commands::init_model_manager_at_startup(
+                    &app_handle_for_model_manager,
+                )
+                .await
+                {
                     Ok(_) => log::info!("ModelManager initialized successfully at startup"),
                     Err(e) => {
                         log::warn!("Failed to initialize ModelManager at startup: {}", e);
@@ -598,7 +604,10 @@ pub fn run() {
             log::info!("Initializing bundled templates directory...");
             if let Ok(resource_path) = _app.handle().path().resource_dir() {
                 let templates_dir = resource_path.join("templates");
-                log::info!("Setting bundled templates directory to: {:?}", templates_dir);
+                log::info!(
+                    "Setting bundled templates directory to: {:?}",
+                    templates_dir
+                );
                 summary::templates::set_bundled_templates_dir(templates_dir);
             } else {
                 log::warn!("Failed to resolve resource directory for templates");
@@ -621,6 +630,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
+            audio::diarization::set_diarization_settings,
+            audio::diarization::get_diarization_settings,
+            audio::diarization::get_diarization_status,
+            audio::diarization::get_meeting_speaker_turns,
+            audio::diarization::rename_meeting_speaker,
+            audio::diarization::rerun_diarization,
+            audio::diarization::cancel_diarization,
+            audio::diarization::download_diarization_models,
             is_recording,
             get_transcription_status,
             read_audio_file,
@@ -750,8 +767,10 @@ pub fn run() {
             api::api_get_meeting,
             api::api_get_meeting_metadata,
             api::api_get_meeting_transcripts,
+            api::api_find_transcript_at_time,
             api::api_save_meeting_title,
             api::api_save_transcript,
+            api::api_update_transcript_speakers,
             api::open_meeting_folder,
             api::test_backend_connection,
             api::debug_backend_connection,
@@ -785,6 +804,10 @@ pub fn run() {
             summary::summary_engine::commands::builtin_ai_get_recommended_model,
             openrouter::get_openrouter_models,
             audio::recording_preferences::get_recording_preferences,
+            audio::recording_commands::switch_recording_devices,
+            audio::recording_commands::switch_recording_microphone,
+            audio::recording_commands::switch_recording_system_audio,
+            audio::recording_commands::get_active_recording_devices,
             audio::recording_preferences::set_recording_preferences,
             audio::recording_preferences::get_default_recordings_folder_path,
             audio::recording_preferences::open_recordings_folder,
@@ -872,7 +895,9 @@ pub fn run() {
                                 log::info!("Database cleanup completed successfully");
                             }
                         } else {
-                            log::warn!("AppState not available for database cleanup (likely first launch)");
+                            log::warn!(
+                                "AppState not available for database cleanup (likely first launch)"
+                            );
                         }
 
                         // Clean up sidecar
