@@ -85,7 +85,7 @@ jobs:
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
       sign-binaries: false
-      asset-prefix: "meetily"
+      asset-prefix: "ru_meet"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit

@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-    "productName": "meetily",
-    "version": "0.4.1",
+    "productName": "ru_meet",
+    "version": "0.5.1",
     "identifier": "com.meetily.ai",
     "build": {
         "frontendDist": "../out",
@@ -12,7 +12,7 @@
     "app": {
         "windows": [
             {
-                "title": "meetily",
+                "title": "ru_meet",
                 "width": 1100,
                 "height": 700,
                 "resizable": true,

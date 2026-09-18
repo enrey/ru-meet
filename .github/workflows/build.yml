@@ -19,7 +19,7 @@ on:
       asset-prefix:
         required: false
         type: string
-        default: "meetily"
+        default: "ru_meet"
       asset-name-pattern:
         required: false
         type: string
@@ -483,11 +483,32 @@ jobs:
 
       - name: Verify certificate
         if: contains(inputs.platform, 'macos') && inputs.sign-binaries
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application")
           CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
           echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
           echo "Certificate imported: $CERT_ID"
+
+          # Only export Apple signing secrets to the job environment when we actually
+          # got here (this whole step is gated on inputs.sign-binaries). Setting these
+          # via the tauri-action step's own `env:` map instead - even to an empty string -
+          # makes tauri-bundler think signing is requested (it only checks env var
+          # *presence*, not content) and it tries to import an empty keychain certificate,
+          # which fails with "SecKeychainItemImport: ... not valid".
+          echo "APPLE_ID=$APPLE_ID" >> $GITHUB_ENV
+          echo "APPLE_ID_PASSWORD=$APPLE_ID_PASSWORD" >> $GITHUB_ENV
+          echo "APPLE_PASSWORD=$APPLE_PASSWORD" >> $GITHUB_ENV
+          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> $GITHUB_ENV
+          echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE" >> $GITHUB_ENV
+          echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD" >> $GITHUB_ENV
+          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> $GITHUB_ENV
 
       - name: Configure build acceleration
         if: contains(inputs.platform, 'macos')
@@ -606,13 +627,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_ID: ${{ inputs.sign-binaries && secrets.APPLE_ID || '' }}
-          APPLE_ID_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_ID_PASSWORD || '' }}
-          APPLE_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ inputs.sign-binaries && secrets.APPLE_TEAM_ID || '' }}
-          APPLE_CERTIFICATE: ${{ inputs.sign-binaries && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ inputs.sign-binaries && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ inputs.sign-binaries && env.CERT_ID || '' }}
+          # Apple signing vars (APPLE_ID, APPLE_CERTIFICATE, APPLE_SIGNING_IDENTITY, etc.)
+          # are intentionally NOT set here. They're exported to $GITHUB_ENV by the
+          # "Verify certificate" step, but only when inputs.sign-binaries is true - see
+          # that step for why setting them here (even to an empty string) breaks
+          # unsigned macOS builds.
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -627,6 +646,11 @@ jobs:
           releaseName: ${{ inputs.release-id && format('v{0}', steps.get-version.outputs.version) || '' }}
           releaseId: ${{ inputs.release-id }}
           args: ${{ inputs.build-args }} ${{ steps.build-features.outputs.features }} ${{ steps.windows-portability.outputs.args }}
+          # macOS and Windows upload assets to the same release-id in parallel matrix jobs;
+          # GitHub's release-asset API intermittently returns an unattributed "Error saving
+          # asset" under that concurrency. Retrying the upload clears it without retrying
+          # the (much slower) build itself.
+          retryAttempts: 3
 
       - name: Upload artifacts (macOS)
         if: inputs.upload-artifacts && contains(inputs.platform, 'macos')
