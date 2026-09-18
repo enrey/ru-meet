@@ -11,8 +11,7 @@ use std::time::{Duration, Instant};
 use tauri::{command, AppHandle, Emitter, Manager, Runtime};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use transcribe_rs::onnx::{gigaam::GigaAMModel, Quantization};
-use transcribe_rs::{SpeechModel, TranscribeOptions};
+use crate::gigaam_onnx::{GigaAMModel, Quantization, TranscribeOptions};
 
 pub const MODEL_NAME: &str = "gigaam-v3-e2e-ctc";
 const MODEL_DIR: &str = "giga-am-v3-int8";

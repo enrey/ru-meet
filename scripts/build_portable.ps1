@@ -3,10 +3,10 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $repo
 $version = (Get-Content 'frontend\src-tauri\tauri.conf.json' -Raw | ConvertFrom-Json).version
-$destination = Join-Path $repo "portable\meetily-$version-cpu"
-$portableExe = Join-Path $destination 'meetily.exe'
-$running = Get-Process meetily -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $portableExe }
-if ($running) { throw "Close the running portable Meetily before rebuilding: $portableExe" }
+$destination = Join-Path $repo "portable\ru_meet-$version-cpu"
+$portableExe = Join-Path $destination 'ru_meet.exe'
+$running = Get-Process ru_meet -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $portableExe }
+if ($running) { throw "Close the running portable Ru-Meet before rebuilding: $portableExe" }
 
 # MSBuild treats environment variable names case-insensitively. Some shells
 # provide both Path/PATH and lower/upper proxy names, which makes CL.exe fail.
@@ -66,7 +66,7 @@ try {
     # The frontend is already built. Skip Tauri's second pnpm build.
     $configPath = Join-Path $env:TEMP 'meetily-portable-tauri-config.json'
     [System.IO.File]::WriteAllText($configPath, '{"build":{"beforeBuildCommand":""}}', (New-Object System.Text.UTF8Encoding($false)))
-    Invoke-Checked 'Build release Meetily without an installer' {
+    Invoke-Checked 'Build release Ru-Meet without an installer' {
         pnpm run tauri -- build --no-bundle --config $configPath
     }
 } finally {
@@ -78,7 +78,7 @@ Invoke-Checked 'Verify portable Whisper CPU build' { node .github\verify-portabl
 $source = Join-Path $repo 'target\release'
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
 
-foreach ($name in @('meetily.exe', 'ffmpeg.exe', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'onnxruntime-LICENSE.txt')) {
+foreach ($name in @('ru_meet.exe', 'ffmpeg.exe', 'onnxruntime.dll', 'onnxruntime_providers_shared.dll', 'onnxruntime-LICENSE.txt')) {
     $sourceFile = Join-Path $source $name
     if (-not (Test-Path -LiteralPath $sourceFile)) { throw "Missing build output: $sourceFile" }
     Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $destination $name) -Force
@@ -102,5 +102,5 @@ $buildTimeline | ForEach-Object { Write-Host ("{0,7:N1}s  {1}" -f $_.Seconds, $_
 Write-Host ("{0,7:N1}s  TOTAL" -f $buildStopwatch.Elapsed.TotalSeconds)
 
 Write-Host "`nPortable build ready: $destination"
-Write-Host "Run: $destination\meetily.exe"
+Write-Host "Run: $destination\ru_meet.exe"
 Write-Host 'Existing portable data was preserved.'

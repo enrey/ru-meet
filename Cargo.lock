@@ -1948,19 +1948,6 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
-dependencies = [
- "humantime",
- "is-terminal",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
-name = "env_logger"
 version = "0.11.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0621c04f2196ac3f488dd583365b9c09be011a4ab8b9f37248ffcc8f6198b56a"
@@ -2877,12 +2864,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "humantime"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
-
-[[package]]
 name = "hyper"
 version = "0.14.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3737,7 +3718,7 @@ dependencies = [
 
 [[package]]
 name = "meetily"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3754,7 +3735,7 @@ dependencies = [
  "dasp",
  "dirs 5.0.1",
  "ebur128",
- "env_logger 0.11.10",
+ "env_logger",
  "ffmpeg-sidecar",
  "flate2",
  "futures",
@@ -3779,6 +3760,7 @@ dependencies = [
  "reqwest 0.11.27",
  "ringbuf",
  "rubato",
+ "rustfft",
  "serde",
  "serde_json",
  "sha2",
@@ -3804,7 +3786,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "transcribe-rs",
  "url",
  "uuid",
  "whatlang",
@@ -4525,9 +4506,9 @@ dependencies = [
 
 [[package]]
 name = "ort"
-version = "2.0.0-rc.12"
+version = "2.0.0-rc.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7de3af33d24a745ffb8fab904b13478438d1cd52868e6f17735ef6e1f8bf133"
+checksum = "4336a1e2b38848325241c72889086886004e589b7c74f335e60a8e8db5138a0b"
 dependencies = [
  "libloading 0.9.0",
  "ndarray",
@@ -4539,9 +4520,9 @@ dependencies = [
 
 [[package]]
 name = "ort-sys"
-version = "2.0.0-rc.12"
+version = "2.0.0-rc.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7b497d21a8b6fbb4b5a544f8fadb77e801a09ae0add9e411d31c6f89e3c1e90"
+checksum = "cf211e3776eea6aec988552fa118dd746d70e1b1e5e244058d1c98015f3e5872"
 dependencies = [
  "hmac-sha256",
  "lzma-rust2",
@@ -7794,27 +7775,6 @@ dependencies = [
  "thread_local",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "transcribe-rs"
-version = "0.3.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb9d5cfb8e68a2a8fc27fb548987473221d3cc3776a331ccde46c8bd8b2eda0f"
-dependencies = [
- "base64 0.22.1",
- "derive_builder",
- "env_logger 0.10.2",
- "hound",
- "log",
- "ndarray",
- "once_cell",
- "ort",
- "regex",
- "rustfft",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]

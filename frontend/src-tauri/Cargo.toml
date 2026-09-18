@@ -1,6 +1,6 @@
 [package]
 name = "meetily"
-version = "0.5.1"
+version = "0.5.2"
 description = "A Tauri App for meeting minutes"
 authors = ["Sujith S"]
 license = "MIT"
@@ -103,10 +103,15 @@ nnnoiseless = "0.5"
 futures-util = "0.3"
 
 # Parakeet (ONNX-based fast transcription) dependencies
-ort = { version = "2.0.0-rc.12" }  # ONNX Runtime shared by Parakeet, direct Silero VAD, and GigaAM
+# rc.13 fixes a confirmed upstream deadlock ("Don't deadlock when
+# load-dynamic fails") in the dylib-loading path this app hits on some
+# Windows machines. GigaAM v3 used to come from `transcribe-rs`, which
+# hard-pins `ort = "=2.0.0-rc.12"` (no path to rc.13); its ONNX inference is
+# now reimplemented directly against this crate in `gigaam_onnx.rs` instead.
+ort = { version = "2.0.0-rc.13" }  # ONNX Runtime shared by Parakeet, direct Silero VAD, and GigaAM
 thiserror = "2.0.16"                # Error handling for Parakeet
-transcribe-rs = { version = "=0.3.11", features = ["onnx"] } # GigaAM v3; shares ORT rc.12
-# Offline speaker diarization. Both engines share the application's ORT rc.12
+rustfft = "6.4"                      # Mel spectrogram FFT for gigaam_onnx.rs
+# Offline speaker diarization. Both engines share the application's ORT
 # runtime; do not enable parakeet-rs defaults, which would load another runtime.
 polyvoice = { version = "0.19.0", default-features = false, features = ["pipeline-native", "vbx"] }
 parakeet-rs = { version = "=0.3.6", default-features = false, features = ["sortformer"] }
@@ -192,7 +197,7 @@ whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
 #   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "windows")'.dependencies]
 whisper-rs = { version = "0.13.2", features = ["raw-api"] }
-ort = { version = "2.0.0-rc.12", features = ["load-dynamic"] }
+ort = { version = "2.0.0-rc.13", features = ["load-dynamic"] }
 futures-channel = "0.3.31"
 
 # Linux-specific dependencies

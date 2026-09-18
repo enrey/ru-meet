@@ -2,15 +2,70 @@ use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
 use ndarray::{Array1, Array2, Array3, Ix3};
 use ort::{inputs, session::Session, value::TensorRef};
+use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex as StdMutex;
+use tauri::{AppHandle, Manager, Runtime};
+
+// Global models directory path (set during app initialization), matching the
+// same `app_data_dir()`-based location whisper/parakeet/gigaam use. Populated
+// once via `set_models_directory` from `lib.rs`'s setup; a `cargo test`
+// context that never calls it falls back to a legacy per-user directory (see
+// `ensure_silero_model`) so tests keep working without a live Tauri app.
+static MODELS_DIR: StdMutex<Option<PathBuf>> = StdMutex::new(None);
+
+// Path to the model as bundled inside the app itself (see
+// `build/silero_vad.rs` and the `binaries/silero` resource mapping in
+// `tauri.windows.conf.json`) - Windows only for now. When this resolves to a
+// verified file, `ensure_silero_model` loads it directly from there and
+// never touches `MODELS_DIR` or the network at all; it's only a fallback
+// location (macOS/Linux, or a build that didn't bundle it) that goes
+// through `MODELS_DIR`/download.
+static BUNDLED_MODEL_PATH: StdMutex<Option<PathBuf>> = StdMutex::new(None);
+
+/// Initialize the models directory path using app_data_dir. Should be called
+/// during app setup, alongside the other engines' `set_models_directory`.
+pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
+    if let Ok(bundled) = app
+        .path()
+        .resolve("silero/silero_vad.onnx", tauri::path::BaseDirectory::Resource)
+    {
+        if verify_silero_model(&bundled) {
+            info!("Using bundled Silero VAD model at {}", bundled.display());
+            *BUNDLED_MODEL_PATH.lock().unwrap() = Some(bundled);
+        }
+    }
+
+    let Ok(app_data_dir) = crate::portable::app_data_dir(app) else {
+        log::error!("Failed to get app data dir for Silero VAD models directory");
+        return;
+    };
+    let models_dir = app_data_dir.join("models");
+    if let Err(error) = std::fs::create_dir_all(&models_dir) {
+        log::error!("Failed to create Silero VAD models directory: {error}");
+        return;
+    }
+    *MODELS_DIR.lock().unwrap() = Some(models_dir);
+}
 
 /// Silero VAD only operates at 16kHz; input is resampled to this rate, and every
 /// sample count and timestamp inside this module is expressed in it.
 const VAD_SAMPLE_RATE: u32 = 16000;
 const SILERO_FRAME_SIZE: usize = 512;
-const SILERO_VAD_MODEL_URL: &str = "https://raw.githubusercontent.com/snakers4/silero-vad/master/src/silero_vad/data/silero_vad.onnx";
+// Pinned to a tagged release, not `master`: verified by direct inference test
+// against real speech (JFK "Ask not..." sample) that the current `master` /
+// v6.2.2 tag's silero_vad.onnx is degenerate - its "output" is essentially
+// constant regardless of the "input" tensor's content or amplitude (max
+// probability 0.0036 across an 11s speech clip that should score >0.9 during
+// speech). v5.1.2's model responds correctly (mean 0.55, 60% of frames >=0.5
+// on the same clip) and is what this is pinned to. Re-verify with a similar
+// test before ever bumping this.
+const SILERO_VAD_MODEL_URL: &str = "https://raw.githubusercontent.com/snakers4/silero-vad/v5.1.2/src/silero_vad/data/silero_vad.onnx";
+const SILERO_VAD_MODEL_SHA256: &str =
+    "2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f";
+const SILERO_VAD_MODEL_SIZE: u64 = 2_327_524;
 
 /// Minimal direct binding to the official Silero VAD ONNX graph.  Keeping this
 /// here avoids a second `ort` version and makes the model contract explicit.
@@ -76,29 +131,64 @@ fn ensure_silero_model() -> Result<PathBuf> {
         ));
     }
 
-    let models_dir = if let Some(root) = crate::portable::data_root() {
-        root.join("models")
-    } else {
-        dirs::data_dir()
+    // Load straight from the app's own install directory when it's bundled
+    // there (Windows only, for now - see `BUNDLED_MODEL_PATH`'s doc comment).
+    // No copying into `models_dir`, no network: this is the whole point of
+    // shipping it in the installer.
+    if let Some(bundled) = BUNDLED_MODEL_PATH.lock().unwrap().clone() {
+        return Ok(bundled);
+    }
+
+    let models_dir = match MODELS_DIR.lock().unwrap().clone() {
+        Some(dir) => dir,
+        // No live Tauri app ever called `set_models_directory` (e.g. `cargo
+        // test`) - fall back to the pre-unification location rather than
+        // failing outright.
+        None => dirs::data_dir()
             .ok_or_else(|| anyhow!("could not determine the application data directory"))?
             .join("Meetily")
-            .join("models")
+            .join("models"),
     };
     let model_path = models_dir.join("silero_vad.onnx");
-    if model_path.is_file() {
+    if model_path.is_file() && verify_silero_model(&model_path) {
         return Ok(model_path);
+    }
+    if model_path.is_file() {
+        warn!(
+            "Cached Silero VAD model at {} failed checksum verification (stale/corrupt download); re-fetching",
+            model_path.display()
+        );
     }
 
     fs::create_dir_all(&models_dir)?;
     let temporary_path = models_dir.join("silero_vad.onnx.download");
-    let response = reqwest::blocking::get(SILERO_VAD_MODEL_URL)
-        .map_err(|error| anyhow!("failed to download the official Silero VAD model: {error}"))?
-        .error_for_status()
-        .map_err(|error| anyhow!("official Silero VAD model download failed: {error}"))?;
-    let bytes = response.bytes()?;
-    if bytes.len() < 1024 {
+    // `reqwest::blocking` spins up its own Tokio runtime internally and blocks
+    // on it; doing that from a thread that's already inside a (multi-threaded)
+    // Tokio runtime - which this function's callers all are, since VAD
+    // processor creation happens on the recording pipeline's async task -
+    // panics with "Cannot drop a runtime in a context where blocking is not
+    // allowed" the moment that inner runtime is torn down. `block_in_place`
+    // hands this thread off to blocking work without nesting a runtime.
+    let bytes = tokio::task::block_in_place(|| -> Result<bytes::Bytes> {
+        let response = reqwest::blocking::get(SILERO_VAD_MODEL_URL).map_err(|error| {
+            anyhow!("failed to download the official Silero VAD model: {error}")
+        })?;
+        let response = response
+            .error_for_status()
+            .map_err(|error| anyhow!("official Silero VAD model download failed: {error}"))?;
+        Ok(response.bytes()?)
+    })?;
+    if bytes.len() as u64 != SILERO_VAD_MODEL_SIZE {
         return Err(anyhow!(
-            "official Silero VAD model download is unexpectedly small"
+            "official Silero VAD model download has size {}, expected {}",
+            bytes.len(),
+            SILERO_VAD_MODEL_SIZE
+        ));
+    }
+    let actual_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    if actual_sha256 != SILERO_VAD_MODEL_SHA256 {
+        return Err(anyhow!(
+            "official Silero VAD model has SHA-256 {actual_sha256}, expected {SILERO_VAD_MODEL_SHA256}"
         ));
     }
     fs::write(&temporary_path, &bytes)?;
@@ -108,6 +198,19 @@ fn ensure_silero_model() -> Result<PathBuf> {
         model_path.display()
     );
     Ok(model_path)
+}
+
+/// Verifies a cached model file's size and SHA-256 against the pinned
+/// values. Returns `false` (never errors) so a stale/corrupt cache is simply
+/// treated the same as a missing one and re-downloaded.
+fn verify_silero_model(path: &Path) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        return false;
+    };
+    if bytes.len() as u64 != SILERO_VAD_MODEL_SIZE {
+        return false;
+    }
+    format!("{:x}", Sha256::digest(&bytes)) == SILERO_VAD_MODEL_SHA256
 }
 
 /// Represents a complete speech segment detected by VAD

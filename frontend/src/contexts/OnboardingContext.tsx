@@ -64,6 +64,7 @@ interface OnboardingContextType {
   selectedSummaryModel: string;
   recommendedSummaryModel: string;
   databaseExists: boolean;
+  databaseReady: boolean;
   isBackgroundDownloading: boolean;
   // Permissions
   permissions: OnboardingPermissions;
@@ -121,6 +122,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   const [selectedSummaryModel, setSelectedSummaryModel] = useState<string>('');
   const [recommendedSummaryModel, setRecommendedSummaryModel] = useState<string>('');
   const [databaseExists, setDatabaseExists] = useState(false);
+  const [databaseReady, setDatabaseReady] = useState(false);
   const [isBackgroundDownloading, setIsBackgroundDownloading] = useState(false);
 
   // Permissions state
@@ -172,15 +174,22 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       });
   };
 
-  // Load status on mount and initialize database
+  // A model choice is persisted to the database during onboarding. Complete
+  // database bootstrap before rendering its steps, otherwise a late fresh-DB
+  // default can overwrite the choice.
   useEffect(() => {
-    loadOnboardingStatus();
-    checkDatabaseStatus();
-    initializeDatabaseInBackground();
+    const initializeOnboarding = async () => {
+      try {
+        await initializeDatabase();
+        await loadOnboardingStatus();
+      } finally {
+        setDatabaseReady(true);
+      }
+    };
+    void initializeOnboarding();
   }, []);
 
-  // Initialize database silently in background (moved from SetupOverviewStep)
-  const initializeDatabaseInBackground = async () => {
+  const initializeDatabase = async () => {
     try {
       console.log('[OnboardingContext] Starting background database initialization');
       const isFirstLaunch = await invoke<boolean>('check_first_launch');
@@ -195,7 +204,6 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       await performAutoDetection();
     } catch (error) {
       console.error('[OnboardingContext] Database initialization failed:', error);
-      // Don't throw - database init failure shouldn't block onboarding
     }
   };
 
@@ -674,6 +682,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         selectedSummaryModel,
         recommendedSummaryModel,
         databaseExists,
+        databaseReady,
         isBackgroundDownloading,
         permissions,
         permissionsSkipped,

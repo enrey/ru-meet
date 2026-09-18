@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use dirs;
 use log::info as log_info;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -102,7 +101,7 @@ pub struct ConsentManager<R: Runtime> {
 
 impl<R: Runtime> ConsentManager<R> {
     pub fn new(app_handle: AppHandle<R>) -> Result<Self> {
-        let settings_path = Self::get_settings_path()?;
+        let settings_path = Self::get_settings_path(&app_handle)?;
 
         Ok(Self {
             app_handle,
@@ -110,23 +109,17 @@ impl<R: Runtime> ConsentManager<R> {
         })
     }
 
-    /// Get the path where notification settings are stored
-    fn get_settings_path() -> Result<PathBuf> {
-        if let Some(root) = crate::portable::data_root() {
-            return Ok(root.join("notifications.json"));
-        }
-        let mut path =
-            dirs::config_dir().ok_or_else(|| anyhow!("Could not find config directory"))?;
-
-        path.push("meetily");
-        path.push("notifications.json");
-
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        Ok(path)
+    /// Get the path where notification settings are stored. Uses the same
+    /// `app_data_dir()`-based location (and portable-mode handling) as every
+    /// other engine's model/settings storage, rather than the previous
+    /// `dirs::config_dir()/meetily/` path, which was keyed off the OS
+    /// default config dir rather than this app's identifier and didn't
+    /// match anything else on disk.
+    fn get_settings_path(app_handle: &AppHandle<R>) -> Result<PathBuf> {
+        let app_data_dir = crate::portable::app_data_dir(app_handle)
+            .map_err(|error| anyhow!("Could not determine app data dir: {error}"))?;
+        std::fs::create_dir_all(&app_data_dir)?;
+        Ok(app_data_dir.join("notifications.json"))
     }
 
     /// Load notification settings from disk

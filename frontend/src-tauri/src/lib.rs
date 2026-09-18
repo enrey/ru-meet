@@ -39,6 +39,7 @@ pub mod config;
 pub mod console_utils;
 pub mod database;
 pub mod gigaam_engine;
+pub mod gigaam_onnx;
 pub mod groq;
 pub mod notifications;
 pub mod ollama;
@@ -552,7 +553,7 @@ pub fn run() {
                                 ort::init_from(&runtime_path)?
                                     .with_telemetry(false)
                                     .commit();
-                                Ok::<(), ort::Error>(())
+                                Ok::<(), ort::LoadDynamicError>(())
                             }) {
                                 Ok(()) => {
                                     log::info!(
@@ -648,6 +649,12 @@ pub fn run() {
                     log::error!("Failed to initialize GigaAM engine on startup: {}", e);
                 }
             });
+
+            // Silero VAD used a separate, legacy `%APPDATA%/Meetily/models`
+            // directory keyed off the OS default rather than the app
+            // identifier; unify it with everyone else's app_data_dir-based
+            // location.
+            audio::vad::set_models_directory(&_app.handle());
 
             // Initialize ModelManager for summary engine (async, non-blocking)
             let app_handle_for_model_manager = _app.handle().clone();

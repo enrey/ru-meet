@@ -205,16 +205,30 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
         error!("Failed to set default summary model config: {}", e);
     }
 
-    // Default Transcription Model: Parakeet
-    if let Err(e) =
-        crate::database::repositories::setting::SettingsRepository::save_transcript_config(
-            pool,
-            "parakeet",
-            crate::config::DEFAULT_PARAKEET_MODEL,
-        )
+    // Seed a transcription default only when no provider has been selected.
+    // `initialize_fresh_database` may race with onboarding on first launch;
+    // an unconditional Parakeet upsert here used to overwrite the GigaAM
+    // selection that onboarding had just stored.
+    match crate::database::repositories::setting::SettingsRepository::get_transcript_config(pool)
         .await
     {
-        error!("Failed to set default transcription model config: {}", e);
+        Ok(None) => {
+            if let Err(e) =
+                crate::database::repositories::setting::SettingsRepository::save_transcript_config(
+                    pool,
+                    "parakeet",
+                    crate::config::DEFAULT_PARAKEET_MODEL,
+                )
+                .await
+            {
+                error!("Failed to set default transcription model config: {}", e);
+            }
+        }
+        Ok(Some(config)) => info!(
+            "Preserving existing transcription model config: provider={}, model={}",
+            config.provider, config.model
+        ),
+        Err(e) => error!("Failed to read existing transcription model config: {}", e),
     }
 
     info!("Fresh database initialized successfully with default models");

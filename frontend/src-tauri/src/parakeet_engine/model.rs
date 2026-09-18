@@ -1,6 +1,6 @@
 use ndarray::{Array, Array1, Array2, Array3, ArrayD, ArrayViewD, IxDyn};
 use once_cell::sync::Lazy;
-use ort::execution_providers::CPUExecutionProvider;
+use ort::ep::CPU;
 use ort::inputs;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
@@ -99,7 +99,7 @@ impl ParakeetModel {
         crate::ensure_onnx_runtime_available()
             .map_err(|error| ParakeetError::RuntimeUnavailable(error.to_string()))?;
 
-        let providers = vec![CPUExecutionProvider::default().build()];
+        let providers = vec![CPU::default().build()];
 
         // Try quantized version first if requested, fallback to regular version
         let model_filename = if try_quantized {

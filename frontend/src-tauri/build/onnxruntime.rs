@@ -11,9 +11,14 @@ use std::{
 use std::os::windows::fs::MetadataExt;
 
 const WINDOWS_X64_TARGET: &str = "x86_64-pc-windows-msvc";
-const ARCHIVE_URL: &str = "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip";
-const ARCHIVE_SHA256: &str = "174c616efc0271194488642a72f1a514e01487da4dfe84c49296d66e40ebe0da";
-const ARCHIVE_SIZE: u64 = 72_368_545;
+// ort 2.0.0-rc.13 (via parakeet-rs's "api-24" feature, unified across the
+// dependency graph) requires ONNX Runtime >= 1.27.x; bundle the 1.28.0
+// release rc.13 itself targets. URL/hashes verified by downloading the
+// release asset directly and hashing it (2026-09-18), not copied from a
+// third party.
+const ARCHIVE_URL: &str = "https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-win-x64-1.28.0.zip";
+const ARCHIVE_SHA256: &str = "abef733dacbe2f571547a7150b479b5cb9cc0df22f96c24983a42cadb1b4f8bc";
+const ARCHIVE_SIZE: u64 = 78_796_801;
 
 struct Artifact {
     archive_path: &'static str,
@@ -24,19 +29,19 @@ struct Artifact {
 
 const ARTIFACTS: [Artifact; 3] = [
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.22.0/lib/onnxruntime.dll",
+        archive_path: "onnxruntime-win-x64-1.28.0/lib/onnxruntime.dll",
         output_name: "onnxruntime.dll",
-        size: 12_418_080,
-        sha256: "579b636403983254346a5c1d80bd28f1519cd1e284cd204f8d4ff41f8d711559",
+        size: 15_809_848,
+        sha256: "18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257",
     },
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.22.0/lib/onnxruntime_providers_shared.dll",
+        archive_path: "onnxruntime-win-x64-1.28.0/lib/onnxruntime_providers_shared.dll",
         output_name: "onnxruntime_providers_shared.dll",
-        size: 22_064,
-        sha256: "ba00ea1ef846c9b909c7854bc56c51051a20f9773b3e1153dda118d4b85d0b93",
+        size: 21_856,
+        sha256: "599629fa643707defe9156140ae5edd73531f221aa97b7585b1c9bb0a93586f8",
     },
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.22.0/LICENSE",
+        archive_path: "onnxruntime-win-x64-1.28.0/LICENSE",
         output_name: "onnxruntime-LICENSE.txt",
         size: 1_094,
         sha256: "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
