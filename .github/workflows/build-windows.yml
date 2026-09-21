@@ -45,7 +45,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -472,15 +472,15 @@ jobs:
           Write-Host ""
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9.15.9
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Get pnpm store directory
         shell: bash
@@ -488,7 +488,7 @@ jobs:
           echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: Setup pnpm cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -663,17 +663,40 @@ jobs:
       - name: Build llama-helper sidecar
         shell: pwsh
         run: |
-          # Build llama-helper without GPU features (CPU-only)
-          # Note: Vulkan build has CMake race condition issues with llama-cpp-sys-2
-          # The Tauri app itself uses whisper-rs with Vulkan for transcription
-          # llama-helper is for LLM inference and works fine on CPU
-          Write-Host "Building llama-helper sidecar (CPU-only)..."
+          # Try Vulkan first for GPU-accelerated local summarization.
+          # Note: llama-cpp-sys-2's CMake build hits an intermittent race in the
+          # vulkan-shaders-gen ExternalProject step (confirmed locally on 0.1.156:
+          # a from-scratch build failed instantly, then an identical retry of the
+          # same `cmake --build` succeeded with zero changes - it's flaky, not
+          # deterministic). CMAKE_BUILD_PARALLEL_LEVEL as an env var does NOT fix
+          # this: llama-cpp-sys-2's build.rs forwards it as a `-D` cache define,
+          # which CMake reports as unused, while the actual `cmake --build` call
+          # still runs at full parallelism regardless. A prior attempt relying on
+          # that env var (see git history: 15fb41c) was reverted (a6bd85e) because
+          # it still failed - so instead we just retry the whole build a few times,
+          # which empirically clears the race, and only fall back to CPU-only if
+          # every attempt fails.
+          Write-Host "Building llama-helper sidecar with Vulkan support..."
 
-          cargo build --release -p llama-helper
+          $vulkanOk = $false
+          for ($i = 1; $i -le 3; $i++) {
+            Write-Host "Vulkan build attempt $i/3..."
+            cargo build --release -p llama-helper --features vulkan
+            if ($LASTEXITCODE -eq 0) {
+              $vulkanOk = $true
+              break
+            }
+            Write-Warning "Vulkan build attempt $i failed (likely the known vulkan-shaders-gen race)"
+          }
 
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Failed to build llama-helper"
-            exit $LASTEXITCODE
+          if (-not $vulkanOk) {
+            Write-Warning "Vulkan build failed after 3 attempts, falling back to CPU-only llama-helper"
+            cargo build --release -p llama-helper
+
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to build llama-helper"
+              exit $LASTEXITCODE
+            }
           }
 
           # Copy binary to binaries directory
@@ -684,12 +707,12 @@ jobs:
           Get-ChildItem "frontend/src-tauri/binaries/"
 
       - name: Cache FFmpeg binary
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: frontend/src-tauri/binaries/ffmpeg-*.exe
           key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
       - name: Cache Windows ONNX Runtime
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: frontend/src-tauri/binaries/onnxruntime
           key: ${{ runner.os }}-onnxruntime-x86_64-pc-windows-msvc-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs') }}

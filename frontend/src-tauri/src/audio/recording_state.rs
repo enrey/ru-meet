@@ -96,6 +96,8 @@ pub struct RecordingState {
     // Core recording state
     is_recording: AtomicBool,
     is_paused: AtomicBool,
+    microphone_muted: AtomicBool,
+    system_muted: AtomicBool,
 
     // Audio devices
     microphone_device: Mutex<Option<Arc<AudioDevice>>>,
@@ -128,6 +130,8 @@ impl RecordingState {
         Arc::new(Self {
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
+            microphone_muted: AtomicBool::new(false),
+            system_muted: AtomicBool::new(false),
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
             audio_sender: Mutex::new(None),
@@ -146,6 +150,8 @@ impl RecordingState {
     // Recording control
     pub fn start_recording(&self) -> Result<()> {
         self.is_recording.store(true, Ordering::SeqCst);
+        self.microphone_muted.store(false, Ordering::SeqCst);
+        self.system_muted.store(false, Ordering::SeqCst);
         *self.recording_start.lock().unwrap() = Some(Instant::now());
         self.error_count.store(0, Ordering::SeqCst);
         self.recoverable_error_count.store(0, Ordering::SeqCst);
@@ -156,6 +162,8 @@ impl RecordingState {
     pub fn stop_recording(&self) {
         self.is_recording.store(false, Ordering::SeqCst);
         self.is_paused.store(false, Ordering::SeqCst);
+        self.microphone_muted.store(false, Ordering::SeqCst);
+        self.system_muted.store(false, Ordering::SeqCst);
         // Clear pause tracking when stopping
         *self.pause_start.lock().unwrap() = None;
         // CRITICAL: Clear audio sender to close the pipeline channel
@@ -214,6 +222,27 @@ impl RecordingState {
 
     pub fn is_active(&self) -> bool {
         self.is_recording() && !self.is_paused()
+    }
+
+    pub fn set_source_muted(&self, device_type: DeviceType, muted: bool) {
+        match device_type {
+            DeviceType::Microphone => self.microphone_muted.store(muted, Ordering::SeqCst),
+            DeviceType::System => self.system_muted.store(muted, Ordering::SeqCst),
+        }
+    }
+
+    pub fn is_source_muted(&self, device_type: &DeviceType) -> bool {
+        match device_type {
+            DeviceType::Microphone => self.microphone_muted.load(Ordering::SeqCst),
+            DeviceType::System => self.system_muted.load(Ordering::SeqCst),
+        }
+    }
+
+    pub fn source_mutes(&self) -> (bool, bool) {
+        (
+            self.microphone_muted.load(Ordering::SeqCst),
+            self.system_muted.load(Ordering::SeqCst),
+        )
     }
 
     // Device management
@@ -407,6 +436,8 @@ impl Default for RecordingState {
         Self {
             is_recording: AtomicBool::new(false),
             is_paused: AtomicBool::new(false),
+            microphone_muted: AtomicBool::new(false),
+            system_muted: AtomicBool::new(false),
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
             audio_sender: Mutex::new(None),

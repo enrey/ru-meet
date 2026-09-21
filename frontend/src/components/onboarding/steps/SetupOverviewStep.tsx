@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { cn } from '@/lib/utils';
+import { DIARIZATION_MODELS } from '@/lib/diarization-models';
 
 const ENGINES: Array<{ id: 'gigaam' | 'parakeet'; icon: typeof Languages; name: string; detail: string; size: string }> = [
   { id: 'gigaam', icon: Languages, name: 'GigaAM v3', detail: 'Russian speech', size: '~186 MB' },
@@ -74,8 +75,9 @@ export function SetupOverviewStep() {
           <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadDiarization} onChange={(event) => setDownloadDiarization(event.target.checked)} /><span>Speaker diarization models<span className="block text-gray-500">Optional; identify speakers after a recording</span></span></label>
           {downloadDiarization && <label className="block pl-6 text-sm text-gray-700">Diarization engine
             <select value={diarizationEngine} onChange={(event) => setDiarizationEngine(event.target.value as typeof diarizationEngine)} className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2">
-              <option value="pyannote-wespeaker">PyAnnote + WeSpeaker</option>
-              <option value="nvidia-sortformer-v2">NVIDIA Sortformer v2</option>
+              {Object.entries(DIARIZATION_MODELS).map(([id, model]) => (
+                <option key={id} value={id}>{model.name} · {model.size}</option>
+              ))}
             </select>
           </label>}
           <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadSummary} onChange={(event) => setDownloadSummary(event.target.checked)} /><span>Local summarization model<span className="block text-gray-500">Optional; you can set up a model or external provider later</span></span></label>

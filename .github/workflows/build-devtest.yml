@@ -52,7 +52,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -65,15 +65,15 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9.15.9
           run_install: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Get pnpm store directory
         shell: bash
@@ -81,7 +81,7 @@ jobs:
           echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: Setup pnpm cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -376,7 +376,29 @@ jobs:
           fi
 
           # Build llama-helper from workspace root
-          cargo build --release -p llama-helper $LLAMA_FEATURES
+          # Windows+Vulkan hits an intermittent race in llama-cpp-sys-2's
+          # vulkan-shaders-gen CMake step (confirmed locally: a from-scratch
+          # build fails, an identical retry with zero changes succeeds) - so
+          # retry a few times before falling back to CPU-only (see build.yml
+          # for the full history of why CMAKE_BUILD_PARALLEL_LEVEL alone
+          # doesn't fix it).
+          if [[ "${{ matrix.platform }}" == *"windows"* ]]; then
+            vulkan_ok=0
+            for i in 1 2 3; do
+              echo "Vulkan build attempt $i/3..."
+              if cargo build --release -p llama-helper $LLAMA_FEATURES; then
+                vulkan_ok=1
+                break
+              fi
+              echo "::warning::Vulkan build attempt $i failed (likely the known vulkan-shaders-gen race)"
+            done
+            if [[ "$vulkan_ok" -ne 1 ]]; then
+              echo "::warning::Vulkan build failed after 3 attempts, falling back to CPU-only llama-helper"
+              cargo build --release -p llama-helper
+            fi
+          else
+            cargo build --release -p llama-helper $LLAMA_FEATURES
+          fi
 
           # Determine binary extension
           EXT=""
@@ -392,7 +414,7 @@ jobs:
           ls -la frontend/src-tauri/binaries/
       - name: Cache Windows ONNX Runtime
         if: contains(matrix.platform, 'windows')
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: frontend/src-tauri/binaries/onnxruntime
           key: ${{ runner.os }}-onnxruntime-${{ matrix.target }}-${{ hashFiles('frontend/src-tauri/build/onnxruntime.rs') }}

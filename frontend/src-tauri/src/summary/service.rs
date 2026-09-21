@@ -2,6 +2,7 @@ use crate::database::repositories::{
     meeting::MeetingsRepository, setting::SettingsRepository, summary::SummaryProcessesRepository,
 };
 use crate::ollama::metadata::ModelMetadataCache;
+use crate::summary::export::write_summary_files_for_meeting;
 use crate::summary::language_detection::detect_summary_language;
 use crate::summary::llm_client::LLMProvider;
 use crate::summary::metadata::read_detected_summary_language_from_metadata;
@@ -140,11 +141,10 @@ fn normalise_summary_language_for_cache(summary_language: Option<&str>) -> Optio
 
 fn build_summary_result_json(
     final_markdown: &str,
-    english_markdown: &str,
+    base_markdown: &str,
     source: SummaryCacheSource,
     output_language: Option<&str>,
     reasoning_stripped: bool,
-    normalization_fallback: bool,
 ) -> Result<serde_json::Value, String> {
     let cleaned_final = clean_llm_markdown_detailed(final_markdown);
     require_visible_markdown("Final summary", &cleaned_final)?;
@@ -153,20 +153,19 @@ fn build_summary_result_json(
         return Err("Final summary contains no visible content after title removal".to_string());
     }
 
-    let cleaned_english = clean_llm_markdown_detailed(english_markdown);
-    require_visible_markdown("English summary", &cleaned_english)?;
+    let cleaned_base = clean_llm_markdown_detailed(base_markdown);
+    require_visible_markdown("Summary base", &cleaned_base)?;
 
     Ok(serde_json::json!({
         "markdown": markdown,
         ENGLISH_CACHE_FIELD: EnglishSummaryCache {
-            markdown: cleaned_english.markdown,
+            markdown: cleaned_base.markdown,
             source,
             output_language: normalise_summary_language_for_cache(output_language),
         },
         "reasoning_stripped": reasoning_stripped
             || cleaned_final.reasoning_stripped
-            || cleaned_english.reasoning_stripped,
-        "normalization_fallback": normalization_fallback,
+            || cleaned_base.reasoning_stripped,
     }))
 }
 
@@ -477,11 +476,13 @@ impl SummaryService {
 
             match model {
                 Ok(model_def) => {
-                    // Reserve 300 tokens for prompt overhead
-                    let optimal = model_def.context_size.saturating_sub(300) as usize;
+                    // Derived from the model's real context window, leaving
+                    // room for the generated report itself - see
+                    // models::single_pass_token_threshold.
+                    let optimal = models::single_pass_token_threshold(model_def.max_context_size);
                     info!(
-                        "✓ Using BuiltInAI context size: {} tokens (chunk size: {})",
-                        model_def.context_size, optimal
+                        "✓ BuiltInAI model supports {} tokens of context; single-pass threshold: {}",
+                        model_def.max_context_size, optimal
                     );
                     optimal
                 }
@@ -596,11 +597,10 @@ impl SummaryService {
                 );
                 let result_json = match build_summary_result_json(
                     &generated.final_markdown,
-                    &generated.english_markdown,
+                    &generated.base_markdown,
                     cache_source,
                     summary_language.as_deref(),
                     generated.reasoning_stripped,
-                    generated.normalization_fallback,
                 ) {
                     Ok(result) => result,
                     Err(error) => {
@@ -614,7 +614,7 @@ impl SummaryService {
                     &pool,
                     &meeting_id,
                     started_at,
-                    result_json,
+                    result_json.clone(),
                     generated.successful_chunk_count,
                     duration,
                 )
@@ -634,6 +634,21 @@ impl SummaryService {
                                     meeting_id, error
                                 );
                             }
+                        }
+                        match write_summary_files_for_meeting(&pool, &meeting_id, &result_json).await {
+                            Ok(true) => info!(
+                                "Summary files saved successfully for meeting_id: {}",
+                                meeting_id
+                            ),
+                            Ok(false) => warn!(
+                                "Summary files were not written because meeting {} has no recording folder",
+                                meeting_id
+                            ),
+                            Err(error) => error!(
+                                "Summary was saved to the database, but file export failed for {}: {}",
+                                meeting_id,
+                                error
+                            ),
                         }
                         info!("Summary saved successfully for meeting_id: {}", meeting_id);
                     }
@@ -886,7 +901,6 @@ mod tests {
             source.clone(),
             Some("fr"),
             false,
-            false,
         )
         .unwrap()
         .to_string();
@@ -905,7 +919,6 @@ mod tests {
             "# Meeting\n## Points\nHello",
             source.clone(),
             Some("fr"),
-            false,
             false,
         )
         .unwrap()
@@ -926,7 +939,6 @@ mod tests {
             "# Meeting\n## Points\nHello",
             source,
             Some("fr"),
-            false,
             false,
         )
         .unwrap()
@@ -1050,7 +1062,6 @@ mod tests {
             source.clone(),
             Some("fr"),
             false,
-            false,
         )
         .unwrap()
         .to_string();
@@ -1075,7 +1086,6 @@ mod tests {
             source.clone(),
             Some("fr"),
             false,
-            false,
         )
         .unwrap()
         .to_string();
@@ -1099,7 +1109,6 @@ mod tests {
             sample_cache_source(),
             Some("fr"),
             false,
-            false,
         )
         .unwrap();
 
@@ -1119,7 +1128,6 @@ mod tests {
                 sample_cache_source(),
                 None,
                 false,
-                false,
             ),
             Err("Final summary contains no visible content after title removal".to_string())
         );
@@ -1133,7 +1141,6 @@ mod tests {
             sample_cache_source(),
             None,
             true,
-            false,
         )
         .unwrap();
         assert_eq!(result["reasoning_stripped"], true);

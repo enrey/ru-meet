@@ -8,6 +8,7 @@ import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { DEFAULT_GIGAAM_MODEL, DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 import { getSummaryModelSizeLabel } from '@/lib/onboarding-summary-model';
+import { getDiarizationModelInfo } from '@/lib/diarization-models';
 
 type Download = { status: 'waiting' | 'downloading' | 'completed' | 'error'; progress: number; error?: string };
 const waiting: Download = { status: 'waiting', progress: 0 };
@@ -164,7 +165,7 @@ export function DownloadProgressStep() {
       <div className="mx-auto w-full max-w-lg space-y-4">
         {downloadTranscription && card(label, transcriptionProvider === 'gigaam' ? '~186 MB' : '~670 MB', transcription, () => { void retryTranscription(); })}
         {downloadSummary && card('Local summarization model', getSummaryModelSizeLabel(selectedSummaryModel || recommendedSummaryModel), summary, () => { void retrySummary(); })}
-        {downloadDiarization && card('Speaker diarization', diarizationEngine === 'nvidia-sortformer-v2' ? 'NVIDIA Sortformer v2' : 'PyAnnote + WeSpeaker', diarization, () => { void retryDiarization(); })}
+        {downloadDiarization && card('Speaker diarization', `${getDiarizationModelInfo(diarizationEngine).name} · ${getDiarizationModelInfo(diarizationEngine).size}`, diarization, () => { void retryDiarization(); })}
         {!downloadTranscription && !downloadSummary && !downloadDiarization && <p className="rounded-lg bg-gray-100 p-4 text-sm text-gray-700">No models selected for download. Recording will need a transcription model later.</p>}
         <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>Back</Button><Button className="flex-1 bg-gray-900 text-white hover:bg-gray-800" disabled={isCompleting} onClick={() => { void continueSetup(); }}>{isCompleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Continue</Button></div>
       </div>

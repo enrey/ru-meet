@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use encoding_rs;
@@ -44,10 +44,24 @@ enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Response {
-    Response { text: String, error: Option<String> },
+    Response {
+        text: String,
+        error: Option<String>,
+    },
+    /// Emitted repeatedly while a generation is in flight so the caller can
+    /// show that work is happening. There is deliberately no total: generation
+    /// ends at the model's end-of-generation token, not at `max_tokens`, so
+    /// any percentage would be a guess.
+    Progress {
+        prompt_tokens: u64,
+        generated_tokens: u64,
+        tokens_per_sec: f64,
+    },
     Pong,
     Goodbye,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -147,10 +161,46 @@ fn detect_vram_gb() -> f32 {
         }
     }
 
-    /// TODO: Vulkan VRAM detection
+    // Generic path for any other ggml backend (Vulkan on Windows/Linux, and a
+    // cross-check for CUDA/Metal too): ask ggml directly for registered GPU
+    // devices and their real free memory, instead of shelling out to a
+    // vendor-specific tool. Works for whichever backend was actually compiled
+    // in and initialized at runtime - no per-feature branch needed.
+    if let Some(vram) = detect_ggml_backend_vram() {
+        eprintln!("GPU VRAM detected via ggml backend: {:.2} GB", vram);
+        return vram;
+    }
 
     eprintln!("VRAM detection not available, using conservative estimate");
     4.0 // Conservative fallback
+}
+
+/// Query ggml's backend device registry for the GPU (or iGPU) with the most
+/// free memory. Returns None if no GPU-type backend device is registered
+/// (e.g. pure CPU build, or the GPU backend failed to initialize).
+fn detect_ggml_backend_vram() -> Option<f32> {
+    use llama_cpp_2::{list_llama_ggml_backend_devices, LlamaBackendDeviceType};
+
+    list_llama_ggml_backend_devices()
+        .into_iter()
+        .filter(|dev| {
+            matches!(
+                dev.device_type,
+                LlamaBackendDeviceType::Gpu | LlamaBackendDeviceType::IntegratedGpu
+            )
+        })
+        .inspect(|dev| {
+            eprintln!(
+                "   • ggml device: {} ({}) — {} — free {:.2} GB / total {:.2} GB",
+                dev.name,
+                dev.backend,
+                dev.description,
+                dev.memory_free as f32 / (1024.0 * 1024.0 * 1024.0),
+                dev.memory_total as f32 / (1024.0 * 1024.0 * 1024.0)
+            );
+        })
+        .max_by(|a, b| a.memory_free.cmp(&b.memory_free))
+        .map(|dev| dev.memory_free as f32 / (1024.0 * 1024.0 * 1024.0))
 }
 
 #[cfg(feature = "metal")]
@@ -188,10 +238,80 @@ fn detect_cuda_vram() -> Option<f32> {
     None
 }
 
+/// What a model's own GGUF header says about the things that drive VRAM use.
+#[derive(Debug, Clone, Copy)]
+struct ModelGeometry {
+    /// Transformer blocks in the model.
+    block_count: u32,
+    /// Blocks that actually keep a KV cache. Equal to `block_count` for a
+    /// plain transformer; smaller for hybrids where most blocks are recurrent
+    /// and hold a fixed-size state instead.
+    attention_blocks: u32,
+    /// Exact KV cache cost of one token of context, in bytes.
+    kv_bytes_per_token: u64,
+}
+
+/// Read the geometry straight from the GGUF header.
+///
+/// This replaces guessing the KV cache size from the file size, which was
+/// wrong by 8x on hybrid models (Qwen3.5 keeps a KV cache on only every
+/// `full_attention_interval`-th block) and caused layers to be pushed off the
+/// GPU for no reason. Only the header is parsed - no tensor data is loaded.
+fn read_model_geometry(model_path: &PathBuf) -> Option<ModelGeometry> {
+    use llama_cpp_2::gguf::GgufContext;
+
+    let gguf = GgufContext::from_file(model_path.as_path())?;
+
+    let arch_idx = gguf.find_key("general.architecture");
+    let arch = if arch_idx >= 0 {
+        gguf.val_str(arch_idx)?.to_string()
+    } else {
+        return None;
+    };
+
+    let u32_key = |suffix: &str| -> Option<u32> {
+        let idx = gguf.find_key(&format!("{arch}.{suffix}"));
+        (idx >= 0).then(|| gguf.val_u32(idx))
+    };
+
+    let block_count = u32_key("block_count")?;
+    let head_count_kv = u32_key("attention.head_count_kv")?;
+
+    // key/value_length are optional; without them a head is embedding_length
+    // split across the attention heads.
+    let head_dim = || -> Option<u32> {
+        let embedding_length = u32_key("embedding_length")?;
+        let head_count = u32_key("attention.head_count")?;
+        (head_count > 0).then(|| embedding_length / head_count)
+    };
+    let key_length = u32_key("attention.key_length").or_else(head_dim)?;
+    let value_length = u32_key("attention.value_length").or_else(head_dim)?;
+
+    // Hybrid models declare how often a full-attention block appears. No key
+    // means every block is attention.
+    let attention_blocks = match u32_key("full_attention_interval") {
+        Some(interval) if interval > 0 => (block_count / interval).max(1),
+        _ => block_count,
+    };
+
+    // K and V, both f16.
+    let kv_bytes_per_token = u64::from(attention_blocks)
+        * u64::from(head_count_kv)
+        * u64::from(key_length + value_length)
+        * 2;
+
+    Some(ModelGeometry {
+        block_count,
+        attention_blocks,
+        kv_bytes_per_token,
+    })
+}
+
 /// Calculate safe GPU layer count based on VRAM, model file size, and context size
 fn calculate_gpu_layers(
     model_path: &PathBuf,
     model_layers: u32,
+    geometry: Option<ModelGeometry>,
     vram_gb: f32,
     context_size: u32,
 ) -> u32 {
@@ -204,11 +324,23 @@ fn calculate_gpu_layers(
         return 0;
     }
 
-    // Heuristic: Estimate KV cache size
-    // 7B models (approx > 2.5GB) usually have 4096 hidden dim -> ~256MB per 1k context
-    // 1B models (approx < 2.5GB) usually have 2048 hidden dim -> ~128MB per 1k context
-    let kv_per_1k_gb = if file_size_gb > 2.5 { 0.25 } else { 0.12 };
-    let total_kv_gb = (context_size as f32 / 1000.0) * kv_per_1k_gb;
+    const BYTES_PER_GB: f32 = 1024.0 * 1024.0 * 1024.0;
+    let total_kv_gb = match geometry {
+        Some(geometry) => {
+            eprintln!(
+                "   • KV-cache blocks: {}/{} (from GGUF header)",
+                geometry.attention_blocks, geometry.block_count
+            );
+            (geometry.kv_bytes_per_token as f32 * context_size as f32) / BYTES_PER_GB
+        }
+        None => {
+            // Header unreadable: fall back to the old size-based guess rather
+            // than refusing to offload at all.
+            eprintln!("   • KV-cache size estimated from file size (GGUF header unavailable)");
+            let kv_per_1k_gb = if file_size_gb > 2.5 { 0.25 } else { 0.12 };
+            (context_size as f32 / 1000.0) * kv_per_1k_gb
+        }
+    };
 
     // Safety buffer (500MB) for OS/Display
     let safe_vram = vram_gb - 0.5;
@@ -261,17 +393,26 @@ fn calculate_gpu_layers(
 /// Get default GPU layer count with smart detection
 fn get_default_gpu_layers(model_path: &PathBuf, context_size: u32) -> u32 {
     let vram = detect_vram_gb();
-    // TODO: Use actual model metadata instead of heuristics
-    // Heuristic: Estimate total layers based on file size
-    // 7B models (Q4) are ~4.1GB and have ~32-35 layers
-    // 1B models (Q4) are ~1.1GB and have ~20-28 layers
-    let file_size_gb = std::fs::metadata(model_path)
-        .map(|m| m.len() as f32 / 1024.0 / 1024.0 / 1024.0)
-        .unwrap_or(0.0);
+    let geometry = read_model_geometry(model_path);
 
-    let estimated_layers = if file_size_gb > 2.5 { 33 } else { 28 };
+    // llama.cpp counts the output layer alongside the transformer blocks, so a
+    // 32-block model offloads 33 "layers".
+    let model_layers = match geometry {
+        Some(geometry) => geometry.block_count + 1,
+        None => {
+            // Header unreadable: keep the old size-based guess.
+            let file_size_gb = std::fs::metadata(model_path)
+                .map(|m| m.len() as f32 / 1024.0 / 1024.0 / 1024.0)
+                .unwrap_or(0.0);
+            if file_size_gb > 2.5 {
+                33
+            } else {
+                28
+            }
+        }
+    };
 
-    calculate_gpu_layers(model_path, estimated_layers, vram, context_size)
+    calculate_gpu_layers(model_path, model_layers, geometry, vram, context_size)
 }
 
 // ============================================================================
@@ -315,10 +456,16 @@ impl ModelState {
     }
 
     fn load_model_if_needed(&mut self, model_path: PathBuf, context_size: u32) -> Result<()> {
-        // Check if model is already loaded
+        // Check if model is already loaded. A context smaller than the one we
+        // already hold is still servable, so only reload when more is asked
+        // for - otherwise a single summarization run (small chunk prompts,
+        // then one large final prompt) would reload the model between stages.
         if let Some(ref loaded_path) = self.model_path {
-            if loaded_path == &model_path && self.context_size == context_size {
-                eprintln!("✓ Model already loaded");
+            if loaded_path == &model_path && self.context_size >= context_size {
+                eprintln!(
+                    "✓ Model already loaded (context {} covers requested {})",
+                    self.context_size, context_size
+                );
                 self.update_activity();
                 return Ok(());
             }
@@ -364,6 +511,9 @@ impl ModelState {
             })
             .unwrap_or(2);
 
+        // NOTE: n_batch stays tied to the context because the whole prompt is
+        // submitted as one LlamaBatch below. Lowering it would require
+        // decoding the prompt in several passes first.
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(
                 NonZeroU32::new(self.context_size).context("Invalid ctx size")?,
@@ -414,6 +564,7 @@ impl ModelState {
             if sampling.uses_penalties() {
                 LlamaSampler::chain_simple([
                     LlamaSampler::penalties(
+                        model.n_vocab(),
                         sampling.penalty_last_n,
                         sampling.repeat_penalty,
                         sampling.frequency_penalty,
@@ -427,6 +578,7 @@ impl ModelState {
         } else if sampling.uses_penalties() {
             LlamaSampler::chain_simple([
                 LlamaSampler::penalties(
+                    model.n_vocab(),
                     sampling.penalty_last_n,
                     sampling.repeat_penalty,
                     sampling.frequency_penalty,
@@ -446,6 +598,12 @@ impl ModelState {
             ])
         };
         let mut sampler = pin!(sampler);
+
+        // Progress is reported on a timer rather than per token: at a few
+        // dozen tokens/sec a per-token line would be pure overhead, and the
+        // caller only needs to see that the run is alive.
+        const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
+        let mut last_progress = Instant::now();
 
         loop {
             // Check if we've generated enough tokens
@@ -506,6 +664,25 @@ impl ModelState {
                 .add(token, n_cur, &[0], true)
                 .context("Failed to add generated token to batch")?;
             n_cur += 1;
+
+            if last_progress.elapsed() >= PROGRESS_INTERVAL {
+                last_progress = Instant::now();
+                let generated = (n_cur - n_prompt_tokens) as u64;
+                let generating_for = start_time.elapsed().saturating_sub(prompt_time);
+                let tokens_per_sec = if generating_for.as_secs_f64() > 0.0 {
+                    generated as f64 / generating_for.as_secs_f64()
+                } else {
+                    0.0
+                };
+                // A failed write means the caller is gone; that surfaces on the
+                // next real response, so never fail the generation over it.
+                let _ = send_response(&Response::Progress {
+                    prompt_tokens: n_prompt_tokens as u64,
+                    generated_tokens: generated,
+                    tokens_per_sec,
+                });
+            }
+
             ctx.decode(&mut batch).context("failed to eval")?;
         }
 

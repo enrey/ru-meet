@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
@@ -105,6 +106,119 @@ pub struct ImportWarning {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportStarted {
     pub message: String,
+}
+
+/// One line of the detailed import log.
+///
+/// Emitted as the `import-log` event so the dialog's "Real-time log" panel
+/// shows exactly the same timings that go to the Rust log - otherwise the only
+/// way to find out which stage a slow import spent its time in is to run the
+/// app from a terminal and read stdout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportLogLine {
+    /// Seconds since the import started, so lines are readable on their own.
+    pub elapsed_seconds: f64,
+    /// "info" | "warn" | "error" - drives the colour in the log panel.
+    pub level: String,
+    pub message: String,
+}
+
+/// Mirrors import progress detail to both the Rust log and the frontend.
+struct ImportLog<R: Runtime> {
+    app: AppHandle<R>,
+    started: Instant,
+}
+
+impl<R: Runtime> ImportLog<R> {
+    fn new(app: AppHandle<R>) -> Self {
+        Self {
+            app,
+            started: Instant::now(),
+        }
+    }
+
+    fn elapsed_seconds(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
+    }
+
+    fn emit(&self, level: &str, message: String) {
+        match level {
+            "error" => error!("[import] {}", message),
+            "warn" => warn!("[import] {}", message),
+            _ => info!("[import] {}", message),
+        }
+        let _ = self.app.emit(
+            "import-log",
+            ImportLogLine {
+                elapsed_seconds: self.elapsed_seconds(),
+                level: level.to_string(),
+                message,
+            },
+        );
+    }
+
+    fn info(&self, message: impl Into<String>) {
+        self.emit("info", message.into());
+    }
+
+    fn warn(&self, message: impl Into<String>) {
+        self.emit("warn", message.into());
+    }
+
+    fn error(&self, message: impl Into<String>) {
+        self.emit("error", message.into());
+    }
+}
+
+/// Wall-clock time per import stage, summarised once the import finishes.
+///
+/// The point is attribution: without this, a slow import is a single opaque
+/// number and the only way to find the expensive stage is to re-run it under a
+/// profiler.
+#[derive(Default)]
+struct StageTimings {
+    entries: Vec<(&'static str, f64)>,
+}
+
+impl StageTimings {
+    fn record(&mut self, stage: &'static str, seconds: f64) {
+        self.entries.push((stage, seconds));
+    }
+
+    fn total_seconds(&self) -> f64 {
+        self.entries.iter().map(|(_, seconds)| seconds).sum()
+    }
+
+    /// Renders one line per stage with its share of the total, longest first.
+    fn summary_lines(&self) -> Vec<String> {
+        let total = self.total_seconds().max(f64::EPSILON);
+        let mut sorted = self.entries.clone();
+        sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
+        sorted
+            .iter()
+            .map(|(stage, seconds)| {
+                format!(
+                    "  {:<14} {:>8.2}s  {:>5.1}%",
+                    stage,
+                    seconds,
+                    (seconds / total) * 100.0
+                )
+            })
+            .collect()
+    }
+}
+
+/// Truncate at a char boundary so log lines stay a sane length without
+/// panicking on multi-byte text (the transcripts here are routinely Russian).
+fn truncate_for_log(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// Check if import is currently in progress
@@ -262,17 +376,38 @@ pub async fn start_import<R: Runtime>(
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
+    let log = ImportLog::new(app.clone());
     let provider_to_unload = provider.clone();
-    let result = run_import(app.clone(), source_path, title, language, model, provider).await;
+    let result = run_import(
+        app.clone(),
+        &log,
+        source_path,
+        title,
+        language,
+        model,
+        provider,
+    )
+    .await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
+    let unload_started = Instant::now();
     super::common::unload_engine_after_batch(provider_to_unload.as_deref()).await;
+    log.info(format!(
+        "Unloaded transcription engine in {:.2}s",
+        unload_started.elapsed().as_secs_f64()
+    ));
 
     // Guard will automatically clear flag on drop
     // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
 
     match &result {
         Ok(res) => {
+            log.info(format!(
+                "Import finished: {} segments, {:.1}s of audio, total wall time {:.2}s",
+                res.segments_count,
+                res.duration_seconds,
+                log.elapsed_seconds()
+            ));
             let _ = app.emit(
                 "import-complete",
                 serde_json::json!({
@@ -284,6 +419,11 @@ pub async fn start_import<R: Runtime>(
             );
         }
         Err(e) => {
+            log.error(format!(
+                "Import failed after {:.2}s: {}",
+                log.elapsed_seconds(),
+                e
+            ));
             let _ = app.emit(
                 "import-error",
                 ImportError {
@@ -299,6 +439,7 @@ pub async fn start_import<R: Runtime>(
 /// Internal function to run import
 async fn run_import<R: Runtime>(
     app: AppHandle<R>,
+    log: &ImportLog<R>,
     source_path: String,
     title: String,
     language: Option<String>,
@@ -306,16 +447,29 @@ async fn run_import<R: Runtime>(
     provider: Option<String>,
 ) -> Result<ImportResult> {
     let source = PathBuf::from(&source_path);
+    let mut timings = StageTimings::default();
 
     // Validate source file
     if !source.exists() {
         return Err(anyhow!("Source file not found: {}", source.display()));
     }
 
-    info!(
-        "Starting import for '{}' from {} with language {:?}, model {:?}, provider {:?}",
-        title, source_path, language, model, provider
-    );
+    log.info(format!(
+        "Starting import of '{}' from {}",
+        title, source_path
+    ));
+    log.info(format!(
+        "Provider: {}, model: {}, language: {}",
+        provider.as_deref().unwrap_or("whisper (default)"),
+        model.as_deref().unwrap_or("(configured default)"),
+        language.as_deref().unwrap_or("auto")
+    ));
+    if cfg!(debug_assertions) {
+        log.warn(
+            "Debug build: the audio pipeline runs unoptimized and imports are \
+             several times slower than a release build",
+        );
+    }
 
     // Determine which provider to use (default to whisper)
     let use_parakeet = provider.as_deref() == Some("parakeet");
@@ -343,12 +497,22 @@ async fn run_import<R: Runtime>(
 
     let src = source.clone();
     let dst = dest_path.clone();
-    tokio::task::spawn_blocking(move || std::fs::copy(&src, &dst))
+    let copy_started = Instant::now();
+    let copied_bytes = tokio::task::spawn_blocking(move || std::fs::copy(&src, &dst))
         .await
         .map_err(|e| anyhow!("Copy task join error: {}", e))?
         .map_err(|e| anyhow!("Failed to copy audio file: {}", e))?;
+    let copy_seconds = copy_started.elapsed().as_secs_f64();
+    timings.record("copy", copy_seconds);
 
-    info!("Copied audio to: {}", dest_path.display());
+    let copied_mb = copied_bytes as f64 / (1024.0 * 1024.0);
+    log.info(format!(
+        "Copied {:.1} MB to {} in {:.2}s ({:.0} MB/s)",
+        copied_mb,
+        dest_path.display(),
+        copy_seconds,
+        copied_mb / copy_seconds.max(0.001)
+    ));
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
@@ -368,17 +532,24 @@ async fn run_import<R: Runtime>(
     });
 
     let path_for_decode = dest_path.clone();
+    let decode_started = Instant::now();
     let decoded = tokio::task::spawn_blocking(move || {
         decode_audio_file_with_progress(&path_for_decode, Some(decode_progress))
     })
     .await
     .map_err(|e| anyhow!("Decode task join error: {}", e))??;
     let duration_seconds = decoded.duration_seconds;
+    let decode_seconds = decode_started.elapsed().as_secs_f64();
+    timings.record("decode", decode_seconds);
 
-    info!(
-        "Decoded audio: {:.2}s, {}Hz, {} channels",
-        duration_seconds, decoded.sample_rate, decoded.channels
-    );
+    log.info(format!(
+        "Decoded {:.1}s of audio ({}Hz, {} ch, {} samples) in {:.2}s",
+        duration_seconds,
+        decoded.sample_rate,
+        decoded.channels,
+        decoded.samples.len(),
+        decode_seconds
+    ));
 
     emit_progress(&app, "resampling", 20, "Converting audio format...");
 
@@ -396,15 +567,21 @@ async fn run_import<R: Runtime>(
         emit_progress(&app_for_resample, "resampling", overall_progress, msg);
     });
 
+    let resample_started = Instant::now();
     let audio_samples = tokio::task::spawn_blocking(move || {
         decoded.to_whisper_format_with_progress(Some(resample_progress))
     })
     .await
     .map_err(|e| anyhow!("Resample task join error: {}", e))?;
-    info!(
-        "Converted to 16kHz mono format: {} samples",
-        audio_samples.len()
-    );
+    let resample_seconds = resample_started.elapsed().as_secs_f64();
+    timings.record("resample", resample_seconds);
+
+    log.info(format!(
+        "Converted to 16kHz mono in {:.2}s ({} samples, {:.1}s)",
+        resample_seconds,
+        audio_samples.len(),
+        audio_samples.len() as f64 / 16000.0
+    ));
 
     emit_progress(&app, "vad", 25, "Detecting speech segments...");
 
@@ -417,6 +594,7 @@ async fn run_import<R: Runtime>(
     // Use VAD to find speech segments
     let app_for_vad = app.clone();
 
+    let vad_started = Instant::now();
     let speech_segments = tokio::task::spawn_blocking(move || {
         get_speech_chunks_with_progress(
             &audio_samples,
@@ -439,12 +617,14 @@ async fn run_import<R: Runtime>(
     .await
     .map_err(|e| anyhow!("VAD task panicked: {}", e))?
     .map_err(|e| anyhow!("VAD processing failed: {}", e))?;
+    let vad_seconds = vad_started.elapsed().as_secs_f64();
+    timings.record("vad", vad_seconds);
 
     let total_segments = speech_segments.len();
-    info!(
-        "VAD detected {} speech segments (redemption_time={}ms)",
-        total_segments, VAD_REDEMPTION_TIME_MS
-    );
+    log.info(format!(
+        "VAD found {} speech segments in {:.2}s (redemption_time={}ms)",
+        total_segments, vad_seconds, VAD_REDEMPTION_TIME_MS
+    ));
 
     // Diagnostic: log segment duration distribution
     if !speech_segments.is_empty() {
@@ -459,12 +639,12 @@ async fn run_import<R: Runtime>(
             .iter()
             .cloned()
             .fold(f64::NEG_INFINITY, f64::max);
-        info!(
-            "VAD segment stats: avg={:.0}ms, min={:.0}ms, max={:.0}ms, total_speech={:.1}s/{:.1}s ({:.0}%)",
+        log.info(format!(
+            "VAD stats: avg={:.0}ms, min={:.0}ms, max={:.0}ms, speech={:.1}s of {:.1}s ({:.0}% of the file)",
             avg_duration, min_duration, max_duration,
             total_speech_ms / 1000.0, duration_seconds,
             (total_speech_ms / 1000.0 / duration_seconds) * 100.0
-        );
+        ));
         // Log first 10 segments for detailed inspection
         for (i, seg) in speech_segments.iter().take(10).enumerate() {
             let dur = seg.end_timestamp_ms - seg.start_timestamp_ms;
@@ -483,7 +663,7 @@ async fn run_import<R: Runtime>(
     }
 
     if total_segments == 0 {
-        warn!("No speech detected in audio");
+        log.warn("No speech detected in audio");
 
         // Emit warning to frontend
         let _ = app.emit(
@@ -509,6 +689,7 @@ async fn run_import<R: Runtime>(
     emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
 
     // Initialize the appropriate engine
+    let engine_load_started = Instant::now();
     let whisper_engine = if !use_parakeet && !use_gigaam && total_segments > 0 {
         Some(get_or_init_whisper(&app, model.as_deref()).await?)
     } else {
@@ -524,6 +705,14 @@ async fn run_import<R: Runtime>(
     } else {
         None
     };
+    let engine_load_seconds = engine_load_started.elapsed().as_secs_f64();
+    timings.record("engine load", engine_load_seconds);
+    if total_segments > 0 {
+        log.info(format!(
+            "Transcription engine ready in {:.2}s",
+            engine_load_seconds
+        ));
+    }
 
     // Split very long segments at silence boundaries for better transcription quality.
     // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
@@ -548,14 +737,23 @@ async fn run_import<R: Runtime>(
     }
 
     let processable_count = processable_segments.len();
-    info!(
-        "Processing {} segments (after splitting)",
-        processable_count
-    );
+    let processable_audio_seconds: f64 = processable_segments
+        .iter()
+        .map(|segment| (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0)
+        .sum();
+    log.info(format!(
+        "Transcribing {} segments ({:.1}s of audio) after splitting at {}s max",
+        processable_count,
+        processable_audio_seconds,
+        MAX_SEGMENT_SAMPLES / 16000
+    ));
 
     // Process each speech segment
     let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new();
     let mut total_confidence = 0.0f32;
+    let transcribe_started = Instant::now();
+    // Audio actually fed to the engine so far, for a running real-time factor.
+    let mut audio_seconds_done = 0.0f64;
 
     for (i, segment) in processable_segments.iter().enumerate() {
         if IMPORT_CANCELLED.load(Ordering::SeqCst) {
@@ -565,29 +763,43 @@ async fn run_import<R: Runtime>(
 
         let progress = 30 + ((i as f32 / processable_count.max(1) as f32) * 50.0) as u32;
         let segment_duration_sec = (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0;
+
+        // Estimate the remaining time from the throughput measured so far
+        // rather than from the segment count: segments vary from <1s to 25s,
+        // so "142 of 215" on its own says very little about what is left.
+        let eta = if audio_seconds_done > 0.0 {
+            let rate = transcribe_started.elapsed().as_secs_f64() / audio_seconds_done;
+            let remaining = (processable_audio_seconds - audio_seconds_done).max(0.0) * rate;
+            format!(", ~{:.0}s left", remaining)
+        } else {
+            String::new()
+        };
         emit_progress(
             &app,
             "transcribing",
             progress,
             &format!(
-                "Transcribing segment {} of {} ({:.1}s)...",
+                "Transcribing segment {} of {} ({:.1}s){}...",
                 i + 1,
                 processable_count,
-                segment_duration_sec
+                segment_duration_sec,
+                eta
             ),
         );
 
         // Skip very short segments
         if segment.samples.len() < 1600 {
-            debug!(
-                "Skipping short segment {} with {} samples",
-                i,
+            log.info(format!(
+                "Segment {}/{}: skipped, only {} samples",
+                i + 1,
+                processable_count,
                 segment.samples.len()
-            );
+            ));
             continue;
         }
 
         // Transcribe
+        let segment_started = Instant::now();
         let (text, conf) = if use_gigaam {
             let text = gigaam_engine
                 .as_ref()
@@ -612,35 +824,36 @@ async fn run_import<R: Runtime>(
             (text, conf)
         };
 
+        let segment_seconds = segment_started.elapsed().as_secs_f64();
+        audio_seconds_done += segment_duration_sec;
+
         let trimmed = text.trim();
+        let preview = if trimmed.is_empty() {
+            "(empty)".to_string()
+        } else {
+            format!("\"{}\"", truncate_for_log(trimmed, 80))
+        };
+        log.info(format!(
+            "Segment {}/{} [{:.1}s-{:.1}s]: {:.1}s audio in {:.2}s (RTF {:.3}), conf={:.2} {}",
+            i + 1,
+            processable_count,
+            segment.start_timestamp_ms / 1000.0,
+            segment.end_timestamp_ms / 1000.0,
+            segment_duration_sec,
+            segment_seconds,
+            segment_seconds / segment_duration_sec.max(0.001),
+            conf,
+            preview
+        ));
+
         if !trimmed.is_empty() {
-            debug!(
-                "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
-                i + 1,
-                processable_count,
-                segment_duration_sec,
-                conf,
-                if trimmed.len() > 80 {
-                    let mut end = 80;
-                    while !trimmed.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    &trimmed[..end]
-                } else {
-                    trimmed
-                }
-            );
             all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
             total_confidence += conf;
-        } else {
-            debug!(
-                "Segment {}/{}: {:.1}s — empty transcription",
-                i + 1,
-                processable_count,
-                segment_duration_sec
-            );
         }
     }
+
+    let transcribe_seconds = transcribe_started.elapsed().as_secs_f64();
+    timings.record("transcribe", transcribe_seconds);
 
     let transcribed_count = all_transcripts.len();
     let avg_confidence = if transcribed_count > 0 {
@@ -649,10 +862,15 @@ async fn run_import<R: Runtime>(
         0.0
     };
 
-    info!(
-        "Transcription complete: {} segments transcribed out of {}, avg confidence: {:.2}",
-        transcribed_count, processable_count, avg_confidence
-    );
+    log.info(format!(
+        "Transcribed {} of {} segments in {:.2}s (RTF {:.3}, {:.1}x realtime), avg confidence {:.2}",
+        transcribed_count,
+        processable_count,
+        transcribe_seconds,
+        transcribe_seconds / processable_audio_seconds.max(0.001),
+        processable_audio_seconds / transcribe_seconds.max(0.001),
+        avg_confidence
+    ));
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
@@ -661,6 +879,7 @@ async fn run_import<R: Runtime>(
     }
 
     emit_progress(&app, "saving", 85, "Creating meeting...");
+    let save_started = Instant::now();
 
     // Create transcript segments
     let segments = create_transcript_segments(&all_transcripts);
@@ -682,7 +901,7 @@ async fn run_import<R: Runtime>(
     emit_progress(&app, "saving", 90, "Writing transcript files...");
 
     if let Err(e) = write_transcripts_json(&meeting_folder, &segments) {
-        warn!("Failed to write transcripts.json: {}", e);
+        log.warn(format!("Failed to write transcripts.json: {}", e));
     }
 
     if let Err(e) = write_import_metadata(
@@ -693,7 +912,17 @@ async fn run_import<R: Runtime>(
         &dest_filename,
         "import",
     ) {
-        warn!("Failed to write metadata.json: {}", e);
+        log.warn(format!("Failed to write metadata.json: {}", e));
+    }
+
+    timings.record("save", save_started.elapsed().as_secs_f64());
+
+    log.info(format!(
+        "Stage breakdown ({:.2}s accounted for):",
+        timings.total_seconds()
+    ));
+    for line in timings.summary_lines() {
+        log.info(line);
     }
 
     emit_progress(&app, "complete", 100, "Import complete");

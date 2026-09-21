@@ -12,7 +12,7 @@ rust-version = "1.77"
 
 [lib]
 name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 
 # Hardware acceleration features for whisper-rs
@@ -53,12 +53,13 @@ openblas = ["whisper-rs/openblas"] # Optimized BLAS (Auto-enabled on Windows/Lin
 openmp = ["whisper-rs/openmp"]     # OpenMP parallel processing
 
 [build-dependencies]
-tauri-build = { version = "2.3.0", features = [] }
+tauri-build = { version = "2.6.3", features = [] }
 reqwest = { version = "0.11", features = ["blocking", "multipart", "json", "stream"] }
 which = "6.0.1"
 zip = "2.2"           # ZIP extraction (Windows, macOS)
-tar = "0.4"           # TAR extraction (Linux)
+tar = "0.4"           # TAR extraction (Linux, and the DirectML onnxruntime.dll's .tgz on Windows)
 xz2 = "0.1"           # XZ decompression (Linux)
+flate2 = "1.0"         # Gzip decompression for the DirectML onnxruntime.dll's .tgz (Windows)
 sha2 = "0.10"
 
 
@@ -68,7 +69,6 @@ serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0"
 once_cell = "1.17.1"
 uuid = { version = "1.0", features = ["v4", "serde"] }
-posthog-rs = "0.3.7"
 
 # Cross-platform audio capture
 cpal = "0.15.3"
@@ -118,6 +118,8 @@ parakeet-rs = { version = "=0.3.6", default-features = false, features = ["sortf
 flate2 = "1.0"
 tar = "0.4"
 sha2 = "0.10"
+md5 = "0.7"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }
@@ -159,24 +161,25 @@ ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", bran
 sqlx = { version = "0.8", features = [ "runtime-tokio", "sqlite", "chrono"] }
 
 # Common Tauri configuration
-tauri = { version = "2.6.2", features = [ "macos-private-api", "protocol-asset", "tray-icon"] }
-tauri-plugin-fs = "2.4.0"
-tauri-plugin-dialog = "2.3.0"
-tauri-plugin-store = "2.4.0"
-tauri-plugin-notification = "2.3.1"
-tauri-plugin-updater = "2.3.0"
-tauri-plugin-process = "2.3.0"
+tauri = { version = "2.11.5", features = [ "macos-private-api", "protocol-asset", "tray-icon"] }
+tauri-plugin-fs = "2.5.2"
+tauri-plugin-dialog = "2.7.3"
+tauri-plugin-store = "2.4.5"
+tauri-plugin-notification = "2.4.0"
+tauri-plugin-updater = "2.11.0"
+tauri-plugin-process = "2.3.1"
 
 # Desktop-only single instance guard
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
-tauri-plugin-single-instance = "=2.3.7"
+tauri-plugin-single-instance = "=2.4.4"
 
 # macOS-specific dependencies with Metal GPU acceleration
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri = { version = "2.6.2", features = ["protocol-asset", "macos-private-api", "tray-icon"] }
+tauri = { version = "2.11.5", features = ["protocol-asset", "macos-private-api", "tray-icon"] }
+ort = { version = "2.0.0-rc.13", features = ["coreml"] }
 once_cell = "1.17.1"
 objc = "0.2.7"
-tauri-plugin-log = { version = "2.6.0", features = ["colored"] }
+tauri-plugin-log = { version = "2.9.1", features = ["colored"] }
 anyhow = "1.0"
 time = { version = "0.3", features = ["formatting"] }
 reqwest = { version = "0.11", features = ["multipart", "json"] }
@@ -197,7 +200,13 @@ whisper-rs = { version = "0.13.2", features = ["raw-api", "metal", "coreml"] }
 #   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "windows")'.dependencies]
 whisper-rs = { version = "0.13.2", features = ["raw-api"] }
-ort = { version = "2.0.0-rc.13", features = ["load-dynamic"] }
+# `directml` adds the Rust bindings for the DirectML execution provider
+# (`ort::ep::DirectML`) - it does not by itself change which onnxruntime.dll
+# gets loaded (see build/onnxruntime.rs) or make any session actually use it.
+# Currently only gigaam_onnx.rs requests it (with CPU as fallback, and its
+# actual active provider queried and reported - see "DirectML execution
+# provider" in CLAUDE.md); vad.rs and parakeet_engine still request CPU only.
+ort = { version = "2.0.0-rc.13", features = ["load-dynamic", "directml"] }
 futures-channel = "0.3.31"
 
 # Linux-specific dependencies

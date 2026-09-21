@@ -3,10 +3,10 @@ import { Switch } from '@/components/ui/switch';
 import { FolderOpen } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
-import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useConfig } from '@/contexts/ConfigContext';
+import { normalizeAudioDevicePreferences, stripAudioDeviceSuffix } from '@/lib/audioDevicePreferences';
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -39,7 +39,16 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     const loadPreferences = async () => {
       try {
         const prefs = await invoke<RecordingPreferences>('get_recording_preferences');
-        setPreferences(prefs);
+        const devices = normalizeAudioDevicePreferences({
+          micDevice: prefs.preferred_mic_device,
+          systemDevice: prefs.preferred_system_device,
+        });
+        setPreferences({
+          ...prefs,
+          preferred_mic_device: devices.micDevice,
+          preferred_system_device: devices.systemDevice,
+        });
+        setSelectedDevices(devices);
       } catch (error) {
         console.error('Failed to load recording preferences:', error);
         // If loading fails, get default folder path
@@ -76,11 +85,6 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     const newPreferences = { ...preferences, auto_save: enabled };
     setPreferences(newPreferences);
     await savePreferences(newPreferences);
-
-    // Track auto-save setting change
-    await Analytics.track('auto_save_recording_toggled', {
-      enabled: enabled.toString()
-    });
   };
 
   const handleDeviceChange = async (devices: SelectedDevices) => {
@@ -108,23 +112,16 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
           });
           toast.success('Microphone and system audio switched');
         } else if (microphoneChanged) {
-          await invoke('switch_recording_microphone', { micDeviceName: devices.micDevice });
+          await invoke('switch_recording_microphone', { micDeviceName: stripAudioDeviceSuffix(devices.micDevice) });
           toast.success('Microphone switched');
         } else if (systemAudioChanged) {
-          await invoke('switch_recording_system_audio', { systemDeviceName: devices.systemDevice });
+          await invoke('switch_recording_system_audio', { systemDeviceName: stripAudioDeviceSuffix(devices.systemDevice) });
           toast.success('System audio switched');
         }
       } catch (error) {
         toast.error('Could not switch recording devices', { description: String(error) });
       }
     }
-
-    // Track default device preference changes
-    // Note: Individual device selection analytics are tracked in DeviceSelection component
-    await Analytics.track('default_devices_changed', {
-      has_preferred_microphone: (!!devices.micDevice).toString(),
-      has_preferred_system_audio: (!!devices.systemDevice).toString()
-    });
   };
 
   const handleOpenFolder = async () => {
@@ -143,9 +140,6 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       await store.set('show_recording_notification', enabled);
       await store.save();
       toast.success('Preference saved');
-      await Analytics.track('recording_notification_preference_changed', {
-        enabled: enabled.toString()
-      });
     } catch (error) {
       console.error('Failed to save notification preference:', error);
       toast.error('Failed to save preference');
@@ -157,13 +151,6 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     try {
       await invoke('set_recording_preferences', { preferences: prefs });
       onSave?.(prefs);
-
-      // Show success toast with device details
-      const micDevice = prefs.preferred_mic_device || 'Default';
-      const systemDevice = prefs.preferred_system_device || 'Default';
-      toast.success("Device preferences saved", {
-        description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
-      });
     } catch (error) {
       console.error('Failed to save recording preferences:', error);
       toast.error("Failed to save device preferences", {

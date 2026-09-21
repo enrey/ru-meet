@@ -119,8 +119,9 @@ mod tests {
         let devices = list_system_audio_devices_command().await;
         match devices {
             Ok(device_list) => {
+                // Enumerating must not crash; an empty list is a valid answer
+                // on a machine with no loopback-capable output device.
                 println!("System audio devices: {:?}", device_list);
-                assert!(device_list.len() >= 0); // Should at least not crash
             }
             Err(e) => {
                 println!("Error listing devices: {}", e);

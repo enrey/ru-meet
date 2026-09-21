@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::models;
-use super::sidecar::SidecarManager;
+use super::sidecar::{GenerationProgress, ProgressCallback, SidecarManager};
 
 // ============================================================================
 // Request/Response Types
@@ -53,6 +53,20 @@ enum Response {
 
 lazy_static::lazy_static! {
     static ref SIDECAR_MANAGER: Arc<Mutex<Option<Arc<SidecarManager>>>> = Arc::new(Mutex::new(None));
+}
+
+/// Sink for generation progress, registered once from `setup()`.
+///
+/// A closure rather than an `AppHandle` so this module stays free of Tauri's
+/// `Runtime` generic, and so the four layers between here and the service that
+/// owns the handle do not each need another parameter.
+static PROGRESS_EMITTER: std::sync::OnceLock<Box<dyn Fn(GenerationProgress) + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// Register where generation progress should be delivered. Later calls are
+/// ignored, so the first registration during startup wins.
+pub fn set_progress_emitter(emitter: Box<dyn Fn(GenerationProgress) + Send + Sync>) {
+    let _ = PROGRESS_EMITTER.set(emitter);
 }
 
 // Model path cache to avoid repeated filesystem I/O and model lookups
@@ -176,12 +190,25 @@ pub async fn generate_with_builtin(
         }
     }
 
+    // Size the context to this request instead of always allocating the
+    // model's ceiling - llama.cpp reserves the whole KV cache up front.
+    let planned_context = models::plan_context_size(
+        crate::summary::processor::rough_token_count(&formatted_prompt),
+        models::DEFAULT_MAX_TOKENS,
+        model_def.max_context_size,
+    );
+    log::info!(
+        "Planned context: {} tokens (model supports up to {})",
+        planned_context,
+        model_def.max_context_size
+    );
+
     // Prepare generation request with model-specific sampling parameters
     let sampling = model_def.sampling.sanitize_for_llama_helper();
     let request = Request::Generate {
         prompt: formatted_prompt,
         max_tokens: Some(models::DEFAULT_MAX_TOKENS),
-        context_size: Some(model_def.context_size),
+        context_size: Some(planned_context),
         model_path: Some(model_path.to_string_lossy().to_string()),
         temperature: Some(sampling.temperature),
         top_k: Some(sampling.top_k),
@@ -200,10 +227,17 @@ pub async fn generate_with_builtin(
 
     log::info!("Sending generation request to sidecar");
 
+    let progress_callback: Box<ProgressCallback> = Box::new(|progress| {
+        if let Some(emit) = PROGRESS_EMITTER.get() {
+            emit(progress);
+        }
+    });
+    let on_progress = Some(progress_callback.as_ref());
+
     // Race between send_request and cancellation token
     let response_json = if let Some(token) = cancellation_token {
         tokio::select! {
-            result = manager.send_request(request_json, timeout) => {
+            result = manager.send_request(request_json, timeout, on_progress) => {
                 result?
             }
             _ = token.cancelled() => {
@@ -216,7 +250,7 @@ pub async fn generate_with_builtin(
             }
         }
     } else {
-        manager.send_request(request_json, timeout).await?
+        manager.send_request(request_json, timeout, on_progress).await?
     };
 
     // Check cancellation before parsing response

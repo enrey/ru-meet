@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { RefreshCw, Mic, Speaker } from 'lucide-react';
@@ -6,7 +6,6 @@ import { AudioLevelMeter, CompactAudioLevelMeter } from './AudioLevelMeter';
 import { AudioBackendSelector } from './AudioBackendSelector';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import Analytics from '@/lib/analytics';
 
 export interface AudioDevice {
   name: string;
@@ -71,60 +70,6 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
     fetchDevices();
   }, []);
 
-  // Auto-select the default when a previously-selected device is no longer
-  // available (e.g. AirPods that have since disconnected). Without this the
-  // dropdown keeps showing a device that's gone — Radix Select renders an
-  // empty/stale trigger for a value not among its options — and start would
-  // send a name the backend can't open. Matches Pro's DeviceSelection prune.
-  //
-  // Format trap: selected values carry the " (input)"/" (output)" suffix (the
-  // SelectItem value form below), while enumeration returns raw device names —
-  // so compare against the suffixed form, else every non-default selection is
-  // wrongly pruned.
-  //
-  // ponytail: enumeration-driven prune only (fires on mount + manual refresh).
-  // We deliberately do NOT mutate the selection from the mic-device-switched
-  // event — that stays toast-only; reopening Settings after a meeting refetches
-  // and prunes. onDeviceChange is held in a ref so the effect isn't re-run by
-  // the parent passing a fresh (non-memoized) handler each render.
-  const onDeviceChangeRef = useRef(onDeviceChange);
-  useEffect(() => { onDeviceChangeRef.current = onDeviceChange; }, [onDeviceChange]);
-
-  useEffect(() => {
-    // Skip while loading (list not ready) or disabled (selector locked during
-    // recording — never reset the device a live recording is using).
-    if (loading || disabled) return;
-
-    const inputs = devices.filter(d => d.device_type === 'Input');
-    const outputs = devices.filter(d => d.device_type === 'Output');
-
-    let next = selectedDevices;
-    // Guard on a non-empty list per direction so a transient phantom-empty
-    // enumeration doesn't wipe a valid selection.
-    if (
-      selectedDevices.micDevice &&
-      inputs.length > 0 &&
-      !inputs.some(d => `${d.name} (input)` === selectedDevices.micDevice)
-    ) {
-      console.warn(`[DeviceSelection] Selected mic '${selectedDevices.micDevice}' not available — resetting to default`);
-      next = { ...next, micDevice: null };
-    }
-    if (
-      selectedDevices.systemDevice &&
-      outputs.length > 0 &&
-      !outputs.some(d => `${d.name} (output)` === selectedDevices.systemDevice)
-    ) {
-      console.warn(`[DeviceSelection] Selected system audio '${selectedDevices.systemDevice}' not available — resetting to default`);
-      next = { ...next, systemDevice: null };
-    }
-
-    // Only propagate if something actually changed. Resetting to null makes the
-    // next run's absent-check falsy, so there's no loop.
-    if (next !== selectedDevices) {
-      onDeviceChangeRef.current(next);
-    }
-  }, [devices, loading, disabled, selectedDevices]);
-
   // Set up audio level event listener
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -166,30 +111,6 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
     await fetchDevices();
   };
 
-  // Helper function to detect device category and Bluetooth status
-  const getDeviceMetadata = (deviceName: string) => {
-    const nameLower = deviceName.toLowerCase();
-
-    // Detect if it's Bluetooth
-    const isBluetooth = nameLower.includes('airpods')
-      || nameLower.includes('bluetooth')
-      || nameLower.includes('wireless')
-      || nameLower.includes('wh-')  // Sony WH-* series
-      || nameLower.includes('bt ');
-
-    // Categorize device
-    let category = 'wired';
-    if (deviceName === 'default') {
-      category = 'default';
-    } else if (nameLower.includes('airpods')) {
-      category = 'airpods';
-    } else if (isBluetooth) {
-      category = 'bluetooth';
-    }
-
-    return { isBluetooth, category };
-  };
-
   // Handle microphone device selection
   const handleMicDeviceChange = (deviceName: string) => {
     const newDevices = {
@@ -197,14 +118,6 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       micDevice: deviceName === 'default' ? null : deviceName
     };
     onDeviceChange(newDevices);
-
-    // Track device selection analytics with enhanced metadata
-    const metadata = getDeviceMetadata(deviceName);
-    Analytics.track('microphone_selected', {
-      device_category: metadata.category,
-      is_bluetooth: metadata.isBluetooth.toString(),
-      has_system_audio: (!!selectedDevices.systemDevice).toString()
-    }).catch(err => console.error('Failed to track microphone selection:', err));
   };
 
   // Handle system audio device selection
@@ -214,15 +127,12 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       systemDevice: deviceName === 'default' ? null : deviceName
     };
     onDeviceChange(newDevices);
-
-    // Track device selection analytics with enhanced metadata
-    const metadata = getDeviceMetadata(deviceName);
-    Analytics.track('system_audio_selected', {
-      device_category: metadata.category,
-      is_bluetooth: metadata.isBluetooth.toString(),
-      has_microphone: (!!selectedDevices.micDevice).toString()
-    }).catch(err => console.error('Failed to track system audio selection:', err));
   };
+
+  const selectedMicUnavailable = selectedDevices.micDevice
+    && !inputDevices.some(device => `${device.name} (input)` === selectedDevices.micDevice);
+  const selectedSystemUnavailable = selectedDevices.systemDevice
+    && !outputDevices.some(device => `${device.name} (output)` === selectedDevices.systemDevice);
 
   const monitorNames = () => {
     const stripSuffix = (value: string | null) => value?.replace(/ \((input|output)\)$/i, '');
@@ -333,6 +243,11 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="default">Default Microphone</SelectItem>
+              {selectedMicUnavailable && (
+                <SelectItem value={selectedDevices.micDevice!} disabled>
+                  {selectedDevices.micDevice!.replace(/ \(input\)$/i, '')} (unavailable)
+                </SelectItem>
+              )}
               {inputDevices.map((device) => (
                 <SelectItem
                   key={device.name}
@@ -401,6 +316,11 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="default">Default System Audio</SelectItem>
+              {selectedSystemUnavailable && (
+                <SelectItem value={selectedDevices.systemDevice!} disabled>
+                  {selectedDevices.systemDevice!.replace(/ \(output\)$/i, '')} (unavailable)
+                </SelectItem>
+              )}
               {outputDevices.map((device) => (
                 <SelectItem
                   key={device.name}

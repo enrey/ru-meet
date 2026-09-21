@@ -381,6 +381,8 @@ impl RecordingSaver {
             "✅ Successfully wrote transcripts.json with {} segments",
             segments_clone.len()
         );
+
+        write_markdown_exports(folder, &segments_clone);
         Ok(())
     }
 
@@ -605,9 +607,26 @@ impl DiarizationTarget {
             ) {
                 warn!("Failed to save diarized transcript: {error}");
             }
+            write_markdown_exports(folder, &segments);
         }
         labels
     }
+}
+
+/// Mirror the in-memory segments into `transcript.md` /
+/// `transcript_with_speakers.md` next to `transcripts.json`.
+fn write_markdown_exports(folder: &std::path::Path, segments: &[TranscriptSegment]) {
+    super::transcript_export::write_transcript_exports_logged(
+        folder,
+        &segments
+            .iter()
+            .map(|segment| super::transcript_export::ExportLine {
+                start_seconds: Some(segment.audio_start_time),
+                text: segment.text.clone(),
+                speaker: segment.speaker.clone(),
+            })
+            .collect::<Vec<_>>(),
+    );
 }
 
 impl Default for RecordingSaver {

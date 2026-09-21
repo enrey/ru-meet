@@ -5,8 +5,8 @@ import { TranscriptModelProps } from '@/components/TranscriptSettings';
 import { SelectedDevices } from '@/components/DeviceSelection';
 import { configService, ModelConfig } from '@/services/configService';
 import { invoke } from '@tauri-apps/api/core';
-import Analytics from '@/lib/analytics';
 import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
+import { normalizeAudioDevicePreferences } from '@/lib/audioDevicePreferences';
 
 export interface OllamaModel {
   name: string;
@@ -178,8 +178,19 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const preferencesLoadedRef = useRef(false);
   const isLoadingRef = useRef(false);
 
-  // Load Ollama models (uses saved endpoint, re-runs when endpoint changes after config load)
+  // Load Ollama models (uses saved endpoint, re-runs when endpoint changes).
+  //
+  // Only probe when Ollama is the selected provider: the model list and its
+  // error are rendered solely inside the provider === 'ollama' branch of the
+  // settings modal, and probing regardless meant every start on another
+  // provider paid a 5s timeout and surfaced a "Ollama server is not running"
+  // error that did not apply. The saved provider arrives asynchronously, so
+  // wait for it rather than acting on the 'ollama' default.
   useEffect(() => {
+    if (isModelConfigLoading || modelConfig.provider !== 'ollama') {
+      return;
+    }
+
     const loadModels = async () => {
       try {
         const endpoint = modelConfig.ollamaEndpoint || null;
@@ -192,7 +203,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       }
     };
     loadModels();
-  }, [modelConfig.ollamaEndpoint]);
+  }, [isModelConfigLoading, modelConfig.provider, modelConfig.ollamaEndpoint]);
 
   // Load transcript configuration on mount
   useEffect(() => {
@@ -353,10 +364,10 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       try {
         const prefs = await configService.getRecordingPreferences();
         if (prefs && (prefs.preferred_mic_device || prefs.preferred_system_device)) {
-          setSelectedDevices({
+          setSelectedDevices(normalizeAudioDevicePreferences({
             micDevice: prefs.preferred_mic_device,
             systemDevice: prefs.preferred_system_device
-          });
+          }));
           console.log('Loaded device preferences:', prefs);
         }
       } catch (error) {
@@ -394,18 +405,11 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Toggle beta feature with localStorage persistence and analytics
+  // Toggle beta feature with localStorage persistence
   const toggleBetaFeature = useCallback((featureKey: BetaFeatureKey, enabled: boolean) => {
     setBetaFeatures(prev => {
       const updated = { ...prev, [featureKey]: enabled };
       saveBetaFeatures(updated);
-
-      // Track analytics with specific feature
-      Analytics.track('beta_feature_toggled', {
-        feature: featureKey,
-        enabled: enabled.toString(),
-      }).catch(err => console.error('Failed to track beta feature toggle:', err));
-
       return updated;
     });
   }, []);

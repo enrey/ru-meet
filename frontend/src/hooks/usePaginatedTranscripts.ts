@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Transcript, MeetingMetadata, PaginatedTranscriptsResponse, TranscriptSegmentData } from "@/types";
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -266,6 +267,25 @@ export function usePaginatedTranscripts({
             activeMeetingIdRef.current = null;
         };
     }, [meetingId, reset, refetch]);
+
+    // Speaker labels can be repaired in the backend (a meeting whose diarization
+    // turns never reached its transcript rows); reload so the transcript shows
+    // the same speakers as the timeline.
+    useEffect(() => {
+        if (!meetingId) return;
+        let cancelled = false;
+        let unlisten: UnlistenFn | undefined;
+        void listen<{ meetingId?: string }>('transcript-speakers-updated', ({ payload }) => {
+            if (!payload.meetingId || payload.meetingId === meetingId) void refetch();
+        }).then((fn) => {
+            if (cancelled) fn();
+            else unlisten = fn;
+        });
+        return () => {
+            cancelled = true;
+            unlisten?.();
+        };
+    }, [meetingId, refetch]);
 
     // Convert to segments (memoized)
     const segments = useMemo(() =>

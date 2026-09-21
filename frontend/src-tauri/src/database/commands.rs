@@ -4,12 +4,105 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::manager::DatabaseManager;
-use crate::state::AppState;
+use crate::state::{AppState, DatabaseStartupStatus};
 
 #[derive(Serialize)]
 pub struct DatabaseCheckResult {
     pub exists: bool,
     pub size: u64,
+}
+
+/// Returns the database error captured during startup, if the app was able to
+/// start its UI but could not attach the database state.
+#[tauri::command]
+pub fn get_database_startup_error(
+    status: tauri::State<'_, DatabaseStartupStatus>,
+) -> Option<String> {
+    status.error()
+}
+
+fn backup_database_files(app: &AppHandle) -> Result<Vec<PathBuf>, String> {
+    let app_data_dir = crate::portable::app_data_dir(app)
+        .map_err(|e| format!("Failed to get app data directory: {}", e))?;
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    let mut backups = Vec::new();
+
+    for name in [
+        "meeting_minutes.sqlite",
+        "meeting_minutes.sqlite-wal",
+        "meeting_minutes.sqlite-shm",
+    ] {
+        let source = app_data_dir.join(name);
+        if !source.exists() {
+            continue;
+        }
+
+        let backup = app_data_dir.join(format!("{}.backup-{}", name, timestamp));
+        std::fs::rename(&source, &backup).map_err(|e| {
+            format!(
+                "Failed to preserve database file {}: {}",
+                source.display(),
+                e
+            )
+        })?;
+        backups.push(backup);
+    }
+
+    Ok(backups)
+}
+
+async fn finish_fresh_database_initialization(
+    app: &AppHandle,
+    db_manager: DatabaseManager,
+) -> Result<(), String> {
+    app.manage(AppState {
+        db_manager: db_manager.clone(),
+    });
+
+    let pool = db_manager.pool();
+    let default_summary_model =
+        crate::summary::summary_engine::commands::get_recommended_summary_model_for_current_system(
+        )
+        .unwrap_or("qwen3.5:2b");
+
+    if let Err(e) = crate::database::repositories::setting::SettingsRepository::save_model_config(
+        pool,
+        "builtin-ai",
+        default_summary_model,
+        "large-v3",
+        None,
+    )
+    .await
+    {
+        error!("Failed to set default summary model config: {}", e);
+    }
+
+    match crate::database::repositories::setting::SettingsRepository::get_transcript_config(pool)
+        .await
+    {
+        Ok(None) => {
+            if let Err(e) =
+                crate::database::repositories::setting::SettingsRepository::save_transcript_config(
+                    pool,
+                    "parakeet",
+                    crate::config::DEFAULT_PARAKEET_MODEL,
+                )
+                .await
+            {
+                error!("Failed to set default transcription model config: {}", e);
+            }
+        }
+        Ok(Some(config)) => info!(
+            "Preserving existing transcription model config: provider={}, model={}",
+            config.provider, config.model
+        ),
+        Err(e) => error!("Failed to read existing transcription model config: {}", e),
+    }
+
+    app.state::<DatabaseStartupStatus>().clear();
+    app.emit("database-initialized", ())
+        .map_err(|e| format!("Failed to emit database-initialized event: {}", e))?;
+    Ok(())
 }
 
 /// Check if this is the first launch (no database exists yet)
@@ -179,65 +272,36 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
             format!("Failed to initialize database: {}", e)
         })?;
 
-    // Update app state with the new manager
-    app.manage(AppState {
-        db_manager: db_manager.clone(),
-    });
-
-    // Set default model configuration for fresh installs
-    let pool = db_manager.pool();
-
-    let default_summary_model =
-        crate::summary::summary_engine::commands::get_recommended_summary_model_for_current_system(
-        )
-        .unwrap_or("qwen3.5:2b");
-
-    // Default Summary Model: Built-in AI (Qwen recommendation for this system)
-    if let Err(e) = crate::database::repositories::setting::SettingsRepository::save_model_config(
-        pool,
-        "builtin-ai",
-        default_summary_model,
-        "large-v3", // Default whisper model (unused for builtin but required)
-        None,
-    )
-    .await
-    {
-        error!("Failed to set default summary model config: {}", e);
-    }
-
-    // Seed a transcription default only when no provider has been selected.
-    // `initialize_fresh_database` may race with onboarding on first launch;
-    // an unconditional Parakeet upsert here used to overwrite the GigaAM
-    // selection that onboarding had just stored.
-    match crate::database::repositories::setting::SettingsRepository::get_transcript_config(pool)
-        .await
-    {
-        Ok(None) => {
-            if let Err(e) =
-                crate::database::repositories::setting::SettingsRepository::save_transcript_config(
-                    pool,
-                    "parakeet",
-                    crate::config::DEFAULT_PARAKEET_MODEL,
-                )
-                .await
-            {
-                error!("Failed to set default transcription model config: {}", e);
-            }
-        }
-        Ok(Some(config)) => info!(
-            "Preserving existing transcription model config: provider={}, model={}",
-            config.provider, config.model
-        ),
-        Err(e) => error!("Failed to read existing transcription model config: {}", e),
-    }
+    finish_fresh_database_initialization(&app, db_manager).await?;
 
     info!("Fresh database initialized successfully with default models");
 
-    // Emit event to notify frontend that database is ready
-    app.emit("database-initialized", ())
-        .map_err(|e| format!("Failed to emit database-initialized event: {}", e))?;
-
     Ok(())
+}
+
+/// Preserve a database that failed startup and create a completely empty one.
+/// This is intentionally separate from normal first-launch initialization: it
+/// must not auto-import a legacy database after the user chose a reset.
+#[tauri::command]
+pub async fn backup_and_reinitialize_database(app: AppHandle) -> Result<Vec<String>, String> {
+    if app.try_state::<AppState>().is_some() {
+        return Err("Database is already available; refusing to reset it".to_string());
+    }
+
+    let backups = backup_database_files(&app)?;
+    let db_manager = DatabaseManager::new_empty_from_app_handle(&app)
+        .await
+        .map_err(|e| format!("Failed to create replacement database: {}", e))?;
+    finish_fresh_database_initialization(&app, db_manager).await?;
+
+    info!(
+        "Database reinitialized; preserved {} file(s)",
+        backups.len()
+    );
+    Ok(backups
+        .into_iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect())
 }
 
 /// Get the database directory path

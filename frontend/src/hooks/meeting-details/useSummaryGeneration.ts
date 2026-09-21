@@ -10,7 +10,6 @@ import { ModelConfig } from '@/components/ModelSettingsModal';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
-import Analytics from '@/lib/analytics';
 
 import {
   detectAndCacheSummaryLanguage,
@@ -140,13 +139,6 @@ export function useSummaryGeneration({
       return;
     }
     attempt.finished = true;
-    await Analytics.trackSummaryGenerationCompleted(
-      attempt.provider,
-      attempt.model,
-      outcome === 'ok' || outcome === 'fallback',
-      (Date.now() - attempt.startedAt) / 1000,
-      outcome === 'ok' ? undefined : outcome,
-    );
   }, []);
 
   const failGeneration = useCallback(async (
@@ -331,7 +323,6 @@ export function useSummaryGeneration({
         return;
       }
 
-      const timeSinceRecording = (Date.now() - new Date(meeting.created_at).getTime()) / 60000;
       trackedAttemptRef.current = {
         generationId,
         startedAt: Date.now(),
@@ -339,15 +330,6 @@ export function useSummaryGeneration({
         model: modelConfig.model,
         finished: false,
       };
-      await Analytics.trackSummaryGenerationStarted(
-        modelConfig.provider,
-        modelConfig.model,
-        transcriptText.length,
-        timeSinceRecording,
-      );
-      if (customPrompt.trim()) {
-        await Analytics.trackCustomPromptUsed(customPrompt.trim().length);
-      }
       toast.info(`${isRegeneration ? 'Regenerating' : 'Generating'} summary...`, {
         description: `Using ${modelConfig.provider}/${modelConfig.model}`,
         duration: 3000,

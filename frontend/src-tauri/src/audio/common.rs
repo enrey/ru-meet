@@ -101,6 +101,7 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_start_time": s.audio_start_time,
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
+                "speaker": s.speaker,
                 "sequence_id": i
             })
         }).collect::<Vec<_>>()
@@ -114,6 +115,18 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
         "Wrote transcripts.json with {} segments to {}",
         segments.len(),
         transcript_path.display()
+    );
+
+    crate::audio::transcript_export::write_transcript_exports_logged(
+        folder,
+        &segments
+            .iter()
+            .map(|s| crate::audio::transcript_export::ExportLine {
+                start_seconds: s.audio_start_time,
+                text: s.text.clone(),
+                speaker: s.speaker.clone(),
+            })
+            .collect::<Vec<_>>(),
     );
     Ok(())
 }

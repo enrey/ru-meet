@@ -21,8 +21,16 @@ tokio = { version = "1.32.0", features = ["full"] }
 [patch.crates-io]
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "51c3b43" }
 
+# Keep development builds compact and fast while retaining line information
+# for useful backtraces.
+[profile.dev]
+debug = 1
+incremental = true
+
 # Diarization uses CPU-heavy hand-written INT8 kernels. Keep them optimized
 # during `tauri dev`; otherwise a short recording can take minutes to process.
+# (Now subsumed by the `"*"` glob below, but kept explicit so the reason these
+# particular crates must never drop back to opt-level 0 stays recorded.)
 [profile.dev.package.polyvoice]
 opt-level = 3
 
@@ -34,3 +42,25 @@ opt-level = 3
 
 [profile.dev.package.rten-tensor]
 opt-level = 3
+
+# The same problem is not specific to diarization: the whole audio-import
+# pipeline is CPU-bound Rust, and `tauri dev` builds it at opt-level 0.
+# Measured on a 70-minute recording (Ryzen 5 3600): the import took 1016s, of
+# which only ~380s was attributable to work that is optimized regardless -
+# ffmpeg (18s), ONNX inference inside onnxruntime.dll (GigaAM ~330s, Silero
+# VAD ~29s). The remaining ~635s was unoptimized Rust: `compute_mel`,
+# `ctc_greedy_decode`, `audio_to_mono`, `normalize_audio_samples` and the VAD
+# ring buffer in this workspace, plus `rubato`/`rustfft`/`ndarray`/`symphonia`
+# as dependencies. For reference, the 48kHz->16kHz resample alone measured
+# 4.2s compiled at opt-level 3 against tens of seconds at opt-level 0.
+#
+# Dependencies get full optimization - we never step through them anyway.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Our own crate stays at 1: that already removes the bulk of the debug-build
+# penalty in the numeric loops while keeping backtraces and stepping usable
+# and incremental rebuilds fast. Raise to 2 or 3 if the import path still
+# shows up in a stage-timing summary (see `audio/import.rs`).
+[profile.dev.package.meetily]
+opt-level = 1

@@ -43,6 +43,9 @@ pub mod transcription;
 // Shared utilities for import and retranscription
 pub(crate) mod common;
 
+// Markdown transcript exports written next to transcripts.json
+pub mod transcript_export;
+
 // Shared constants
 pub mod constants;
 

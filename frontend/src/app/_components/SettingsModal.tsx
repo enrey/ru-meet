@@ -5,10 +5,12 @@ import { LanguageSelection } from "@/components/LanguageSelection";
 import { TranscriptSettings } from "@/components/TranscriptSettings";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
+import { DIARIZATION_MODELS } from "@/lib/diarization-models";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import { configService } from "@/services/configService";
 
 type modalType = "modelSettings" | "deviceSettings" | "languageSettings" | "modelSelector" | "errorAlert" | "chunkDropWarning";
 
@@ -62,6 +64,17 @@ export function SettingsModals({
   } = useConfig();
 
   const { isRecording } = useRecordingState();
+
+  const handleDeviceChange = async (devices: typeof selectedDevices) => {
+    setSelectedDevices(devices);
+    try {
+      const saved = await configService.saveRecordingDevicePreferences(devices);
+      setSelectedDevices(saved);
+    } catch (error) {
+      console.error('Failed to save audio device preferences:', error);
+      toast.error('Could not save audio device preferences');
+    }
+  };
 
   useEffect(() => {
     invoke<{ enabled: boolean; engine: string }>('get_diarization_settings')
@@ -220,20 +233,13 @@ export function SettingsModals({
 
           <DeviceSelection
             selectedDevices={selectedDevices}
-            onDeviceChange={setSelectedDevices}
+            onDeviceChange={handleDeviceChange}
             disabled={isRecording}
           />
 
           <div className="mt-6 flex justify-end">
             <button
-              onClick={() => {
-                const micDevice = selectedDevices.micDevice || 'Default';
-                const systemDevice = selectedDevices.systemDevice || 'Default';
-                toast.success("Devices selected", {
-                  description: `Microphone: ${micDevice}, System Audio: ${systemDevice}`
-                });
-                onClose('deviceSettings');
-              }}
+              onClick={() => onClose('deviceSettings')}
               className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
             >
               Done
@@ -328,8 +334,9 @@ export function SettingsModals({
                   onChange={(e) => saveDiarizationSettings(diarizationEnabled, e.target.value)}
                   className="mt-1 text-xs border border-gray-300 rounded px-2 py-1 disabled:bg-gray-100"
                 >
-                  <option value="pyannote-wespeaker">PyAnnote + WeSpeaker</option>
-                  <option value="nvidia-sortformer-v2">NVIDIA Sortformer v2</option>
+                  {Object.entries(DIARIZATION_MODELS).map(([id, model]) => (
+                    <option key={id} value={id}>{model.name} · {model.size}</option>
+                  ))}
                 </select>
                 <button
                   type="button"

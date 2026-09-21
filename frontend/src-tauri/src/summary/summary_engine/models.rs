@@ -145,9 +145,14 @@ pub struct ModelDef {
     /// File size in MiB. The field name is kept for API compatibility.
     pub size_mb: u64,
 
-    /// Context window size in tokens (configurable per model!)
-    /// This is used for chunking in processor.rs
-    pub context_size: u32,
+    /// Maximum context window the model itself supports, in tokens, as
+    /// declared by its own training config (GGUF `*.context_length` /
+    /// `n_ctx_train`). This is the model's real capability, NOT the amount we
+    /// allocate at runtime - see `plan_context_size`, which sizes the actual
+    /// KV cache to the request at hand and clamps it to this ceiling.
+    ///
+    /// Used directly as the single-pass/chunking threshold in service.rs.
+    pub max_context_size: u32,
 
     /// Model layer count (for GPU offloading calculation)
     pub layer_count: u32,
@@ -171,7 +176,8 @@ pub fn get_available_models() -> Vec<ModelDef> {
             template: "qwen3.5_nonthinking".to_string(),
             download_url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf".to_string(),
             size_mb: 1221,
-            context_size: 32768,
+            // Qwen3.5-2B: 262144 native context (hybrid Gated DeltaNet + attention).
+            max_context_size: 262_144,
             layer_count: 24,
             sampling: SamplingParams::qwen35_summary(vec!["<|im_end|>".to_string()]),
             description: "Balanced Qwen 3.5 model for built-in summaries. Higher quality with modest local requirements.".to_string(),
@@ -184,7 +190,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
             template: "qwen3.5_nonthinking".to_string(),
             download_url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf".to_string(),
             size_mb: 2614,
-            context_size: 32768,
+            // Qwen3.5-4B: 262144, confirmed from the GGUF's own metadata
+            // (`qwen35.context_length = 262144` / `n_ctx_train`).
+            max_context_size: 262_144,
             layer_count: 32,
             sampling: SamplingParams::qwen35_summary(vec!["<|im_end|>".to_string()]),
             description: "High-quality Qwen 3.5 model for built-in summaries. Best local Qwen option in the current lineup.".to_string(),
@@ -197,7 +205,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
             template: "gemma3".to_string(),
             download_url: "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf".to_string(),
             size_mb: 2374,
-            context_size: 32768,
+            // Gemma 3 4B: 128K per Google's model card (1B/270M are 32K,
+            // 4B/12B/27B were extended to 128K at the end of pre-training).
+            max_context_size: 131_072,
             layer_count: 35,
             sampling: SamplingParams::gemma3_instruct(vec!["<end_of_turn>".to_string()]),
             description: "Balanced model. Great quality/speed trade-off. Requires ~3.5GB RAM.".to_string(),
@@ -210,7 +220,9 @@ pub fn get_available_models() -> Vec<ModelDef> {
             template: "gemma3".to_string(),
             download_url: "https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF/resolve/main/google_gemma-3-1b-it-Q8_0.gguf".to_string(),
             size_mb: 1019,
-            context_size: 32768,
+            // Gemma 3 1B: 32K per Google's model card - this tier really is
+            // 32768, unlike the others that were capped here by hand.
+            max_context_size: 32_768,
             layer_count: 26,
             sampling: SamplingParams::gemma3_instruct(vec!["<end_of_turn>".to_string()]),
             description: "Fastest model. Runs on any hardware with ~1GB RAM. Good for quick summaries.".to_string(),
@@ -321,6 +333,60 @@ pub fn format_prompt(
 /// Default max tokens for generation (increased for better summary quality)
 pub const DEFAULT_MAX_TOKENS: i32 = 4096;
 
+/// Smallest context we ever allocate: anything below this cannot hold even a
+/// short prompt plus `DEFAULT_MAX_TOKENS` of output.
+pub const MIN_CONTEXT_SIZE: u32 = 8192;
+
+/// `rough_token_count` estimates tokens as `chars * 0.35`; the padding covers
+/// it coming out low. Measured against a real Russian transcript the estimate
+/// was 19704 against 19405 actual tokens - slightly *over*, not under - so a
+/// large multiplier only buys a bigger context, and a bigger context costs
+/// VRAM that the model would rather spend on its own weights.
+const PROMPT_ESTIMATE_PADDING_PERCENT: usize = 115;
+
+/// Slack for the chat-template wrapper, BOS/EOS and sampler bookkeeping.
+const CONTEXT_HEADROOM_TOKENS: usize = 512;
+
+/// Pick the context window to actually allocate for one generation.
+///
+/// The model's declared maximum (`ModelDef::max_context_size`) is a ceiling,
+/// not a target: llama.cpp allocates the whole KV cache up front, so asking
+/// for 262144 tokens to summarize a 20k-token transcript would reserve
+/// gigabytes of VRAM for nothing. This sizes the allocation to the request and
+/// rounds up to a power of two so that repeated runs of similar size land on
+/// the same value and the sidecar can keep its model loaded.
+pub fn plan_context_size(
+    prompt_token_estimate: usize,
+    max_output_tokens: i32,
+    model_max_context: u32,
+) -> u32 {
+    let padded = prompt_token_estimate
+        .saturating_mul(PROMPT_ESTIMATE_PADDING_PERCENT)
+        / 100;
+    let required = padded
+        .saturating_add(max_output_tokens.max(0) as usize)
+        .saturating_add(CONTEXT_HEADROOM_TOKENS);
+
+    let mut planned = MIN_CONTEXT_SIZE;
+    while (planned as usize) < required && planned < model_max_context {
+        planned = planned.saturating_mul(2);
+    }
+    planned.min(model_max_context)
+}
+
+/// Largest transcript, measured in `rough_token_count` units, that still fits
+/// this model in a single pass together with its prompt and its own output.
+///
+/// This is the exact inverse of what `plan_context_size` reserves, so the
+/// chunking decision and the allocation can never disagree: anything at or
+/// above this has to be chunked, anything below is guaranteed to fit.
+pub fn single_pass_token_threshold(model_max_context: u32) -> usize {
+    let usable = (model_max_context as usize)
+        .saturating_sub(DEFAULT_MAX_TOKENS.max(0) as usize)
+        .saturating_sub(CONTEXT_HEADROOM_TOKENS);
+    usable * 100 / PROMPT_ESTIMATE_PADDING_PERCENT
+}
+
 /// Idle timeout for sidecar (seconds) - can be overridden via LLAMA_IDLE_TIMEOUT env var
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300; // 5 minutes
 
@@ -342,7 +408,7 @@ mod tests {
             "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf"
         );
         assert_eq!(qwen_2b.size_mb, 1221);
-        assert_eq!(qwen_2b.context_size, 32768);
+        assert_eq!(qwen_2b.max_context_size, 262_144);
         assert_eq!(qwen_2b.layer_count, 24);
         assert_eq!(
             qwen_2b.sampling,
@@ -358,12 +424,34 @@ mod tests {
             "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
         );
         assert_eq!(qwen_4b.size_mb, 2614);
-        assert_eq!(qwen_4b.context_size, 32768);
+        assert_eq!(qwen_4b.max_context_size, 262_144);
         assert_eq!(qwen_4b.layer_count, 32);
         assert_eq!(
             qwen_4b.sampling,
             SamplingParams::qwen35_summary(vec!["<|im_end|>".to_string()])
         );
+    }
+
+    #[test]
+    fn plan_context_size_sizes_to_the_request_not_the_model_ceiling() {
+        // A short prompt must not reserve the model's full 262144-token cache.
+        assert_eq!(plan_context_size(1_000, 4096, 262_144), MIN_CONTEXT_SIZE);
+
+        // A ~20k-token transcript: padded to 23k, plus output and headroom,
+        // fits the 32k bucket. Staying in the smallest bucket that fits is
+        // what keeps the weights and KV cache on the GPU.
+        assert_eq!(plan_context_size(20_000, 4096, 262_144), 32_768);
+
+        // Buckets are powers of two so repeated similar runs reuse the same
+        // loaded context instead of forcing a model reload each time.
+        assert_eq!(
+            plan_context_size(20_000, 4096, 262_144),
+            plan_context_size(21_000, 4096, 262_144)
+        );
+
+        // Never exceeds what the model actually supports.
+        assert_eq!(plan_context_size(500_000, 4096, 32_768), 32_768);
+        assert_eq!(plan_context_size(500_000, 4096, 262_144), 262_144);
     }
 
     #[test]

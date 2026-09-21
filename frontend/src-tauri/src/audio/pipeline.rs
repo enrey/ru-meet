@@ -446,6 +446,10 @@ impl AudioCapture {
         } else {
             data.to_vec()
         };
+        let source_muted = self.state.is_source_muted(&self.device_type);
+        if source_muted {
+            mono_data.fill(0.0);
+        }
 
         // CRITICAL FIX: Resample to 48kHz if device uses different sample rate
         // This fixes Bluetooth devices (like Sony WH-1000XM4) that report 16kHz or 44.1kHz
@@ -560,7 +564,7 @@ impl AudioCapture {
         // AUDIO ENHANCEMENT PIPELINE (Microphone Only)
         // Processing order is critical: high-pass → noise suppression → normalization
         // This ensures noise is removed before being amplified by the normalizer
-        if matches!(self.device_type, DeviceType::Microphone) {
+        if matches!(self.device_type, DeviceType::Microphone) && !source_muted {
             // STEP 1: Apply high-pass filter to remove low-frequency rumble (< 80 Hz)
             if let Ok(mut hpf_lock) = self.high_pass_filter.lock() {
                 if let Some(ref mut filter) = *hpf_lock {

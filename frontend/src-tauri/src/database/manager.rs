@@ -32,6 +32,7 @@ impl DatabaseManager {
         let pool = SqlitePool::connect(tauri_db_path).await?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
+        Self::recover_interrupted_summary_processes(&pool).await?;
 
         Ok(DatabaseManager { pool })
     }
@@ -117,6 +118,35 @@ impl DatabaseManager {
         }
     }
 
+    /// Create an empty database without importing the legacy `.db` file.
+    /// Used only after the user explicitly chose database recovery.
+    pub async fn new_empty_from_app_handle(app_handle: &tauri::AppHandle) -> Result<Self> {
+        let app_data_dir =
+            crate::portable::app_data_dir(app_handle).expect("failed to get app data dir");
+        if !app_data_dir.exists() {
+            fs::create_dir_all(&app_data_dir).map_err(sqlx::Error::Io)?;
+        }
+
+        let tauri_db_path = app_data_dir
+            .join("meeting_minutes.sqlite")
+            .to_string_lossy()
+            .to_string();
+
+        if Path::new(&tauri_db_path).exists() {
+            return Err(sqlx::Error::Protocol(
+                "refusing to overwrite an existing database".to_string(),
+            ));
+        }
+
+        log::info!("Creating fresh database at {}", tauri_db_path);
+        Sqlite::create_database(&tauri_db_path).await?;
+        let pool = SqlitePool::connect(&tauri_db_path).await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
+        Self::recover_interrupted_summary_processes(&pool).await?;
+
+        Ok(DatabaseManager { pool })
+    }
+
     /// Check if this is the first launch (sqlite database doesn't exist yet)
     pub async fn is_first_launch(app_handle: &tauri::AppHandle) -> Result<bool> {
         let app_data_dir =
@@ -155,6 +185,17 @@ impl DatabaseManager {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    async fn recover_interrupted_summary_processes(pool: &SqlitePool) -> Result<()> {
+        let recovered = crate::database::repositories::summary::SummaryProcessesRepository::fail_pending_processes_after_restart(pool).await?;
+        if recovered > 0 {
+            log::warn!(
+                "Marked {} orphaned summary process(es) as failed after application restart",
+                recovered
+            );
+        }
+        Ok(())
     }
 
     pub async fn with_transaction<T, F, Fut>(&self, f: F) -> Result<T>

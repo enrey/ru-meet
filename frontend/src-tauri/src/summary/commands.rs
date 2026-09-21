@@ -3,6 +3,7 @@ use crate::database::repositories::{
     transcript_chunk::TranscriptChunksRepository,
 };
 use crate::state::AppState;
+use crate::summary::export::write_summary_files_for_meeting;
 use crate::summary::language_detection::{detect_summary_language, SummaryLanguageDetection};
 use crate::summary::metadata::{
     read_detected_summary_language_from_metadata, read_summary_language_from_metadata,
@@ -111,6 +112,27 @@ pub async fn api_save_meeting_summary<R: Runtime>(
     match SummaryProcessesRepository::update_meeting_summary(pool, &meeting_id, &summary).await {
         Ok(true) => {
             log_info!("Summary saved successfully for meeting_id: {}", meeting_id);
+            match write_summary_files_for_meeting(pool, &meeting_id, &summary).await {
+                Ok(true) => log_info!(
+                    "Summary files saved successfully for meeting_id: {}",
+                    meeting_id
+                ),
+                Ok(false) => log_warn!(
+                    "Summary files were not written because meeting {} has no recording folder",
+                    meeting_id
+                ),
+                Err(error) => {
+                    log_error!(
+                        "Summary was saved to the database, but file export failed for {}: {}",
+                        meeting_id,
+                        error
+                    );
+                    return Err(format!(
+                        "Summary was saved, but summary.html/summary.md5 could not be written: {}",
+                        error
+                    ));
+                }
+            }
             Ok(serde_json::json!({
                 "message": "Meeting summary saved successfully"
             }))
@@ -572,49 +594,55 @@ pub async fn api_cancel_summary<R: Runtime>(
         .with_timezone(&Utc);
     log_info!("api_cancel_summary called for meeting_id: {}", meeting_id);
 
-    let cancellation_requested = SummaryService::cancel_summary(&meeting_id, started_at);
-    let cancelled = if cancellation_requested {
-        let pool = state.db_manager.pool();
-        match SummaryProcessesRepository::update_process_cancelled(pool, &meeting_id, started_at)
-            .await
-        {
-            Ok(true) => {
+    let worker_notified = SummaryService::cancel_summary(&meeting_id, started_at);
+    let pool = state.db_manager.pool();
+    let cancelled = match SummaryProcessesRepository::update_process_cancelled(
+        pool,
+        &meeting_id,
+        started_at,
+    )
+    .await
+    {
+        Ok(true) => {
+            if worker_notified {
                 log_info!(
                     "Successfully cancelled summary generation for meeting_id: {}",
                     meeting_id
                 );
-                true
-            }
-            Ok(false) => {
-                log_info!(
-                    "Summary generation was already terminal for meeting_id: {}",
+            } else {
+                log_warn!(
+                    "Cancelled orphaned summary process without an in-memory worker for meeting_id: {}",
                     meeting_id
                 );
-                false
             }
-            Err(error) => {
-                log_error!(
-                    "Failed to update cancellation status for {}: {}",
-                    meeting_id,
-                    error
-                );
-                return Err(format!("Failed to update cancellation status: {}", error));
-            }
+            true
         }
-    } else {
-        false
+        Ok(false) => {
+            log_info!(
+                "Summary generation was already terminal or superseded for meeting_id: {}",
+                meeting_id
+            );
+            false
+        }
+        Err(error) => {
+            log_error!(
+                "Failed to update cancellation status for {}: {}",
+                meeting_id,
+                error
+            );
+            return Err(format!("Failed to update cancellation status: {}", error));
+        }
     };
 
     Ok(serde_json::json!({
         "cancelled": cancelled,
         "message": if cancelled {
             "Summary generation cancelled successfully"
-        } else if cancellation_requested {
-            "Summary generation was already terminal"
         } else {
-            "No active summary generation to cancel"
+            "Summary generation was already terminal or superseded"
         },
         "meeting_id": meeting_id,
+        "worker_notified": worker_notified,
     }))
 }
 

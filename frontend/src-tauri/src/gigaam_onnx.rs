@@ -19,9 +19,231 @@ use ort::inputs;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::TensorRef;
+use ort::{ortsys, AsPointer};
 use rustfft::{num_complex::Complex, FftPlanner};
+use std::collections::BTreeMap;
 use std::f32::consts::PI;
+use std::ffi::CStr;
 use std::path::Path;
+use std::{ptr, slice};
+
+#[cfg(windows)]
+use ort::ep::directml::DMLSessionBuilderExt;
+#[cfg(target_os = "macos")]
+use ort::ep::{coreml::ComputeUnits, CoreML, CPU};
+#[cfg(windows)]
+use ort::ep::{DirectML, CPU};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderAssignment {
+    pub provider: String,
+    pub node_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AcceleratorKind {
+    DirectMl,
+    CoreMl,
+}
+
+impl AcceleratorKind {
+    fn provider_name(self) -> &'static str {
+        match self {
+            Self::DirectMl => "DmlExecutionProvider",
+            Self::CoreMl => "CoreMLExecutionProvider",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::DirectMl => "GPU (DirectML)",
+            Self::CoreMl => "CoreML",
+        }
+    }
+
+    fn hybrid_label(self) -> &'static str {
+        match self {
+            Self::DirectMl => "GPU + CPU",
+            Self::CoreMl => "CoreML + CPU",
+        }
+    }
+}
+
+/// Which execution provider(s) ONNX Runtime assigned the loaded graph to.
+/// This is read after graph partitioning via `Session_GetEpGraphAssignmentInfo`;
+/// successful accelerator registration alone is deliberately not treated as use.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActiveProvider {
+    Accelerated {
+        accelerator: AcceleratorKind,
+        assignments: Vec<ProviderAssignment>,
+    },
+    Hybrid {
+        accelerator: AcceleratorKind,
+        assignments: Vec<ProviderAssignment>,
+    },
+    Cpu {
+        reason: Option<String>,
+        assignments: Vec<ProviderAssignment>,
+    },
+    Unknown {
+        reason: String,
+        assignments: Vec<ProviderAssignment>,
+    },
+}
+
+impl ActiveProvider {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ActiveProvider::Accelerated { accelerator, .. } => accelerator.label(),
+            ActiveProvider::Hybrid { accelerator, .. } => accelerator.hybrid_label(),
+            ActiveProvider::Cpu { .. } => "CPU",
+            ActiveProvider::Unknown { .. } => "Unknown",
+        }
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            ActiveProvider::Cpu { reason, .. } => reason.as_deref(),
+            ActiveProvider::Hybrid { .. } => Some("Some graph operations fell back to CPU"),
+            ActiveProvider::Unknown { reason, .. } => Some(reason),
+            ActiveProvider::Accelerated { .. } => None,
+        }
+    }
+
+    pub fn assignments(&self) -> &[ProviderAssignment] {
+        match self {
+            ActiveProvider::Accelerated { assignments, .. }
+            | ActiveProvider::Hybrid { assignments, .. }
+            | ActiveProvider::Cpu { assignments, .. }
+            | ActiveProvider::Unknown { assignments, .. } => assignments,
+        }
+    }
+
+    fn from_assignments(
+        assignments: Vec<ProviderAssignment>,
+        intended_accelerator: Option<AcceleratorKind>,
+        registration_error: Option<String>,
+    ) -> Self {
+        let assigned_accelerator = [AcceleratorKind::DirectMl, AcceleratorKind::CoreMl]
+            .into_iter()
+            .find(|kind| {
+                assignments.iter().any(|item| {
+                    item.node_count > 0 && item.provider.eq_ignore_ascii_case(kind.provider_name())
+                })
+            });
+        let accelerator_nodes = assigned_accelerator
+            .map(|kind| {
+                assignments
+                    .iter()
+                    .filter(|item| item.provider.eq_ignore_ascii_case(kind.provider_name()))
+                    .map(|item| item.node_count)
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
+        let cpu_nodes = assignments
+            .iter()
+            .filter(|item| item.provider.eq_ignore_ascii_case("CPUExecutionProvider"))
+            .map(|item| item.node_count)
+            .sum::<usize>();
+
+        match (assigned_accelerator, accelerator_nodes > 0, cpu_nodes > 0) {
+            (Some(accelerator), true, false) => Self::Accelerated {
+                accelerator,
+                assignments,
+            },
+            (Some(accelerator), true, true) => Self::Hybrid {
+                accelerator,
+                assignments,
+            },
+            (None, false, true) => Self::Cpu {
+                reason: registration_error.or_else(|| {
+                    intended_accelerator.map(|accelerator| {
+                        format!(
+                            "{} was requested, but ONNX Runtime assigned all {cpu_nodes} graph operations to CPU",
+                            accelerator.label()
+                        )
+                    })
+                }),
+                assignments,
+            },
+            _ => Self::Unknown {
+                reason: "ONNX Runtime returned no recognized accelerator or CPU graph assignments"
+                    .to_string(),
+                assignments,
+            },
+        }
+    }
+}
+
+fn read_provider_assignments(session: &Session) -> Result<Vec<ProviderAssignment>> {
+    let mut subgraphs_ptr: *const *const ort::sys::OrtEpAssignedSubgraph = ptr::null();
+    let mut subgraph_count = 0usize;
+    ortsys![unsafe Session_GetEpGraphAssignmentInfo(
+        session.ptr(),
+        &mut subgraphs_ptr,
+        &mut subgraph_count
+    )?];
+
+    if subgraph_count > 0 && subgraphs_ptr.is_null() {
+        return Err(anyhow!(
+            "ONNX Runtime returned a null graph-assignment list with {subgraph_count} entries"
+        ));
+    }
+
+    let subgraphs = if subgraph_count == 0 {
+        &[][..]
+    } else {
+        // The pointers and strings are owned by the session. We copy all data
+        // while the session is alive and never expose the borrowed pointers.
+        unsafe { slice::from_raw_parts(subgraphs_ptr, subgraph_count) }
+    };
+    let mut totals = BTreeMap::<String, usize>::new();
+
+    for &subgraph in subgraphs {
+        if subgraph.is_null() {
+            return Err(anyhow!("ONNX Runtime returned a null assigned subgraph"));
+        }
+
+        let mut provider_ptr = ptr::null();
+        ortsys![unsafe EpAssignedSubgraph_GetEpName(subgraph, &mut provider_ptr)?];
+        if provider_ptr.is_null() {
+            return Err(anyhow!(
+                "ONNX Runtime returned an assigned subgraph without a provider name"
+            ));
+        }
+        let provider = unsafe { CStr::from_ptr(provider_ptr) }
+            .to_string_lossy()
+            .into_owned();
+
+        let mut nodes_ptr: *const *const ort::sys::OrtEpAssignedNode = ptr::null();
+        let mut node_count = 0usize;
+        ortsys![unsafe EpAssignedSubgraph_GetNodes(
+            subgraph,
+            &mut nodes_ptr,
+            &mut node_count
+        )?];
+        *totals.entry(provider).or_default() += node_count;
+    }
+
+    let mut assignments = totals
+        .into_iter()
+        .map(|(provider, node_count)| ProviderAssignment {
+            provider,
+            node_count,
+        })
+        .collect::<Vec<_>>();
+    assignments.sort_by_key(|item| {
+        if item.provider.eq_ignore_ascii_case("DmlExecutionProvider") {
+            0
+        } else if item.provider.eq_ignore_ascii_case("CPUExecutionProvider") {
+            1
+        } else {
+            2
+        }
+    });
+    Ok(assignments)
+}
 
 /// Preferred precision for ONNX model loading. Selects which model file
 /// variant to load; falls back to FP32 (`model.onnx`) if the requested
@@ -224,7 +446,11 @@ fn load_vocab(path: &Path) -> Result<(Vec<String>, Option<i32>)> {
 
 /// For each time step, selects the token with highest logit. Skips blank
 /// tokens and consecutive repeated tokens.
-fn ctc_greedy_decode(logits: &ndarray::ArrayView3<f32>, num_frames: usize, blank_id: i64) -> Vec<i64> {
+fn ctc_greedy_decode(
+    logits: &ndarray::ArrayView3<f32>,
+    num_frames: usize,
+    blank_id: i64,
+) -> Vec<i64> {
     let vocab_size = logits.shape()[2];
     let mut tokens = Vec::new();
     let mut prev_id: i64 = -1;
@@ -268,6 +494,7 @@ pub struct GigaAMModel {
     mel_config: MelConfig,
     vocab: Vec<String>,
     blank_idx: i64,
+    active_provider: ActiveProvider,
 }
 
 impl GigaAMModel {
@@ -276,19 +503,105 @@ impl GigaAMModel {
         let vocab_path = model_dir.join("vocab.txt");
 
         if !model_path.exists() {
-            return Err(anyhow!("GigaAM model not found at {}", model_path.display()));
+            return Err(anyhow!(
+                "GigaAM model not found at {}",
+                model_path.display()
+            ));
         }
         if !vocab_path.exists() {
-            return Err(anyhow!("GigaAM vocab not found at {}", vocab_path.display()));
+            return Err(anyhow!(
+                "GigaAM vocab not found at {}",
+                vocab_path.display()
+            ));
         }
 
         log::info!("Loading GigaAM model from {:?}...", model_path);
-        let session = Session::builder()
+        let mut builder = Session::builder()
             .map_err(|error| anyhow!("failed to create GigaAM ONNX session: {error}"))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|error| anyhow!("failed to configure GigaAM ONNX session: {error}"))?
-            .commit_from_file(&model_path)
-            .map_err(|error| anyhow!("failed to load GigaAM model {}: {error}", model_path.display()))?;
+            .with_config_entry("session.record_ep_graph_assignment_info", "1")
+            .map_err(|error| {
+                anyhow!("failed to enable GigaAM provider assignment reporting: {error}")
+            })?;
+
+        // Windows only: try DirectML first, CPU is always appended as the
+        // fallback `ort`/onnxruntime falls back to automatically per-graph if
+        // DirectML doesn't register or can't run a given operator (this int8
+        // model uses dynamic quantization ops DirectML doesn't support, so
+        // partial/total CPU fallback for THIS model specifically is expected).
+        #[cfg(windows)]
+        let (intended_accelerator, registration_error) = {
+            builder = builder
+                .with_execution_providers([DirectML::default().build(), CPU::default().build()])
+                .map_err(|error| {
+                    anyhow!("failed to configure GigaAM execution providers: {error}")
+                })?;
+            match builder.dml_device() {
+                Some(Ok(_)) => (Some(AcceleratorKind::DirectMl), None),
+                Some(Err(error)) => (Some(AcceleratorKind::DirectMl), Some(error.to_string())),
+                None => (
+                    Some(AcceleratorKind::DirectMl),
+                    Some("DirectML is not supported in this build of ONNX Runtime".to_string()),
+                ),
+            }
+        };
+
+        #[cfg(target_os = "macos")]
+        let (intended_accelerator, registration_error) = {
+            let cache_dir = model_dir.join("coreml-cache");
+            std::fs::create_dir_all(&cache_dir).map_err(|error| {
+                anyhow!(
+                    "failed to create GigaAM CoreML cache {}: {error}",
+                    cache_dir.display()
+                )
+            })?;
+            builder = builder
+                .with_execution_providers([
+                    CoreML::default()
+                        .with_compute_units(ComputeUnits::All)
+                        .with_subgraphs(true)
+                        .with_model_cache_dir(cache_dir.to_string_lossy())
+                        .build(),
+                    CPU::default().build(),
+                ])
+                .map_err(|error| {
+                    anyhow!("failed to configure GigaAM CoreML execution provider: {error}")
+                })?;
+            (Some(AcceleratorKind::CoreMl), None)
+        };
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let (intended_accelerator, registration_error) = (None, None);
+
+        let session = builder.commit_from_file(&model_path).map_err(|error| {
+            anyhow!(
+                "failed to load GigaAM model {}: {error}",
+                model_path.display()
+            )
+        })?;
+        let active_provider = match read_provider_assignments(&session) {
+            Ok(assignments) => ActiveProvider::from_assignments(
+                assignments,
+                intended_accelerator,
+                registration_error,
+            ),
+            Err(error) => ActiveProvider::Unknown {
+                reason: format!("Could not read ONNX Runtime graph assignments: {error}"),
+                assignments: Vec::new(),
+            },
+        };
+        log::info!("GigaAM execution mode: {}", active_provider.label());
+        for assignment in active_provider.assignments() {
+            log::info!(
+                "GigaAM graph assignment: {} -> {} operations",
+                assignment.provider,
+                assignment.node_count
+            );
+        }
+        if let Some(reason) = active_provider.reason() {
+            log::info!("GigaAM execution details: {reason}");
+        }
 
         let (vocab, blank_idx) = load_vocab(&vocab_path)?;
         let blank_idx = blank_idx.unwrap_or(vocab.len() as i32) as i64;
@@ -313,7 +626,13 @@ impl GigaAMModel {
             mel_config,
             vocab,
             blank_idx,
+            active_provider,
         })
+    }
+
+    /// Which execution provider this loaded session is actually running on.
+    pub fn active_provider(&self) -> &ActiveProvider {
+        &self.active_provider
     }
 
     pub fn transcribe(
@@ -322,7 +641,9 @@ impl GigaAMModel {
         _options: &TranscribeOptions,
     ) -> Result<TranscriptionResult> {
         if samples.len() < self.mel_config.n_fft {
-            return Ok(TranscriptionResult { text: String::new() });
+            return Ok(TranscriptionResult {
+                text: String::new(),
+            });
         }
 
         // 1. Compute mel spectrogram [frames, mels]

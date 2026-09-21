@@ -28,10 +28,10 @@ static BUNDLED_MODEL_PATH: StdMutex<Option<PathBuf>> = StdMutex::new(None);
 /// Initialize the models directory path using app_data_dir. Should be called
 /// during app setup, alongside the other engines' `set_models_directory`.
 pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
-    if let Ok(bundled) = app
-        .path()
-        .resolve("silero/silero_vad.onnx", tauri::path::BaseDirectory::Resource)
-    {
+    if let Ok(bundled) = app.path().resolve(
+        "silero/silero_vad.onnx",
+        tauri::path::BaseDirectory::Resource,
+    ) {
         if verify_silero_model(&bundled) {
             info!("Using bundled Silero VAD model at {}", bundled.display());
             *BUNDLED_MODEL_PATH.lock().unwrap() = Some(bundled);
@@ -671,6 +671,17 @@ where
 mod tests {
     use super::*;
 
+    /// Tests that build a real [`VadProcessor`] are `#[ignore]`d: they need a
+    /// live ONNX Runtime, and on Windows `ort` is built with `load-dynamic`, so
+    /// the only thing that ever points it at the bundled `onnxruntime.dll` is
+    /// `ort::init_from(...)` in the app's `setup()`. A bare `cargo test`
+    /// process never runs that, so session creation times out rather than
+    /// failing on anything this module is responsible for.
+    ///
+    /// Run them from a shell that can supply the runtime:
+    /// `cargo test -p meetily audio::vad -- --ignored`.
+    const _REQUIRES_ONNX_RUNTIME: () = ();
+
     /// Generate synthetic speech-like audio with alternating speech/silence
     fn generate_test_audio_with_speech(duration_seconds: f32, sample_rate: u32) -> Vec<f32> {
         let total_samples = (duration_seconds * sample_rate as f32) as usize;
@@ -705,6 +716,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a live ONNX Runtime; see _REQUIRES_ONNX_RUNTIME"]
     fn test_vad_chunked_vs_single_processing() {
         // Generate 60 seconds of audio with speech patterns at 16kHz
         let audio = generate_test_audio_with_speech(60.0, 16000);
@@ -743,6 +755,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a live ONNX Runtime; see _REQUIRES_ONNX_RUNTIME"]
     fn test_vad_large_file_progress() {
         // Generate 120 seconds (2 minutes) of audio - triggers large file threshold
         let audio = generate_test_audio_with_speech(120.0, 16000);
@@ -802,6 +815,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a live ONNX Runtime; see _REQUIRES_ONNX_RUNTIME"]
     fn test_vad_cancellation() {
         let audio = generate_test_audio_with_speech(120.0, 16000);
 
@@ -821,6 +835,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a live ONNX Runtime; see _REQUIRES_ONNX_RUNTIME"]
     fn test_vad_continuous_processor_state_across_chunks() {
         // Test that VAD state is correctly maintained across chunk boundaries
         let mut processor =
@@ -857,6 +872,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a live ONNX Runtime; see _REQUIRES_ONNX_RUNTIME"]
     fn test_vad_400ms_vs_2000ms_segmentation() {
         // Demonstrates why 2000ms redemption is needed for batch processing:
         // 400ms creates excessive fragmentation, 2000ms bridges natural pauses.
@@ -923,6 +939,7 @@ mod tests {
     /// audio. The error grows with how late the utterance starts, which is why it took
     /// a long recording to surface.
     #[test]
+    #[ignore = "needs a live ONNX Runtime; see _REQUIRES_ONNX_RUNTIME"]
     fn test_speech_start_sample_never_exceeds_processed_samples() {
         // 20s of silence, then 3s of speech still running when the buffer ends.
         let audio = generate_late_speech_audio(20.0, 3.0, 16000);
@@ -953,6 +970,7 @@ mod tests {
 
     /// A forced segment's timestamps and samples must describe the same real audio interval.
     #[test]
+    #[ignore = "needs a live ONNX Runtime; see _REQUIRES_ONNX_RUNTIME"]
     fn test_flush_segment_timestamps_stay_within_audio_duration() {
         let audio = generate_late_speech_audio(20.0, 3.0, 16000);
         let audio_duration_ms = (audio.len() as f64 / VAD_SAMPLE_RATE as f64) * 1000.0;

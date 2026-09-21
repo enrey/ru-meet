@@ -8,11 +8,39 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, RwLock};
 
 use super::models;
+
+// ============================================================================
+// Generation Progress
+// ============================================================================
+
+/// A progress line emitted by the sidecar while a generation is in flight.
+///
+/// There is no total token count on purpose: generation stops at the model's
+/// end-of-generation token rather than at `max_tokens`, so the only honest
+/// figures are how many tokens have been produced so far and how fast.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GenerationProgress {
+    #[serde(rename = "type")]
+    kind: String,
+    pub prompt_tokens: u64,
+    pub generated_tokens: u64,
+    pub tokens_per_sec: f64,
+}
+
+impl GenerationProgress {
+    fn is_progress(&self) -> bool {
+        self.kind == "progress"
+    }
+}
+
+/// Invoked for each progress line while waiting on a generation.
+pub type ProgressCallback = dyn Fn(GenerationProgress) + Send + Sync;
 
 // ============================================================================
 // Sidecar State Management
@@ -413,8 +441,17 @@ impl SidecarManager {
         Ok(())
     }
 
-    /// Send a request to the sidecar and wait for response
-    pub async fn send_request(&self, request_json: String, timeout: Duration) -> Result<String> {
+    /// Send a request to the sidecar and wait for response.
+    ///
+    /// `on_progress` is invoked for every progress line the sidecar emits
+    /// while generating. Progress lines are consumed here either way, so a
+    /// caller that does not care can pass `None`.
+    pub async fn send_request(
+        &self,
+        request_json: String,
+        timeout: Duration,
+        on_progress: Option<&ProgressCallback>,
+    ) -> Result<String> {
         // Track active request
         let _guard = RequestGuard::new(self.active_request_count.clone());
 
@@ -437,7 +474,7 @@ impl SidecarManager {
         }
 
         // Read response from stdout with timeout
-        match tokio::time::timeout(timeout, self.read_response()).await {
+        match tokio::time::timeout(timeout, self.read_response(on_progress)).await {
             Ok(Ok(response)) => {
                 self.update_activity().await;
                 Ok(response)
@@ -454,24 +491,39 @@ impl SidecarManager {
         }
     }
 
-    /// Read a single line response from stdout
-    async fn read_response(&self) -> Result<String> {
+    /// Read from stdout until the terminal response arrives.
+    ///
+    /// The sidecar interleaves `{"type":"progress",...}` lines with the single
+    /// terminal response, so this consumes and reports those before returning
+    /// the first line that is not progress.
+    async fn read_response(&self, on_progress: Option<&ProgressCallback>) -> Result<String> {
         let mut stdout_lock = self.stdout_reader.lock().await;
         let reader = stdout_lock
             .as_mut()
             .ok_or_else(|| anyhow!("Sidecar not running"))?;
 
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .await
-            .context("Failed to read response from stdout")?;
+        loop {
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .await
+                .context("Failed to read response from stdout")?;
 
-        if line.is_empty() {
-            return Err(anyhow!("Sidecar closed stdout (process may have crashed)"));
+            if line.is_empty() {
+                return Err(anyhow!("Sidecar closed stdout (process may have crashed)"));
+            }
+
+            let line = line.trim().to_string();
+
+            match serde_json::from_str::<GenerationProgress>(&line) {
+                Ok(progress) if progress.is_progress() => {
+                    if let Some(callback) = on_progress {
+                        callback(progress);
+                    }
+                }
+                _ => return Ok(line),
+            }
         }
-
-        Ok(line.trim().to_string())
     }
 
     /// Send ping to keep sidecar alive
@@ -495,7 +547,7 @@ impl SidecarManager {
         }
 
         // Read response
-        let response = tokio::time::timeout(timeout, self.read_response()).await??;
+        let response = tokio::time::timeout(timeout, self.read_response(None)).await??;
 
         let resp: serde_json::Value = serde_json::from_str(&response)?;
         if resp.get("type").and_then(|t| t.as_str()) == Some("pong") {

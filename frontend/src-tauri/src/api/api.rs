@@ -877,6 +877,14 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                 total_count
             );
 
+            if offset == 0 && !transcripts.is_empty() {
+                crate::audio::transcript_export::export_meeting_transcripts_if_missing(
+                    pool,
+                    &meeting_id,
+                )
+                .await;
+            }
+
             // Convert Transcript to MeetingTranscript
             let meeting_transcripts = transcripts
                 .into_iter()
@@ -1050,9 +1058,22 @@ pub async fn api_update_transcript_speakers<R: Runtime>(
     labels: Vec<crate::database::repositories::transcript::SpeakerLabelUpdate>,
     turns: Vec<crate::audio::diarization::SpeakerTurn>,
 ) -> Result<(), String> {
-    TranscriptsRepository::update_speakers(state.db_manager.pool(), &meeting_id, &labels, &turns)
-        .await
-        .map_err(|error| format!("Failed to save diarization labels: {error}"))
+    let pool = state.db_manager.pool();
+
+    // Prefer deriving the labels from the turns against the rows actually in the
+    // database. `labels` is matched on exact float timestamps carried by the
+    // frontend, which silently labels nothing when its copy of a segment has
+    // drifted - leaving a timeline full of speakers over an unlabelled
+    // transcript. Keep the label path for callers that have no turns to offer.
+    let result = if turns.is_empty() {
+        TranscriptsRepository::update_speakers(pool, &meeting_id, &labels, &turns).await
+    } else {
+        TranscriptsRepository::apply_speaker_turns(pool, &meeting_id, &turns).await
+    };
+    result.map_err(|error| format!("Failed to save diarization labels: {error}"))?;
+
+    crate::audio::transcript_export::export_meeting_transcripts_logged(pool, &meeting_id).await;
+    Ok(())
 }
 
 /// Opens the meeting's recording folder in the system file explorer

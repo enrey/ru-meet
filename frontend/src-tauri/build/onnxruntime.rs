@@ -11,14 +11,36 @@ use std::{
 use std::os::windows::fs::MetadataExt;
 
 const WINDOWS_X64_TARGET: &str = "x86_64-pc-windows-msvc";
-// ort 2.0.0-rc.13 (via parakeet-rs's "api-24" feature, unified across the
-// dependency graph) requires ONNX Runtime >= 1.27.x; bundle the 1.28.0
-// release rc.13 itself targets. URL/hashes verified by downloading the
-// release asset directly and hashing it (2026-09-18), not copied from a
-// third party.
-const ARCHIVE_URL: &str = "https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-win-x64-1.28.0.zip";
-const ARCHIVE_SHA256: &str = "abef733dacbe2f571547a7150b479b5cb9cc0df22f96c24983a42cadb1b4f8bc";
-const ARCHIVE_SIZE: u64 = 78_796_801;
+// GPU-capable onnxruntime.dll for Windows, sourced from the `onnxruntime-node`
+// npm package rather than Microsoft's official channels, because neither of
+// those has what we need at a compatible version:
+//  - microsoft/onnxruntime's own GitHub releases don't publish a DirectML
+//    Windows zip at all (only plain CPU and CUDA12/13 variants exist there).
+//  - Microsoft's `Microsoft.ML.OnnxRuntime.DirectML` NuGet package does, but
+//    its latest release is stuck at onnxruntime 1.24.4 - below the >=1.27.x
+//    floor `ort`'s own default `api-27` feature requires (see "ONNX Runtime
+//    (`ort`) Version Management" in CLAUDE.md).
+//  - `ort`'s own maintainer (pyke) publishes a version-matched (1.28.0)
+//    DirectML build for this exact target via their CDN
+//    (cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/x86_64-pc-windows-msvc+directml.tar.lzma2),
+//    but it's a *statically linked* `onnxruntime.lib` (341MB) meant for
+//    normal link-time linking, not a `load-dynamic`-loadable `.dll` - using
+//    it would mean dropping the runtime Resource-relative path resolution
+//    this app relies on (see `ensure_onnx_runtime_available` in lib.rs) and
+//    statically bloating every Windows install by ~340MB, GPU or not.
+// `onnxruntime-node` (Microsoft's own Node.js bindings) bundles a genuine
+// dynamic onnxruntime.dll with DirectML support, and at 1.30.0 - newer than
+// even the CPU-only 1.28.0 build this replaces. It has no separate
+// `onnxruntime_providers_shared.dll`; CPU and DirectML both appear to be
+// compiled directly into `onnxruntime.dll` in this build (unverified beyond
+// "the app links and starts" - re-check if a future onnxruntime-node release
+// changes this). URL/hashes verified by downloading the package directly
+// from the npm registry and hashing it (2026-09-19), not copied from a third
+// party.
+const ARCHIVE_URL: &str =
+    "https://registry.npmjs.org/onnxruntime-node/-/onnxruntime-node-1.30.0.tgz";
+const ARCHIVE_SHA256: &str = "6e3390d6b783e7be946fad629292799da28d0b42f84856e50d2c1b0383291e75";
+const ARCHIVE_SIZE: u64 = 113_507_888;
 
 struct Artifact {
     archive_path: &'static str,
@@ -27,26 +49,55 @@ struct Artifact {
     sha256: &'static str,
 }
 
-const ARTIFACTS: [Artifact; 3] = [
+const ARTIFACTS: [Artifact; 4] = [
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.28.0/lib/onnxruntime.dll",
+        archive_path: "package/bin/napi-v6/win32/x64/onnxruntime.dll",
         output_name: "onnxruntime.dll",
-        size: 15_809_848,
-        sha256: "18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257",
+        size: 28_754_232,
+        sha256: "508c362f5673483dd3a086379c392795b2e42d10d5e6f3f90ebd7ac21c97af67",
     },
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.28.0/lib/onnxruntime_providers_shared.dll",
-        output_name: "onnxruntime_providers_shared.dll",
-        size: 21_856,
-        sha256: "599629fa643707defe9156140ae5edd73531f221aa97b7585b1c9bb0a93586f8",
+        // DirectML execution provider. Resolved implicitly by
+        // onnxruntime.dll's own imports (standard Windows DLL search order
+        // checks the loading module's own directory) once a session actually
+        // requests the DirectML provider - see the `directml` Cargo feature
+        // and `ort::execution_providers::DirectMLExecutionProvider` call
+        // sites; bundling this file alone does not change any session's
+        // behavior.
+        archive_path: "package/bin/napi-v6/win32/x64/DirectML.dll",
+        output_name: "DirectML.dll",
+        size: 18_527_584,
+        sha256: "234e8898778cdec88d3cb0539508273494082812c968699f3de665a018971625",
     },
     Artifact {
-        archive_path: "onnxruntime-win-x64-1.28.0/LICENSE",
-        output_name: "onnxruntime-LICENSE.txt",
-        size: 1_094,
-        sha256: "c250d6278f0b47a6439fb7592b08b58a55eb9f535aa49a1db63211c3f982b674",
+        // DirectX Shader Compiler: DirectML JIT-compiles its HLSL compute
+        // shaders through this at runtime. Without it, DirectML provider
+        // registration fails even though onnxruntime.dll itself loads fine -
+        // this is not optional.
+        archive_path: "package/bin/napi-v6/win32/x64/dxcompiler.dll",
+        output_name: "dxcompiler.dll",
+        size: 17_986_360,
+        sha256: "593d42df78c7f9cbd97c1374af107cfe20985759f98b77afc1448fe41ee3cc76",
+    },
+    Artifact {
+        // DXIL validator, required alongside dxcompiler.dll for the same
+        // reason.
+        archive_path: "package/bin/napi-v6/win32/x64/dxil.dll",
+        output_name: "dxil.dll",
+        size: 1_508_664,
+        sha256: "cf9a3981263f8ec30c9905d136eeaf4b4573209c602198671b958ec86905dea8",
     },
 ];
+
+// onnxruntime-node's npm tarball doesn't ship a LICENSE file (unlike the
+// official GitHub release zip this used to extract from), so onnxruntime's
+// own license is embedded directly - fetched independently from the matching
+// v1.30.0 tag; it's a short, stable MIT license that doesn't change between
+// releases. DirectML.dll/dxcompiler.dll/dxil.dll are separate Microsoft
+// projects (DirectML, DirectXShaderCompiler), also MIT-licensed but not
+// bundled here yet - do this properly before a real release build.
+const LICENSE_FILE_NAME: &str = "onnxruntime-LICENSE.txt";
+const LICENSE_TEXT: &str = "MIT License\n\nCopyright (c) Microsoft Corporation\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n";
 
 pub fn ensure_onnxruntime_runtime() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
@@ -126,7 +177,7 @@ pub fn ensure_onnxruntime_runtime() {
     .expect("Failed to create ONNX Runtime binaries directory");
 
     let temporary_archive = env::temp_dir().join(format!(
-        "meetily-onnxruntime-{}-{}.zip",
+        "meetily-onnxruntime-{}-{}.tgz",
         process::id(),
         target
     ));
@@ -167,22 +218,44 @@ fn stage_runtime(archive_path: &Path, destination: &Path) -> Result<(), String> 
     fs::create_dir_all(destination)
         .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
 
+    // The npm tarball is a plain .tgz (gzip + tar) containing every platform's
+    // binaries (win32/x64, win32/arm64, darwin/arm64, ...) - unlike the old
+    // zip source, `tar::Archive` only supports forward iteration (no
+    // by-name random access), so this extracts everything matching one of
+    // our wanted paths in a single pass and stops once all are found rather
+    // than decompressing the full ~340MB of every platform's binaries.
     let archive_file = File::open(archive_path)
         .map_err(|error| format!("failed to open {}: {error}", archive_path.display()))?;
-    let mut archive = zip::ZipArchive::new(archive_file)
+    let decoder = flate2::read::GzDecoder::new(archive_file);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive
+        .entries()
         .map_err(|error| format!("failed to read ONNX Runtime archive: {error}"))?;
 
-    for artifact in ARTIFACTS {
-        let mut source = archive.by_name(artifact.archive_path).map_err(|error| {
-            format!(
-                "missing {} in ONNX Runtime archive: {error}",
-                artifact.archive_path
-            )
-        })?;
+    let mut remaining: Vec<&Artifact> = ARTIFACTS.iter().collect();
+    for entry in entries {
+        if remaining.is_empty() {
+            break;
+        }
+        let mut entry =
+            entry.map_err(|error| format!("failed to read ONNX Runtime archive entry: {error}"))?;
+        let entry_path = entry
+            .path()
+            .map_err(|error| format!("failed to read ONNX Runtime archive entry path: {error}"))?
+            .to_path_buf();
+
+        let Some(position) = remaining
+            .iter()
+            .position(|artifact| entry_path == Path::new(artifact.archive_path))
+        else {
+            continue;
+        };
+        let artifact = remaining.remove(position);
+
         let output = destination.join(artifact.output_name);
         let mut file = File::create(&output)
             .map_err(|error| format!("failed to create {}: {error}", output.display()))?;
-        std::io::copy(&mut source, &mut file)
+        std::io::copy(&mut entry, &mut file)
             .map_err(|error| format!("failed to extract {}: {error}", artifact.archive_path))?;
         verify_file(
             &output,
@@ -191,6 +264,22 @@ fn stage_runtime(archive_path: &Path, destination: &Path) -> Result<(), String> 
             artifact.sha256,
         )?;
     }
+
+    if !remaining.is_empty() {
+        let missing: Vec<&str> = remaining.iter().map(|a| a.archive_path).collect();
+        return Err(format!(
+            "ONNX Runtime archive is missing expected entries: {}",
+            missing.join(", ")
+        ));
+    }
+
+    let license_path = destination.join(LICENSE_FILE_NAME);
+    fs::write(&license_path, LICENSE_TEXT).map_err(|error| {
+        format!(
+            "failed to write {}: {error}",
+            license_path.display()
+        )
+    })?;
 
     Ok(())
 }
@@ -287,10 +376,11 @@ fn verify_staged_runtime(destination: &Path) -> Result<(), String> {
         }
 
         let name = entry.file_name();
-        if !ARTIFACTS
+        let is_declared_artifact = ARTIFACTS
             .iter()
             .any(|artifact| name.as_os_str() == artifact.output_name)
-        {
+            || name.as_os_str() == LICENSE_FILE_NAME;
+        if !is_declared_artifact {
             return Err(format!(
                 "runtime stage contains undeclared entry {}",
                 entry.path().display()
@@ -306,6 +396,17 @@ fn verify_staged_runtime(destination: &Path) -> Result<(), String> {
             artifact.sha256,
         )?;
     }
+
+    let license_path = destination.join(LICENSE_FILE_NAME);
+    let actual_license = fs::read_to_string(&license_path)
+        .map_err(|error| format!("failed to read {}: {error}", license_path.display()))?;
+    if actual_license != LICENSE_TEXT {
+        return Err(format!(
+            "{} does not match the expected embedded license text",
+            license_path.display()
+        ));
+    }
+
     Ok(())
 }
 

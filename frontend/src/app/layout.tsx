@@ -5,7 +5,6 @@ import { Source_Sans_3 } from 'next/font/google'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
-import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { Toaster, toast } from 'sonner'
 import "sonner/dist/styles.css"
 import { useState, useEffect, useCallback } from 'react'
@@ -25,6 +24,15 @@ import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcess
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 
 
 const sourceSans3 = Source_Sans_3({
@@ -70,6 +78,8 @@ export default function RootLayout({
 }) {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingCompleted, setOnboardingCompleted] = useState(false)
+  const [databaseStartupError, setDatabaseStartupError] = useState<string | null>(null)
+  const [isReinitializingDatabase, setIsReinitializingDatabase] = useState(false)
 
   // Import audio state
   const [showDropOverlay, setShowDropOverlay] = useState(false)
@@ -97,6 +107,36 @@ export default function RootLayout({
         setOnboardingCompleted(false)
       })
   }, [])
+
+  useEffect(() => {
+    invoke<string | null>('get_database_startup_error')
+      .then(setDatabaseStartupError)
+      .catch((error) => console.error('[Layout] Failed to read database startup error:', error))
+  }, [])
+
+  const handleReinitializeDatabase = async () => {
+    setIsReinitializingDatabase(true)
+    try {
+      const backups = await invoke<string[]>('backup_and_reinitialize_database')
+      toast.success('A new database was created', {
+        description: backups.length
+          ? 'The previous database was preserved in the database folder.'
+          : 'No database files needed to be preserved.',
+      })
+      window.location.reload()
+    } catch (error) {
+      toast.error('Could not reinitialize the database', { description: String(error) })
+      setIsReinitializingDatabase(false)
+    }
+  }
+
+  const openDatabaseFolder = async () => {
+    try {
+      await invoke('open_database_folder')
+    } catch (error) {
+      toast.error('Could not open the database folder', { description: String(error) })
+    }
+  }
 
   // Disable context menu in production
   useEffect(() => {
@@ -233,8 +273,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
-        <AnalyticsProvider>
-          <RecordingStateProvider>
+        <RecordingStateProvider>
             <TranscriptProvider>
               <ConfigProvider>
                 <OllamaDownloadProvider>
@@ -263,6 +302,41 @@ export default function RootLayout({
                                 handleImportDialogClose={handleImportDialogClose}
                                 importFilePath={importFilePath}
                               />
+                              <Dialog
+                                open={databaseStartupError !== null}
+                                onOpenChange={(open) => {
+                                  // The database is unavailable, so this recovery
+                                  // decision must remain visible until resolved.
+                                  if (open) setDatabaseStartupError(databaseStartupError)
+                                }}
+                              >
+                                <DialogContent
+                                  className="sm:max-w-[560px]"
+                                  onEscapeKeyDown={(event) => event.preventDefault()}
+                                  onPointerDownOutside={(event) => event.preventDefault()}
+                                >
+                                  <DialogHeader>
+                                    <DialogTitle>Database could not be opened</DialogTitle>
+                                    <DialogDescription>
+                                      Meetily started without access to your local data. You can create a new database after preserving the existing files as a backup.
+                                    </DialogDescription>
+                                  </DialogHeader>
+                                  <p className="text-sm text-muted-foreground">
+                                    Reinitializing removes meetings, transcripts, notes, summaries, local settings, API keys, and license data from the active database. It does not delete audio recordings or downloaded models.
+                                  </p>
+                                  <p className="rounded-md bg-muted p-3 text-xs text-muted-foreground break-words">
+                                    {databaseStartupError}
+                                  </p>
+                                  <DialogFooter>
+                                    <Button variant="outline" onClick={openDatabaseFolder} disabled={isReinitializingDatabase}>
+                                      Open backup folder
+                                    </Button>
+                                    <Button variant="destructive" onClick={handleReinitializeDatabase} disabled={isReinitializingDatabase}>
+                                      {isReinitializingDatabase ? 'Creating backup…' : 'Back up and reinitialize'}
+                                    </Button>
+                                  </DialogFooter>
+                                </DialogContent>
+                              </Dialog>
                             </ImportDialogProvider>
                           </RecordingPostProcessingProvider>
                         </TooltipProvider>
@@ -274,7 +348,6 @@ export default function RootLayout({
               </ConfigProvider>
             </TranscriptProvider>
           </RecordingStateProvider>
-        </AnalyticsProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
       </body>

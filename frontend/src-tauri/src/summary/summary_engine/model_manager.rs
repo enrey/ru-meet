@@ -280,7 +280,7 @@ impl ModelManager {
                 status,
                 path: model_path,
                 size_mb: model_def.size_mb,
-                context_size: model_def.context_size,
+                context_size: model_def.max_context_size,
                 description: model_def.description.clone(),
                 gguf_file: model_def.gguf_file.clone(),
             };

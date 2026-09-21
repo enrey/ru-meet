@@ -12,6 +12,7 @@ import {
   HardDrive,
   ChevronDown,
   ChevronUp,
+  ClipboardCopy,
 } from 'lucide-react';
 import {
   Dialog,
@@ -78,6 +79,19 @@ export function ImportAudioDialog({
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || 'auto');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [titleModifiedByUser, setTitleModifiedByUser] = useState(false);
+  const [showLog, setShowLog] = useState(false);
+  const [completedResult, setCompletedResult] = useState<ImportResult | null>(null);
+
+  // When unchecked, the dialog stays open after the import finishes so the log
+  // can be read. Read through a ref inside the completion handler, which the
+  // hook invokes from an event listener registered once.
+  const [closeOnFinish, setCloseOnFinish] = useState(true);
+  const closeOnFinishRef = useRef(closeOnFinish);
+  useEffect(() => {
+    closeOnFinishRef.current = closeOnFinish;
+  }, [closeOnFinish]);
+
+  const logTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Always start as false — represents "dialog has not yet been opened".
   // Do NOT initialize from the `open` prop: if the component mounts with open=true
@@ -96,12 +110,17 @@ export function ImportAudioDialog({
 
   const handleImportComplete = useCallback((result: ImportResult) => {
     toast.success(`Import complete! ${result.segments_count} segments created.`);
+    setCompletedResult(result);
 
-    // Refresh meetings list then navigate to the imported meeting
+    // Refresh the meetings list either way — the meeting exists now, whether or
+    // not the dialog stays open for its log to be read.
     refetchMeetings();
     onComplete?.();
-    onOpenChange(false);
-    router.push(`/meeting-details?id=${result.meeting_id}`);
+
+    if (closeOnFinishRef.current) {
+      onOpenChange(false);
+      router.push(`/meeting-details?id=${result.meeting_id}`);
+    }
   }, [router, refetchMeetings, onComplete, onOpenChange]);
 
   const handleImportError = useCallback((error: string) => {
@@ -112,6 +131,7 @@ export function ImportAudioDialog({
     status,
     fileInfo,
     progress,
+    logs,
     error,
     isProcessing,
     isBusy,
@@ -139,6 +159,9 @@ export function ImportAudioDialog({
       setTitleModifiedByUser(false);
       setSelectedLang(selectedLanguage || 'auto');
       setShowAdvanced(false);
+      setShowLog(false);
+      setCloseOnFinish(true);
+      setCompletedResult(null);
 
       // Validate preselected file if provided
       if (preselectedFile) {
@@ -178,6 +201,41 @@ export function ImportAudioDialog({
       setSelectedLang('auto');
     }
   }, [hasFixedLanguage, selectedLang]);
+
+  const isComplete = status === 'complete';
+  const hasLog = logs.length > 0 && (isProcessing || isComplete || !!error);
+
+  const logText = useMemo(
+    () =>
+      logs
+        .map((line) => {
+          const stamp = line.elapsed_seconds.toFixed(1).padStart(7, ' ');
+          const prefix = line.level === 'info' ? '' : `${line.level.toUpperCase()}: `;
+          return `[${stamp}s] ${prefix}${line.message}`;
+        })
+        .join('\n'),
+    [logs]
+  );
+
+  // Follow the tail, but leave the view alone once the user has scrolled up to
+  // read something — otherwise the log is unreadable while the import runs.
+  useEffect(() => {
+    const element = logTextareaRef.current;
+    if (!element || !showLog) return;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceFromBottom < 80) {
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [logText, showLog]);
+
+  const handleCopyLog = async () => {
+    try {
+      await navigator.clipboard.writeText(logText);
+      toast.success('Log copied to clipboard');
+    } catch {
+      toast.error('Could not copy the log');
+    }
+  };
 
   const handleSelectFile = async () => {
     const info = await selectFile();
@@ -229,7 +287,7 @@ export function ImportAudioDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-[500px]"
+        className={showLog ? 'sm:max-w-[760px]' : 'sm:max-w-[500px]'}
         onEscapeKeyDown={handleEscapeKeyDown}
         onInteractOutside={handleInteractOutside}
       >
@@ -262,13 +320,15 @@ export function ImportAudioDialog({
               ? progress?.message || 'Processing audio...'
               : error
               ? 'An error occurred during import'
+              : isComplete
+              ? 'The meeting has been created. Review the log below, or open it.'
               : 'Import an audio file to create a new meeting with transcripts'}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
           {/* File selection / info */}
-          {!isProcessing && !error && (
+          {!isProcessing && !error && !isComplete && (
             <>
               {fileInfo ? (
                 <div className="bg-gray-50 rounded-lg p-4 space-y-3">
@@ -430,6 +490,64 @@ export function ImportAudioDialog({
             </div>
           )}
 
+          {/* Completion summary (only reached when "Close on finish" is off) */}
+          {isComplete && completedResult && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+              <p className="text-sm text-green-800">
+                Created &ldquo;{completedResult.title}&rdquo; with{' '}
+                {completedResult.segments_count} transcript segments from{' '}
+                {formatDuration(completedResult.duration_seconds)} of audio.
+              </p>
+            </div>
+          )}
+
+          {/* Detailed log (collapsed by default) + close-on-finish toggle */}
+          {hasLog && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-4">
+                <button
+                  type="button"
+                  onClick={() => setShowLog(!showLog)}
+                  className="flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700"
+                >
+                  {showLog ? (
+                    <ChevronUp className="h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" />
+                  )}
+                  Real-time log... ({logs.length})
+                </button>
+
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={closeOnFinish}
+                    onChange={(e) => setCloseOnFinish(e.target.checked)}
+                    disabled={!isProcessing}
+                  />
+                  Close on finish
+                </label>
+              </div>
+
+              {showLog && (
+                <div className="space-y-2">
+                  <textarea
+                    ref={logTextareaRef}
+                    readOnly
+                    value={logText}
+                    spellCheck={false}
+                    wrap="off"
+                    className="w-full h-64 rounded-md border border-input bg-gray-50 px-3 py-2 font-mono text-xs leading-relaxed text-gray-800 overflow-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  />
+                  <Button variant="outline" size="sm" onClick={handleCopyLog}>
+                    <ClipboardCopy className="h-3.5 w-3.5 mr-2" />
+                    Copy log
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Error display */}
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3">
@@ -439,7 +557,7 @@ export function ImportAudioDialog({
         </div>
 
         <DialogFooter>
-          {!isProcessing && !error && (
+          {!isProcessing && !error && !isComplete && (
             <>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
@@ -451,6 +569,22 @@ export function ImportAudioDialog({
               >
                 <Upload className="h-4 w-4 mr-2" />
                 Import
+              </Button>
+            </>
+          )}
+          {isComplete && completedResult && (
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+              <Button
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={() => {
+                  onOpenChange(false);
+                  router.push(`/meeting-details?id=${completedResult.meeting_id}`);
+                }}
+              >
+                Open Meeting
               </Button>
             </>
           )}

@@ -31,7 +31,6 @@ macro_rules! perf_trace {
 // Re-export async logging macros for external use (removed due to macro conflicts)
 
 // Declare audio module
-pub mod analytics;
 pub mod anthropic;
 pub mod api;
 pub mod audio;
@@ -58,7 +57,7 @@ use audio::{list_audio_devices, trigger_audio_permission, AudioDevice};
 use log::{error as log_error, info as log_info};
 use notifications::commands::NotificationManagerState;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::RwLock;
 
 static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
@@ -71,15 +70,13 @@ enum OnnxRuntimeState {
 }
 
 #[cfg(target_os = "windows")]
-static ONNX_RUNTIME_STATE: std::sync::LazyLock<(
-    StdMutex<OnnxRuntimeState>,
-    std::sync::Condvar,
-)> = std::sync::LazyLock::new(|| {
-    (
-        StdMutex::new(OnnxRuntimeState::Pending),
-        std::sync::Condvar::new(),
-    )
-});
+static ONNX_RUNTIME_STATE: std::sync::LazyLock<(StdMutex<OnnxRuntimeState>, std::sync::Condvar)> =
+    std::sync::LazyLock::new(|| {
+        (
+            StdMutex::new(OnnxRuntimeState::Pending),
+            std::sync::Condvar::new(),
+        )
+    });
 
 /// Blocks (with a timeout) until the background ONNX Runtime init started in
 /// `setup()` has finished. On some Windows machines, ONNX Runtime's native
@@ -96,11 +93,9 @@ pub(crate) fn ensure_onnx_runtime_available() -> anyhow::Result<()> {
         let (lock, cvar) = &*ONNX_RUNTIME_STATE;
         let state = lock.lock().unwrap();
         let (state, wait_result) = cvar
-            .wait_timeout_while(
-                state,
-                std::time::Duration::from_secs(20),
-                |s| matches!(s, OnnxRuntimeState::Pending),
-            )
+            .wait_timeout_while(state, std::time::Duration::from_secs(20), |s| {
+                matches!(s, OnnxRuntimeState::Pending)
+            })
             .unwrap();
         if wait_result.timed_out() {
             anyhow::bail!(
@@ -376,8 +371,6 @@ async fn is_audio_level_monitoring() -> bool {
     audio::level_monitor::is_monitoring()
 }
 
-// Analytics commands are now handled by analytics::commands module
-
 // Whisper commands are now handled by whisper_engine::commands module
 
 #[tauri::command]
@@ -526,6 +519,7 @@ pub fn run() {
         .manage(summary::summary_engine::ModelManagerState(Arc::new(
             tokio::sync::Mutex::new(None),
         )))
+        .manage(state::DatabaseStartupStatus::default())
         .setup(move |_app| {
             #[cfg(target_os = "windows")]
             if let (Some(root), Some(window_config)) =
@@ -656,6 +650,14 @@ pub fn run() {
             // location.
             audio::vad::set_models_directory(&_app.handle());
 
+            // Forward built-in-model generation progress to the UI. Registered
+            // here because this is where the concrete AppHandle lives; the
+            // summary pipeline only knows about the closure.
+            let app_handle_for_progress = _app.handle().clone();
+            summary::summary_engine::client::set_progress_emitter(Box::new(move |progress| {
+                let _ = app_handle_for_progress.emit("summary-progress", progress);
+            }));
+
             // Initialize ModelManager for summary engine (async, non-blocking)
             let app_handle_for_model_manager = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -683,10 +685,16 @@ pub fn run() {
             // }
 
             // Initialize database (handles first launch detection and conditional setup)
-            tauri::async_runtime::block_on(async {
+            if let Err(error) = tauri::async_runtime::block_on(async {
                 database::setup::initialize_database_on_startup(&_app.handle()).await
-            })
-            .expect("Failed to initialize database");
+            }) {
+                // Do not abort the process: the renderer can offer to preserve
+                // and reinitialize the database through a confirmed recovery
+                // action. There is deliberately no automatic reset here.
+                log::error!("Database startup failed: {}", error);
+                _app.state::<state::DatabaseStartupStatus>()
+                    .set_error(error);
+            }
 
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
@@ -726,35 +734,11 @@ pub fn run() {
             audio::diarization::rerun_diarization,
             audio::diarization::cancel_diarization,
             audio::diarization::download_diarization_models,
+            audio::diarization::get_diarization_model_statuses,
             is_recording,
             get_transcription_status,
             read_audio_file,
             save_transcript,
-            analytics::commands::init_analytics,
-            analytics::commands::disable_analytics,
-            analytics::commands::track_event,
-            analytics::commands::identify_user,
-            analytics::commands::track_meeting_started,
-            analytics::commands::track_recording_started,
-            analytics::commands::track_recording_stopped,
-            analytics::commands::track_meeting_deleted,
-            analytics::commands::track_settings_changed,
-            analytics::commands::track_feature_used,
-            analytics::commands::is_analytics_enabled,
-            analytics::commands::start_analytics_session,
-            analytics::commands::end_analytics_session,
-            analytics::commands::track_daily_active_user,
-            analytics::commands::track_user_first_launch,
-            analytics::commands::is_analytics_session_active,
-            analytics::commands::track_summary_generation_started,
-            analytics::commands::track_summary_generation_completed,
-            analytics::commands::track_summary_regenerated,
-            analytics::commands::track_model_changed,
-            analytics::commands::track_custom_prompt_used,
-            analytics::commands::track_meeting_ended,
-            analytics::commands::track_analytics_enabled,
-            analytics::commands::track_analytics_disabled,
-            analytics::commands::track_analytics_transparency_viewed,
             whisper_engine::commands::whisper_init,
             whisper_engine::commands::whisper_get_available_models,
             whisper_engine::commands::whisper_load_model,
@@ -787,8 +771,10 @@ pub fn run() {
             gigaam_engine::gigaam_get_available_models,
             gigaam_engine::gigaam_has_available_models,
             gigaam_engine::gigaam_load_model,
+            gigaam_engine::gigaam_unload_model,
             gigaam_engine::gigaam_is_model_loaded,
             gigaam_engine::gigaam_get_current_model,
+            gigaam_engine::gigaam_get_active_provider,
             gigaam_engine::gigaam_validate_model_ready,
             gigaam_engine::gigaam_transcribe_audio,
             gigaam_engine::gigaam_download_model,
@@ -846,8 +832,6 @@ pub fn run() {
             api::api_get_model_config,
             api::api_save_model_config,
             api::api_get_api_key,
-            // api::api_get_auto_generate_setting,
-            // api::api_save_auto_generate_setting,
             api::api_get_transcript_config,
             api::api_save_transcript_config,
             api::api_get_transcript_api_key,
@@ -896,6 +880,8 @@ pub fn run() {
             audio::recording_commands::switch_recording_microphone,
             audio::recording_commands::switch_recording_system_audio,
             audio::recording_commands::get_active_recording_devices,
+            audio::recording_commands::get_recording_source_mutes,
+            audio::recording_commands::set_recording_source_muted,
             audio::recording_preferences::set_recording_preferences,
             audio::recording_preferences::get_default_recordings_folder_path,
             audio::recording_preferences::open_recordings_folder,
@@ -934,12 +920,14 @@ pub fn run() {
             audio::permissions::trigger_system_audio_permission_command,
             // Database import commands
             database::commands::check_first_launch,
+            database::commands::get_database_startup_error,
             database::commands::select_legacy_database_path,
             database::commands::detect_legacy_database,
             database::commands::check_default_legacy_database,
             database::commands::check_homebrew_database,
             database::commands::import_and_initialize_database,
             database::commands::initialize_fresh_database,
+            database::commands::backup_and_reinitialize_database,
             // Database and Models path commands
             database::commands::get_database_directory,
             database::commands::open_database_folder,

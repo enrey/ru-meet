@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react';
 
 export type Platform = 'macos' | 'windows' | 'linux' | 'unknown';
 
-// Extend Window type to include Tauri internals
+// Extend Window type to include Tauri internals. __TAURI_OS_PLUGIN_INTERNALS__
+// (used below) is already declared by @tauri-apps/plugin-os itself - redeclaring
+// it here conflicts with that (non-optional, concretely typed) declaration.
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
@@ -44,6 +46,26 @@ export function usePlatform(): Platform {
       }
 
       try {
+        // __TAURI_INTERNALS__ (checked above) is the core IPC bridge and is
+        // injected first; each plugin injects its own bridge separately a
+        // moment later - the OS plugin's platform() reads
+        // window.__TAURI_OS_PLUGIN_INTERNALS__.platform directly (see
+        // @tauri-apps/plugin-os's dist-js/index.js), which throws
+        // "Cannot read properties of undefined" if called in that gap.
+        // Poll briefly for it instead of racing, so losing that (usually
+        // sub-frame) race doesn't produce a scary-looking but harmless
+        // TypeError on every normal startup.
+        for (let attempt = 0; attempt < 10 && !window.__TAURI_OS_PLUGIN_INTERNALS__; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        if (!window.__TAURI_OS_PLUGIN_INTERNALS__) {
+          // Genuinely never showed up (not just lost the race) - fall back
+          // quietly; this isn't actionable for the user and isn't a "real"
+          // failure the way an actual plugin error would be.
+          setCurrentPlatform(detectPlatformFromUserAgent());
+          return;
+        }
+
         // Dynamically import to avoid SSR issues
         const { platform } = await import('@tauri-apps/plugin-os');
         const platformName = await platform();

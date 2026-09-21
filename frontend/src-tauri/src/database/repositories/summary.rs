@@ -6,6 +6,9 @@ use tracing::{error, info as log_info};
 
 pub struct SummaryProcessesRepository;
 
+pub const SUMMARY_INTERRUPTED_BY_RESTART: &str =
+    "Summary generation was interrupted because the application restarted.";
+
 impl SummaryProcessesRepository {
     /// Retrieves the current summary process state for a given meeting ID.
     pub async fn get_summary_data(
@@ -121,6 +124,37 @@ impl SummaryProcessesRepository {
             meeting_id
         );
         Ok(())
+    }
+
+    /// A summary worker lives only in process memory, so no pending row can
+    /// still be active when a fresh application process opens the database.
+    /// Mark those rows as failed and restore the previous summary, if this was
+    /// an interrupted regeneration.
+    pub async fn fail_pending_processes_after_restart(
+        pool: &SqlitePool,
+    ) -> Result<u64, sqlx::Error> {
+        let now = Utc::now();
+        let update = sqlx::query(
+            r#"
+            UPDATE summary_processes
+            SET
+                status = 'failed',
+                error = ?,
+                updated_at = ?,
+                end_time = ?,
+                result = COALESCE(result_backup, result),
+                result_backup = NULL,
+                result_backup_timestamp = NULL
+            WHERE LOWER(status) = 'pending'
+            "#,
+        )
+        .bind(SUMMARY_INTERRUPTED_BY_RESTART)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await?;
+
+        Ok(update.rows_affected())
     }
 
     pub async fn update_process_completed(
@@ -354,5 +388,39 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(status, "PENDING");
+    }
+
+    #[tokio::test]
+    async fn startup_fails_pending_process_and_restores_previous_summary() {
+        let pool = test_pool().await;
+        let started_at = Utc::now();
+        let current = r#"{"markdown":"incomplete"}"#;
+        let previous = r#"{"markdown":"previous"}"#;
+        seed_pending(
+            &pool,
+            "interrupted",
+            started_at,
+            Some(current),
+            Some(previous),
+        )
+        .await;
+
+        assert_eq!(
+            SummaryProcessesRepository::fail_pending_processes_after_restart(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+
+        let recovered: (String, String, String, Option<String>) = sqlx::query_as(
+            "SELECT status, error, result, result_backup FROM summary_processes WHERE meeting_id = 'interrupted'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(recovered.0, "failed");
+        assert_eq!(recovered.1, SUMMARY_INTERRUPTED_BY_RESTART);
+        assert_eq!(recovered.2, previous);
+        assert_eq!(recovered.3, None);
     }
 }

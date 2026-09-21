@@ -310,16 +310,11 @@ pub fn log_performance_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::devices::DeviceType;
-    use cpal::SampleFormat;
 
     #[test]
     fn test_diagnostics_dont_panic() {
-        // Create mock device and config
-        let device = AudioDevice::new("Test Device".to_string(), DeviceType::Input);
-
-        // Create a mock config (this is simplified - real configs are more complex)
-        // Just ensure the diagnostic functions don't panic
+        // The diagnostics take a device name and plain counters, so a mock
+        // device is not needed - just ensure none of them panic.
         let detected_kind = InputDeviceKind::Wired;
 
         log_detection_summary("Test Device", detected_kind, 512, 48000);

@@ -1,4 +1,5 @@
 use crate::audio::transcription::{TranscriptResult, TranscriptionError, TranscriptionProvider};
+use crate::gigaam_onnx::{GigaAMModel, Quantization, TranscribeOptions};
 use crate::parakeet_engine::{DownloadProgress, ModelInfo, ModelStatus, QuantizationType};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -11,7 +12,6 @@ use std::time::{Duration, Instant};
 use tauri::{command, AppHandle, Emitter, Manager, Runtime};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use crate::gigaam_onnx::{GigaAMModel, Quantization, TranscribeOptions};
 
 pub const MODEL_NAME: &str = "gigaam-v3-e2e-ctc";
 const MODEL_DIR: &str = "giga-am-v3-int8";
@@ -30,6 +30,13 @@ pub struct GigaAmEngine {
     models_dir: PathBuf,
     model: tokio::sync::Mutex<Option<GigaAMModel>>,
     downloading: AtomicBool,
+    // Persists across `unload_model()` - which `unload_engine_after_batch`
+    // (audio/common.rs) calls after *every* batch import/transcription job
+    // finishes, GPU or not - so the Settings status badge still reflects what
+    // the last run actually used instead of going blank the moment a user
+    // checks Settings right after an import completes (which is exactly when
+    // they're most likely to look).
+    last_known_provider: std::sync::Mutex<Option<crate::gigaam_onnx::ActiveProvider>>,
 }
 
 impl GigaAmEngine {
@@ -40,6 +47,7 @@ impl GigaAmEngine {
             models_dir,
             model: tokio::sync::Mutex::new(None),
             downloading: AtomicBool::new(false),
+            last_known_provider: std::sync::Mutex::new(None),
         })
     }
 
@@ -101,6 +109,12 @@ impl GigaAmEngine {
         .await
         .context("GigaAM model load task failed")?
         .map_err(|error| anyhow!("Failed to load GigaAM model: {error}"))?;
+
+        *self
+            .last_known_provider
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(loaded.active_provider().clone());
+
         *self.model.lock().await = Some(loaded);
         Ok(())
     }
@@ -111,6 +125,26 @@ impl GigaAmEngine {
 
     pub async fn is_model_loaded(&self) -> bool {
         self.model.lock().await.is_some()
+    }
+
+    /// Human-readable execution provider label ("CPU" / "GPU (DirectML)") for
+    /// GigaAM, plus why (when it's CPU-by-fallback rather than CPU-by-platform)
+    /// and whether the model is loaded right now vs this being carried over
+    /// from the last time it was. `None` only when nothing has ever loaded
+    /// this session.
+    pub async fn active_provider_status(
+        &self,
+    ) -> Option<(crate::gigaam_onnx::ActiveProvider, bool)> {
+        if let Some(model) = self.model.lock().await.as_ref() {
+            return Some((model.active_provider().clone(), true));
+        }
+
+        let last_known = self
+            .last_known_provider
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()?;
+        Some((last_known, false))
     }
 
     pub async fn transcribe_audio(&self, audio: Vec<f32>) -> Result<String> {
@@ -323,9 +357,63 @@ pub async fn gigaam_load_model(model_name: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Explicit unload, for the Settings "test which provider this actually
+/// uses" button (`GigaAMModelManager.tsx`): load, read the now-live status,
+/// unload again - so trying it doesn't leave the model sitting in memory
+/// afterward, matching what `unload_engine_after_batch` already does after a
+/// real transcription. Returns whether a model was actually loaded to unload.
+#[command]
+pub async fn gigaam_unload_model() -> Result<bool, String> {
+    Ok(engine()?.unload_model().await)
+}
+
 #[command]
 pub async fn gigaam_is_model_loaded() -> Result<bool, String> {
     Ok(engine()?.is_model_loaded().await)
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ProviderAssignmentStatus {
+    pub provider: String,
+    pub node_count: usize,
+}
+
+/// Reports the provider assignment produced by ONNX Runtime after it partitions
+/// the GigaAM graph. Unlike provider registration, this detects partial and full
+/// CPU fallback. The last assignment is retained after the model is unloaded.
+#[derive(serde::Serialize)]
+pub struct ActiveProviderStatus {
+    pub label: Option<String>,
+    pub fallback_reason: Option<String>,
+    pub provider_assignments: Vec<ProviderAssignmentStatus>,
+    pub is_live: bool,
+}
+
+#[command]
+pub async fn gigaam_get_active_provider() -> Result<ActiveProviderStatus, String> {
+    let (label, fallback_reason, provider_assignments, is_live) =
+        match engine()?.active_provider_status().await {
+            Some((provider, is_live)) => (
+                Some(provider.label().to_string()),
+                provider.reason().map(str::to_string),
+                provider
+                    .assignments()
+                    .iter()
+                    .map(|item| ProviderAssignmentStatus {
+                        provider: item.provider.clone(),
+                        node_count: item.node_count,
+                    })
+                    .collect(),
+                is_live,
+            ),
+            None => (None, None, Vec::new(), false),
+        };
+    Ok(ActiveProviderStatus {
+        label,
+        fallback_reason,
+        provider_assignments,
+        is_live,
+    })
 }
 
 #[command]

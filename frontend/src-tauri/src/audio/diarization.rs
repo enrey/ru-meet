@@ -21,6 +21,16 @@ use tokio::io::AsyncWriteExt;
 const PYANNOTE_WESPEAKER_ENGINE: &str = "pyannote-wespeaker";
 const SORTFORMER_V2_ENGINE: &str = "nvidia-sortformer-v2";
 const SORTFORMER_V2_MODEL: &str = "diar_streaming_sortformer_4spk-v2.onnx";
+const PYANNOTE_WESPEAKER_MODEL_FILES: [&str; 8] = [
+    "powerset_int8.onnx",
+    "resnet34_int8.onnx",
+    "plda_lda.npy",
+    "plda_mean1.npy",
+    "plda_mean2.npy",
+    "plda_mu.npy",
+    "plda_phi_computed.npy",
+    "plda_transform.npy",
+];
 // NVIDIA publishes the checkpoint; this is its ONNX conversion maintained by
 // parakeet-rs, which is the native Rust inference implementation used below.
 const SORTFORMER_V2_MODEL_URL: &str = "https://huggingface.co/altunenes/parakeet-rs/resolve/main/diar_streaming_sortformer_4spk-v2.onnx";
@@ -30,6 +40,13 @@ const SORTFORMER_V2_MODEL_URL: &str = "https://huggingface.co/altunenes/parakeet
 pub struct DiarizationSettings {
     pub enabled: bool,
     pub engine: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizationModelStatus {
+    pub engine: String,
+    pub ready: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -220,6 +237,35 @@ pub fn get_diarization_settings() -> Result<DiarizationSettings, String> {
 }
 
 #[tauri::command]
+pub fn get_diarization_model_statuses() -> Result<Vec<DiarizationModelStatus>, String> {
+    let pyannote_root = PyannoteWeSpeakerEngine::model_registry()
+        .map_err(|error| error.to_string())?
+        .cache_dir()
+        .to_path_buf();
+    let pyannote_ready = PYANNOTE_WESPEAKER_MODEL_FILES.iter().all(|file| {
+        std::fs::metadata(pyannote_root.join(file))
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false)
+    });
+    let sortformer_path =
+        NvidiaSortformerV2Engine::model_path().map_err(|error| error.to_string())?;
+    let sortformer_ready = std::fs::metadata(sortformer_path)
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false);
+
+    Ok(vec![
+        DiarizationModelStatus {
+            engine: PYANNOTE_WESPEAKER_ENGINE.into(),
+            ready: pyannote_ready,
+        },
+        DiarizationModelStatus {
+            engine: SORTFORMER_V2_ENGINE.into(),
+            ready: sortformer_ready,
+        },
+    ])
+}
+
+#[tauri::command]
 pub fn get_diarization_status() -> Result<DiarizationJobStatus, String> {
     JOB_STATUS
         .lock()
@@ -228,11 +274,35 @@ pub fn get_diarization_status() -> Result<DiarizationJobStatus, String> {
 }
 
 #[tauri::command]
-pub async fn get_meeting_speaker_turns(
+pub async fn get_meeting_speaker_turns<R: Runtime>(
+    app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     meeting_id: String,
 ) -> Result<Vec<SpeakerTurn>, String> {
-    TranscriptsRepository::get_speaker_turns(state.db_manager.pool(), &meeting_id)
+    let pool = state.db_manager.pool();
+
+    // Self-heal meetings whose turns were saved without reaching the transcript
+    // rows; otherwise the timeline shows speakers the transcript never got, and
+    // renaming one of them appears to do nothing.
+    match TranscriptsRepository::backfill_speakers_from_turns(pool, &meeting_id).await {
+        Ok(0) => {}
+        Ok(updated) => {
+            log::info!(
+                "Restored {updated} transcript speaker labels for meeting {meeting_id} from stored turns"
+            );
+            crate::audio::transcript_export::export_meeting_transcripts_logged(pool, &meeting_id)
+                .await;
+            let _ = app.emit(
+                "transcript-speakers-updated",
+                serde_json::json!({ "meetingId": meeting_id }),
+            );
+        }
+        Err(error) => {
+            log::warn!("Could not restore speaker labels for meeting {meeting_id}: {error}")
+        }
+    }
+
+    TranscriptsRepository::get_speaker_turns(pool, &meeting_id)
         .await
         .map_err(|error| format!("Failed to load speaker timeline: {error}"))
 }
@@ -251,8 +321,10 @@ pub async fn rename_meeting_speaker(
     if old_name == new_name {
         return Ok(());
     }
-    TranscriptsRepository::rename_speaker(state.db_manager.pool(), &meeting_id, &old_name, new_name)
-        .await
+    let pool = state.db_manager.pool();
+    TranscriptsRepository::rename_speaker(pool, &meeting_id, &old_name, new_name).await?;
+    crate::audio::transcript_export::export_meeting_transcripts_logged(pool, &meeting_id).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -318,6 +390,11 @@ pub fn rerun_diarization<R: Runtime>(
             Ok(Ok(turns)) => {
                 match TranscriptsRepository::apply_speaker_turns(&pool, &meeting_id, &turns).await {
                     Ok(()) => {
+                        crate::audio::transcript_export::export_meeting_transcripts_logged(
+                            &pool,
+                            &meeting_id,
+                        )
+                        .await;
                         if let Ok(mut status) = JOB_STATUS.lock() {
                             *status = DiarizationJobStatus {
                                 in_progress: false,

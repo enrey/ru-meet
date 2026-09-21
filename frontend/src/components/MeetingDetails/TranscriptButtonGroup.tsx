@@ -6,7 +6,6 @@ import { ButtonGroup } from '@/components/ui/button-group';
 import { Copy, FolderOpen, RefreshCw, Square, UsersRound } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
-import Analytics from '@/lib/analytics';
 import { RetranscribeDialog } from './RetranscribeDialog';
 import { DiarizationProgress } from './DiarizationProgress';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -74,10 +73,7 @@ export function TranscriptButtonGroup({
           variant="outline"
           size="sm"
           className="px-2 @[22rem]:px-3"
-          onClick={() => {
-            Analytics.trackButtonClick('copy_transcript', 'meeting_details');
-            onCopyTranscript();
-          }}
+          onClick={onCopyTranscript}
           disabled={transcriptCount === 0}
           title={transcriptCount === 0 ? 'No transcript available' : 'Copy Transcript'}
         >
@@ -89,10 +85,7 @@ export function TranscriptButtonGroup({
           size="sm"
           variant="outline"
           className="px-2 @[22rem]:px-4"
-          onClick={() => {
-            Analytics.trackButtonClick('open_recording_folder', 'meeting_details');
-            onOpenMeetingFolder();
-          }}
+          onClick={onOpenMeetingFolder}
           title="Open Recording Folder"
         >
           <FolderOpen className="@[22rem]:mr-2" size={18} />
@@ -118,10 +111,7 @@ export function TranscriptButtonGroup({
             size="sm"
             variant="outline"
             className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-blue-200 px-2 @[22rem]:px-4"
-            onClick={() => {
-              Analytics.trackButtonClick('enhance_transcript', 'meeting_details');
-              setShowRetranscribeDialog(true);
-            }}
+            onClick={() => setShowRetranscribeDialog(true)}
             title="Retranscribe to enhance your recorded audio"
           >
             <RefreshCw className="@[22rem]:mr-2" size={18} />

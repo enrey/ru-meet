@@ -9,6 +9,26 @@ interface AudioLevelMeterProps {
   size?: 'small' | 'medium' | 'large';
 }
 
+const MIN_DBFS = -60;
+
+const levelToDbfs = (level: number) => level > 0 ? 20 * Math.log10(level) : -Infinity;
+
+const dbfsToMeterPercent = (dbfs: number) => {
+  if (!Number.isFinite(dbfs)) return 0;
+  return Math.max(0, Math.min(100, ((dbfs - MIN_DBFS) / -MIN_DBFS) * 100));
+};
+
+const formatDbfs = (dbfs: number) => {
+  if (!Number.isFinite(dbfs)) return '−∞ dBFS';
+  return `${Math.round(dbfs).toString().replace('-', '−')} dBFS`;
+};
+
+const getLevelColor = (dbfs: number) => {
+  if (dbfs < -12) return 'bg-green-500';
+  if (dbfs < -6) return 'bg-yellow-500';
+  return 'bg-red-500';
+};
+
 export function AudioLevelMeter({
   rmsLevel,
   peakLevel,
@@ -17,27 +37,16 @@ export function AudioLevelMeter({
   className = '',
   size = 'medium'
 }: AudioLevelMeterProps) {
-  // Normalize levels to 0-1 range and apply log scaling for better visual representation
+  // Convert the linear PCM amplitude to the standard digital-audio scale.
+  // The bar covers -60 dBFS (silence/noise floor) through 0 dBFS (clipping).
   const normalizedRms = Math.max(0, Math.min(1, rmsLevel));
   const normalizedPeak = Math.max(0, Math.min(1, peakLevel));
-
-  // Apply logarithmic scaling for better visual representation of audio levels
-  const logRms = normalizedRms > 0 ? Math.log10(normalizedRms * 9 + 1) : 0;
-  const logPeak = normalizedPeak > 0 ? Math.log10(normalizedPeak * 9 + 1) : 0;
-
-  // Calculate percentages for display
-  const rmsPercent = Math.round(logRms * 100);
-  const peakPercent = Math.round(logPeak * 100);
-
-  // Color coding based on level
-  const getLevelColor = (level: number) => {
-    if (level < 0.3) return 'bg-green-500';
-    if (level < 0.7) return 'bg-yellow-500';
-    return 'bg-red-500';
-  };
-
-  const rmsColor = getLevelColor(logRms);
-  const peakColor = getLevelColor(logPeak);
+  const rmsDbfs = levelToDbfs(normalizedRms);
+  const peakDbfs = levelToDbfs(normalizedPeak);
+  const rmsPercent = dbfsToMeterPercent(rmsDbfs);
+  const peakPercent = dbfsToMeterPercent(peakDbfs);
+  const rmsColor = getLevelColor(rmsDbfs);
+  const peakColor = getLevelColor(peakDbfs);
 
   // Size variants
   const sizeClasses = {
@@ -68,7 +77,10 @@ export function AudioLevelMeter({
       }`} title={`${deviceName} - ${isActive ? 'Active' : 'Inactive'}`} />
 
       {/* Level meter container */}
-      <div className={`flex-1 ${sizes.container} relative`}>
+      <div
+        className={`flex-1 ${sizes.container} relative`}
+        title={`RMS ${formatDbfs(rmsDbfs)}, peak ${formatDbfs(peakDbfs)}`}
+      >
         {/* Background */}
         <div className="w-full h-full bg-gray-200 rounded-sm overflow-hidden">
           {/* RMS level bar (main level) */}
@@ -86,20 +98,19 @@ export function AudioLevelMeter({
           )}
         </div>
 
-        {/* Level markers */}
-        <div className="absolute inset-0 flex justify-between items-center px-1 pointer-events-none">
-          {/* 25% marker */}
-          <div className="w-px h-full bg-gray-400 opacity-30" style={{ marginLeft: '25%' }} />
-          {/* 50% marker */}
-          <div className="w-px h-full bg-gray-400 opacity-30" style={{ marginLeft: '50%' }} />
-          {/* 75% marker */}
-          <div className="w-px h-full bg-gray-400 opacity-30" style={{ marginLeft: '75%' }} />
-        </div>
+        {/* Reference marks: -24, -12 and -6 dBFS. */}
+        {[-24, -12, -6].map(dbfs => (
+          <div
+            key={dbfs}
+            className="pointer-events-none absolute inset-y-0 w-px bg-gray-500 opacity-30"
+            style={{ left: `${dbfsToMeterPercent(dbfs)}%` }}
+          />
+        ))}
       </div>
 
-      {/* Level percentage display */}
-      <div className={`${sizes.text} text-gray-600 font-mono min-w-[3rem] text-right`}>
-        {rmsPercent}%
+      {/* RMS value; 0 dBFS is the digital clipping ceiling. */}
+      <div className={`${sizes.text} text-gray-600 font-mono min-w-[5.25rem] text-right`}>
+        {formatDbfs(rmsDbfs)}
       </div>
     </div>
   );
@@ -120,14 +131,8 @@ export function CompactAudioLevelMeter({
   className = ''
 }: CompactAudioLevelMeterProps) {
   const normalizedRms = Math.max(0, Math.min(1, rmsLevel));
-  const logRms = normalizedRms > 0 ? Math.log10(normalizedRms * 9 + 1) : 0;
-  const rmsPercent = Math.round(logRms * 100);
-
-  const getLevelColor = (level: number) => {
-    if (level < 0.3) return 'bg-green-400';
-    if (level < 0.7) return 'bg-yellow-400';
-    return 'bg-red-400';
-  };
+  const rmsDbfs = levelToDbfs(normalizedRms);
+  const rmsPercent = dbfsToMeterPercent(rmsDbfs);
 
   return (
     <div className={`flex items-center space-x-1 ${className}`}>
@@ -139,7 +144,7 @@ export function CompactAudioLevelMeter({
       {/* Mini meter */}
       <div className="w-8 h-1.5 bg-gray-200 rounded-sm overflow-hidden">
         <div
-          className={`h-full ${getLevelColor(logRms)} transition-all duration-150`}
+          className={`h-full ${getLevelColor(rmsDbfs)} transition-all duration-150`}
           style={{ width: `${rmsPercent}%` }}
         />
       </div>

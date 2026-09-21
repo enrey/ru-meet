@@ -249,6 +249,89 @@ impl TranscriptsRepository {
         transaction.commit().await
     }
 
+    /// Phrases in transcript order, as the markdown exports need them.
+    pub async fn get_export_lines(
+        pool: &SqlitePool,
+        meeting_id: &str,
+    ) -> Result<Vec<(Option<f64>, String, Option<String>)>, SqlxError> {
+        sqlx::query_as::<_, (Option<f64>, String, Option<String>)>(
+            "SELECT audio_start_time, transcript, speaker FROM transcripts \
+             WHERE meeting_id = ? ORDER BY audio_start_time ASC, id ASC",
+        )
+        .bind(meeting_id)
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Meetings diarized through the live-recording path can end up with speaker
+    /// turns but unlabelled transcript rows: those labels were matched on exact
+    /// float timestamps supplied by the frontend, which silently matches nothing
+    /// when the frontend's copy of a segment has drifted. Re-derive the missing
+    /// labels from the stored turns by overlap, so the speaker timeline and the
+    /// transcript agree - and so renaming a speaker reaches both.
+    ///
+    /// Returns the number of transcript rows labelled. Meetings that already
+    /// carry any label are left alone, so this never fights a manual rename.
+    pub async fn backfill_speakers_from_turns(
+        pool: &SqlitePool,
+        meeting_id: &str,
+    ) -> Result<u64, SqlxError> {
+        let labelled: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transcripts \
+             WHERE meeting_id = ? AND speaker IS NOT NULL AND TRIM(speaker) != ''",
+        )
+        .bind(meeting_id)
+        .fetch_one(pool)
+        .await?;
+        if labelled > 0 {
+            return Ok(0);
+        }
+
+        let turns = sqlx::query_as::<_, (f64, f64, String)>(
+            "SELECT start_time, end_time, speaker FROM diarization_turns WHERE meeting_id = ?",
+        )
+        .bind(meeting_id)
+        .fetch_all(pool)
+        .await?;
+        if turns.is_empty() {
+            return Ok(0);
+        }
+
+        let segments = sqlx::query_as::<_, (String, Option<f64>, Option<f64>)>(
+            "SELECT id, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ?",
+        )
+        .bind(meeting_id)
+        .fetch_all(pool)
+        .await?;
+
+        let mut conn = pool.acquire().await?;
+        let mut transaction = conn.begin().await?;
+        let mut updated = 0u64;
+        for (id, start, end) in segments {
+            let (Some(start), Some(end)) = (start, end) else {
+                continue;
+            };
+            let speaker = turns
+                .iter()
+                .filter_map(|(turn_start, turn_end, speaker)| {
+                    let overlap = (end.min(*turn_end) - start.max(*turn_start)).max(0.0);
+                    (overlap > 0.0).then_some((overlap, speaker))
+                })
+                .max_by(|left, right| left.0.total_cmp(&right.0))
+                .map(|(_, speaker)| speaker);
+            if let Some(speaker) = speaker {
+                sqlx::query("UPDATE transcripts SET speaker = ? WHERE id = ?")
+                    .bind(speaker)
+                    .bind(id)
+                    .execute(&mut *transaction)
+                    .await?;
+                updated += 1;
+            }
+        }
+        transaction.commit().await?;
+        Ok(updated)
+    }
+
     pub async fn get_speaker_turns(
         pool: &SqlitePool,
         meeting_id: &str,

@@ -6,8 +6,8 @@ import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
-import Analytics from '@/lib/analytics';
 import { useEffect, useRef, useState, RefObject } from 'react';
+import { useSummaryProgress } from '@/hooks/meeting-details/useSummaryProgress';
 import { toast } from 'sonner';
 import { Languages, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -30,7 +30,7 @@ interface SummaryPanelProps {
   };
   meetingTitle: string;
   isSummaryDirty: boolean;
-  summaryRef: RefObject<BlockNoteSummaryViewRef>;
+  summaryRef: RefObject<BlockNoteSummaryViewRef | null>;
   isSaving: boolean;
   onSaveAll: () => Promise<void>;
   onCopySummary: () => Promise<void>;
@@ -214,6 +214,7 @@ export function SummaryPanel({
 
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
   const hasSummary = hasVisibleSummaryContent(aiSummary);
+  const summaryProgress = useSummaryProgress(isSummaryLoading);
 
   const languageSlot = (
     <Popover open={langPickerOpen} onOpenChange={setLangPickerOpen}>
@@ -286,6 +287,17 @@ export function SummaryPanel({
           <div className="text-center">
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
             <p className="text-gray-600">Generating AI Summary...</p>
+            {summaryProgress ? (
+              <p className="text-sm text-gray-500 mt-2 tabular-nums">
+                {summaryProgress.generatedTokens.toLocaleString()} tokens generated
+                {' · '}
+                {summaryProgress.tokensPerSec.toFixed(1)} tok/s
+                {' · '}
+                prompt {summaryProgress.promptTokens.toLocaleString()}
+              </p>
+            ) : (
+              <p className="text-sm text-gray-500 mt-2">Reading the transcript…</p>
+            )}
           </div>
         </div>
       ) : !hasSummary ? (
@@ -308,10 +320,7 @@ export function SummaryPanel({
               onDirtyChange={onDirtyChange}
               status={summaryStatus}
               error={summaryError}
-              onRegenerateSummary={() => {
-                Analytics.trackButtonClick('regenerate_summary', 'meeting_details');
-                onRegenerateSummary();
-              }}
+              onRegenerateSummary={onRegenerateSummary}
               meeting={{
                 id: meeting.id,
                 title: meetingTitle,

@@ -3,6 +3,6 @@
 # checkout produces (e.g. one created/edited in place without ever being
 # re-checked-out, bypassing core.autocrlf) gets a different checksum on that
 # machine than everywhere else, and sqlx refuses to start once any two builds
-# disagree. Force CRLF here explicitly so it can't depend on whichever
-# core.autocrlf a given clone happens to have.
-frontend/src-tauri/migrations/*.sql text eol=crlf
+# disagree. Keep the historical LF bytes: they are the bytes embedded in
+# migrations that have already been shipped and applied to user databases.
+frontend/src-tauri/migrations/*.sql text eol=lf

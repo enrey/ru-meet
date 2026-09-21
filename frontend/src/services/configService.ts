@@ -7,6 +7,10 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { TranscriptModelProps } from '@/components/TranscriptSettings';
+import {
+  AudioDevicePreferences,
+  normalizeAudioDevicePreferences,
+} from '@/lib/audioDevicePreferences';
 
 export interface ModelConfig {
   provider: 'ollama' | 'groq' | 'claude' | 'openrouter' | 'openai' | 'builtin-ai' | 'custom-openai';
@@ -37,8 +41,12 @@ export interface CustomOpenAIConfig {
 }
 
 export interface RecordingPreferences {
+  save_folder: string;
+  auto_save: boolean;
+  file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
+  system_audio_backend?: string | null;
 }
 
 /**
@@ -68,6 +76,20 @@ export class ConfigService {
    */
   async getRecordingPreferences(): Promise<RecordingPreferences> {
     return invoke<RecordingPreferences>('get_recording_preferences');
+  }
+
+  /** Persist only device choices while preserving the other recording settings. */
+  async saveRecordingDevicePreferences(devices: AudioDevicePreferences): Promise<AudioDevicePreferences> {
+    const normalized = normalizeAudioDevicePreferences(devices);
+    const preferences = await this.getRecordingPreferences();
+    await invoke('set_recording_preferences', {
+      preferences: {
+        ...preferences,
+        preferred_mic_device: normalized.micDevice,
+        preferred_system_device: normalized.systemDevice,
+      },
+    });
+    return normalized;
   }
 
   /**

@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import Analytics from '@/lib/analytics';
 import { applyPinnedSummaryLanguageToMeeting } from '@/lib/summary-language-preferences';
 import { toast } from 'sonner';
 
@@ -30,6 +29,19 @@ export interface ImportError {
   error: string;
 }
 
+export interface ImportLogLine {
+  elapsed_seconds: number;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+}
+
+/**
+ * Cap on retained log lines. A multi-hour import emits one line per speech
+ * segment, so this is unbounded in principle; keeping the tail is what matters
+ * because the stage breakdown is written last.
+ */
+const MAX_LOG_LINES = 5000;
+
 export type ImportStatus = 'idle' | 'validating' | 'processing' | 'complete' | 'error';
 
 export interface UseImportAudioOptions {
@@ -41,6 +53,7 @@ export interface UseImportAudioReturn {
   status: ImportStatus;
   fileInfo: AudioFileInfo | null;
   progress: ImportProgress | null;
+  logs: ImportLogLine[];
   error: string | null;
   isProcessing: boolean;
   isBusy: boolean;
@@ -64,6 +77,7 @@ export function useImportAudio({
   const [status, setStatus] = useState<ImportStatus>('idle');
   const [fileInfo, setFileInfo] = useState<AudioFileInfo | null>(null);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
+  const [logs, setLogs] = useState<ImportLogLine[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Stable refs for callbacks to avoid listener re-registration on every render
@@ -96,17 +110,31 @@ export function useImportAudio({
       }
       unlisteners.push(unlistenProgress);
 
+      // Detailed log events (stage timings, per-segment results)
+      const unlistenLog = await listen<ImportLogLine>(
+        'import-log',
+        (event) => {
+          if (isCancelledRef.current) return;
+          setLogs((prev) => {
+            const next = [...prev, event.payload];
+            return next.length > MAX_LOG_LINES
+              ? next.slice(next.length - MAX_LOG_LINES)
+              : next;
+          });
+        }
+      );
+      if (cleanedUpRef.current) {
+        unlistenLog();
+        unlisteners.forEach(u => u());
+        return;
+      }
+      unlisteners.push(unlistenLog);
+
       // Completion event
       const unlistenComplete = await listen<ImportResult>(
         'import-complete',
         async (event) => {
           if (isCancelledRef.current) return;
-
-          await Analytics.track('import_audio_completed', {
-            success: 'true',
-            duration_seconds: event.payload.duration_seconds.toString(),
-            segments_count: event.payload.segments_count.toString()
-          });
 
           setStatus('complete');
           setProgress(null);
@@ -133,8 +161,6 @@ export function useImportAudio({
         'import-error',
         async (event) => {
           if (isCancelledRef.current) return;
-
-          await Analytics.trackError('import_audio_failed', event.payload.error);
 
           setStatus('error');
           setError(event.payload.error);
@@ -214,17 +240,11 @@ export function useImportAudio({
       setStatus('processing');
       setError(null);
       setProgress(null);
+      // Logs are deliberately kept after an import finishes so they can be
+      // read; a new run is the point at which they are discarded.
+      setLogs([]);
 
       try {
-        if (fileInfo) {
-          await Analytics.track('import_audio_started', {
-            file_size_bytes: fileInfo.size_bytes.toString(),
-            duration_seconds: fileInfo.duration_seconds.toString(),
-            language: language || 'auto',
-            model_provider: provider || '',
-            model_name: model || ''
-          });
-        }
 
         await invoke('start_import_audio_command', {
           sourcePath,
@@ -237,8 +257,6 @@ export function useImportAudio({
         setStatus('error');
         const errorMsg = typeof err === 'string' ? err : (err?.message || String(err) || 'Failed to start import');
         setError(errorMsg);
-
-        await Analytics.trackError('import_audio_failed', errorMsg);
 
         onErrorRef.current?.(errorMsg);
       }
@@ -264,6 +282,7 @@ export function useImportAudio({
     setStatus('idle');
     setFileInfo(null);
     setProgress(null);
+    setLogs([]);
     setError(null);
   }, []);
 
@@ -271,6 +290,7 @@ export function useImportAudio({
     status,
     fileInfo,
     progress,
+    logs,
     error,
     isProcessing: status === 'processing',
     isBusy: status === 'processing' || status === 'validating',
