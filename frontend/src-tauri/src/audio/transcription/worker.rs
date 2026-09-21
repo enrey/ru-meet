@@ -47,13 +47,11 @@ pub struct TranscriptUpdate {
     pub duration: f64,         // Segment duration in seconds (e.g., 3.3)
 }
 
-// NOTE: get_transcript_history and get_recording_meeting_name functions
-// have been moved to recording_commands.rs where they have access to RECORDING_MANAGER
-
 /// Optimized parallel transcription task ensuring ZERO chunk loss
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
     transcription_receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    transcript_target: crate::audio::recording_saver::TranscriptTarget,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         info!("🚀 Starting optimized parallel transcription task - guaranteeing zero chunk loss");
@@ -103,6 +101,7 @@ pub fn start_transcription_task<R: Runtime>(
             let chunks_completed_clone = chunks_completed.clone();
             let input_finished_clone = input_finished.clone();
             let chunks_queued_clone = chunks_queued.clone();
+            let transcript_target = transcript_target.clone();
 
             let worker_handle = tokio::spawn(async move {
                 info!("👷 Worker {} started", worker_id);
@@ -206,9 +205,7 @@ pub fn start_transcription_task<R: Runtime>(
                                         // Save structured transcript segment to recording manager (only final results)
                                         // Save ALL segments (partial and final) to ensure complete JSON
                                         // Create structured segment with full timestamp data
-                                        // NOTE: This is now handled via the transcript-update event emission below
-                                        // The recording_commands module listens to these events and saves them
-                                        // This decouples the transcription worker from direct RECORDING_MANAGER access
+                                        // Persist directly through the session-owned sink before notifying the UI.
 
                                         // Emit transcript update with NEW recording-relative timestamps
 
@@ -225,6 +222,20 @@ pub fn start_transcription_task<R: Runtime>(
                                             audio_end_time,
                                             duration: chunk_duration,
                                         };
+
+                                        transcript_target.upsert(
+                                            crate::audio::recording_saver::TranscriptSegment {
+                                                id: format!("seg_{}", update.sequence_id),
+                                                text: update.text.clone(),
+                                                audio_start_time: update.audio_start_time,
+                                                audio_end_time: update.audio_end_time,
+                                                duration: update.duration,
+                                                display_time: update.timestamp.clone(),
+                                                confidence: update.confidence,
+                                                sequence_id: update.sequence_id,
+                                                speaker: None,
+                                            },
+                                        );
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
                                         {

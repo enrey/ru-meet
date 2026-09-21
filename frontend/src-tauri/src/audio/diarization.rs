@@ -572,17 +572,19 @@ async fn download_sortformer_v2_model<R: Runtime>(app: AppHandle<R>) -> Result<(
     Ok(())
 }
 
-pub fn spawn_diarization_task<R: Runtime>(
+/// Runs diarization to completion as part of recording finalization. Progress
+/// events are observational; the returned turns are the authoritative result.
+pub async fn run_diarization_task<R: Runtime>(
     app: AppHandle<R>,
     target: DiarizationTarget,
     audio_path: String,
-) {
+) -> std::result::Result<Vec<SpeakerTurn>, String> {
     let settings = SETTINGS
         .lock()
         .map(|settings| settings.clone())
         .unwrap_or_default();
     if !settings.enabled {
-        return;
+        return Ok(Vec::new());
     }
     let engine = settings.engine;
 
@@ -599,54 +601,55 @@ pub fn spawn_diarization_task<R: Runtime>(
         "diarization-progress",
         serde_json::json!({"stage":"processing", "message":"Identifying speakers…"}),
     );
-    tauri::async_runtime::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || -> Result<Vec<SpeakerTurn>> {
-            let decoded = decode_audio_file(&path)?;
-            let audio = decoded.to_whisper_format();
-            engine_for_id(&engine)?.diarize(&audio)
-        })
-        .await;
-        match result {
-            Ok(Ok(turns)) => {
-                let labels: Vec<_> = target.apply_speaker_turns(&turns).into_iter().map(|(sequence_id, speaker)| serde_json::json!({"sequenceId": sequence_id, "speaker": speaker})).collect();
-                let _ = app.emit(
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<SpeakerTurn>> {
+        let decoded = decode_audio_file(&path)?;
+        let audio = decoded.to_whisper_format();
+        engine_for_id(&engine)?.diarize(&audio)
+    })
+    .await;
+    match result {
+        Ok(Ok(turns)) => {
+            let labels: Vec<_> = target.apply_speaker_turns(&turns).into_iter().map(|(sequence_id, speaker)| serde_json::json!({"sequenceId": sequence_id, "speaker": speaker})).collect();
+            let _ = app.emit(
                 "diarization-complete",
                 serde_json::json!({
                     "speakers": turns.iter().map(|turn| &turn.speaker).collect::<std::collections::BTreeSet<_>>().len(),
                     "labels": labels,
-                    "turns": turns,
+                    "turns": &turns,
                 }),
             );
-                if let Ok(mut status) = JOB_STATUS.lock() {
-                    *status = DiarizationJobStatus {
-                        in_progress: false,
-                        message: "Speaker labels are ready".into(),
-                        meeting_id: None,
-                    };
-                }
+            if let Ok(mut status) = JOB_STATUS.lock() {
+                *status = DiarizationJobStatus {
+                    in_progress: false,
+                    message: "Speaker labels are ready".into(),
+                    meeting_id: None,
+                };
             }
-            Ok(Err(error)) => {
-                log::warn!("Diarization failed: {error}");
-                let _ = app.emit("diarization-error", error.to_string());
-                if let Ok(mut status) = JOB_STATUS.lock() {
-                    *status = DiarizationJobStatus {
-                        in_progress: false,
-                        message: "Speaker diarization failed".into(),
-                        meeting_id: None,
-                    };
-                }
-            }
-            Err(error) => {
-                log::warn!("Diarization worker failed: {error}");
-                let _ = app.emit("diarization-error", error.to_string());
-                if let Ok(mut status) = JOB_STATUS.lock() {
-                    *status = DiarizationJobStatus {
-                        in_progress: false,
-                        message: "Speaker diarization failed".into(),
-                        meeting_id: None,
-                    };
-                }
-            }
+            Ok(turns)
         }
-    });
+        Ok(Err(error)) => {
+            log::warn!("Diarization failed: {error}");
+            let _ = app.emit("diarization-error", error.to_string());
+            if let Ok(mut status) = JOB_STATUS.lock() {
+                *status = DiarizationJobStatus {
+                    in_progress: false,
+                    message: "Speaker diarization failed".into(),
+                    meeting_id: None,
+                };
+            }
+            Err(error.to_string())
+        }
+        Err(error) => {
+            log::warn!("Diarization worker failed: {error}");
+            let _ = app.emit("diarization-error", error.to_string());
+            if let Ok(mut status) = JOB_STATUS.lock() {
+                *status = DiarizationJobStatus {
+                    in_progress: false,
+                    message: "Speaker diarization failed".into(),
+                    meeting_id: None,
+                };
+            }
+            Err(error.to_string())
+        }
+    }
 }

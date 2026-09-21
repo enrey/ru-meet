@@ -10,10 +10,11 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import type { TranscriptionErrorPayload } from '@/services/transcriptService';
 import { LiveAudioStatus } from './LiveAudioStatus';
+import { recordingService, type FinalizedRecording } from '@/services/recordingService';
 
 interface RecordingControlsProps {
   isRecording: boolean;
-  onRecordingStop: (callApi?: boolean) => void;
+  onRecordingStop: (result: FinalizedRecording | null) => void;
   onRecordingStart: () => void;
   onTranscriptReceived: (summary: SummaryResponse) => void;
   onTranscriptionError?: (message: string) => void;
@@ -45,7 +46,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const isStartingRecording = recordingState.isStartingRecording;
 
   const [showPlayback, setShowPlayback] = useState(false);
-  const [recordingPath, setRecordingPath] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -72,7 +72,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   useEffect(() => {
     const checkTauri = async () => {
       try {
-        const result = await invoke('is_recording');
+        const result = await recordingService.isRecording();
         console.log('Tauri is initialized and ready, is_recording result:', result);
       } catch (error) {
         console.error('Tauri initialization error:', error);
@@ -140,21 +140,11 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     console.log('Executing stop recording...');
     try {
       setIsProcessing(true);
-      const dataDir = await invoke<string>('get_database_directory');
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const savePath = `${dataDir}/recording-${timestamp}.wav`;
-      console.log('Saving recording to:', savePath);
       console.log('About to call stop_recording command');
-      const result = await invoke('stop_recording', {
-        args: {
-          save_path: savePath
-        }
-      });
+      const result = await recordingService.stopRecording();
       console.log('stop_recording command completed successfully:', result);
-      setRecordingPath(savePath);
-      // setShowPlayback(true);
       setIsProcessing(false);
-      onRecordingStop(true);
+      onRecordingStop(result);
     } catch (error) {
       console.error('Failed to stop recording:', error);
       if (error instanceof Error) {
@@ -174,7 +164,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         }
       }
       setIsProcessing(false);
-      onRecordingStop(false);
+      onRecordingStop(null);
     } finally {
       setIsStopping(false);
     }
@@ -205,7 +195,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     setIsPausing(true);
 
     try {
-      await invoke('pause_recording');
+      await recordingService.pauseRecording();
       // isPaused state now managed by RecordingStateContext via events
       console.log('Recording paused successfully');
     } catch (error) {
@@ -223,7 +213,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     setIsResuming(true);
 
     try {
-      await invoke('resume_recording');
+      await recordingService.resumeRecording();
       // isPaused state now managed by RecordingStateContext via events
       console.log('Recording resumed successfully');
     } catch (error) {
@@ -258,8 +248,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             return newCount;
           });
           setIsProcessing(false);
-          console.log('Calling onRecordingStop(false) due to transcript error');
-          onRecordingStop(false);
           if (onTranscriptionError) {
             onTranscriptionError(errorMessage);
           }
@@ -280,8 +268,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           setIsProcessing(false);
 
           if (event.payload.phase === 'active') {
-            console.log('Calling onRecordingStop(false) due to active transcription error');
-            onRecordingStop(false);
           }
 
           // For actionable errors (like model loading failures), the main page will handle showing the model selector

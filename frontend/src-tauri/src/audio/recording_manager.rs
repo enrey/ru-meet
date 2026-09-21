@@ -403,7 +403,7 @@ impl RecordingManager {
     pub async fn save_recording_only<R: tauri::Runtime>(
         &mut self,
         app: &tauri::AppHandle<R>,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         debug!("Saving recording with transcript chunks");
 
         // Get actual recording duration from state
@@ -418,23 +418,27 @@ impl RecordingManager {
         {
             Ok(Some(file_path)) => {
                 info!("Recording saved successfully to: {}", file_path);
-                super::diarization::spawn_diarization_task(
-                    app.clone(),
-                    self.recording_saver.diarization_target(),
-                    file_path,
-                );
+                return Ok(Some(file_path));
             }
             Ok(None) => {
                 debug!("Recording not saved (auto-save disabled or no audio data)");
             }
             Err(e) => {
                 error!("Failed to save recording: {}", e);
-                // Don't fail the stop operation if saving fails
+                return Err(anyhow::anyhow!(e));
             }
         }
 
         debug!("Recording save operation completed");
-        Ok(())
+        Ok(None)
+    }
+
+    pub fn transcript_target(&self) -> super::recording_saver::TranscriptTarget {
+        self.recording_saver.transcript_target()
+    }
+
+    pub fn diarization_target(&self) -> super::recording_saver::DiarizationTarget {
+        self.recording_saver.diarization_target()
     }
 
     /// Stop recording and save audio (legacy method)
@@ -627,7 +631,7 @@ impl RecordingManager {
     }
 
     /// Take the mic stream OUT for hot-swap (Phase 1) so the caller can tear it
-    /// down without holding RECORDING_MANAGER. System audio continues uninterrupted.
+    /// down without holding the RecordingSession lock. System audio continues uninterrupted.
     pub fn take_mic_stream_for_swap(&mut self) -> Option<super::stream::AudioStream> {
         self.stream_manager.take_mic_stream()
     }
@@ -645,7 +649,7 @@ impl RecordingManager {
         // AirPods are often both mic AND speaker — when they disconnect, both
         // monitor entries go stale. `system_name` is the *current* default
         // output, resolved lock-free in Phase 2 by the caller (do_mic_swap)
-        // so a CoreAudio stall can't happen under the RECORDING_MANAGER lock;
+        // so a CoreAudio stall can't happen under the RecordingSession lock;
         // `state.get_system_device()` still holds the pre-swap
         // reference (e.g. AirPods) because we don't mutate system_device
         // during a mic-only hot-swap, which would leave the monitor tracking

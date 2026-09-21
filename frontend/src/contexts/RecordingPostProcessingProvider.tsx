@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { useRecordingStop } from '@/hooks/useRecordingStop';
+import { recordingService } from '@/services/recordingService';
 
 /**
  * RecordingPostProcessingProvider
@@ -13,8 +13,8 @@ import { useRecordingStop } from '@/hooks/useRecordingStop';
  * - Overlay stop button
  * - Main UI stop button
  *
- * It listens for the 'recording-stop-complete' event from Rust backend
- * and triggers the full post-processing flow (save to database, navigate)
+ * It listens for the finalized result emitted after Rust has persisted the
+ * recording. The event only refreshes UI for tray-originated stops.
  * regardless of which page the user is currently on.
  */
 export function RecordingPostProcessingProvider({ children }: { children: React.ReactNode }) {
@@ -32,13 +32,9 @@ export function RecordingPostProcessingProvider({ children }: { children: React.
 
     const setupListener = async () => {
       try {
-        // Listen for recording-stop-complete event from Rust
-        unlistenFn = await listen<boolean>('recording-stop-complete', (event) => {
-          console.log('[RecordingPostProcessing] Received recording-stop-complete event:', event.payload);
-
-          // Call the post-processing handler
-          // event.payload is the callApi boolean (true for normal stops)
-          handleRecordingStop(event.payload);
+        unlistenFn = await recordingService.onRecordingStopped((result) => {
+          console.log('[RecordingPostProcessing] Received finalized recording:', result.meetingId);
+          void handleRecordingStop(result);
         });
 
         console.log('[RecordingPostProcessing] Event listener set up successfully');

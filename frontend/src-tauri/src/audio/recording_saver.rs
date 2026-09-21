@@ -64,6 +64,93 @@ pub struct DiarizationTarget {
     meeting_folder: Option<PathBuf>,
 }
 
+/// Session-owned sink used by transcription workers. Keeping this separate
+/// from Tauri events guarantees that finalized recordings contain every
+/// segment even when the UI is reloading or has no active listener.
+#[derive(Clone)]
+pub struct TranscriptTarget {
+    transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
+    meeting_folder: Option<PathBuf>,
+}
+
+impl TranscriptTarget {
+    pub fn upsert(&self, segment: TranscriptSegment) {
+        if let Ok(mut segments) = self.transcript_segments.lock() {
+            if let Some(existing) = segments
+                .iter_mut()
+                .find(|existing| existing.sequence_id == segment.sequence_id)
+            {
+                *existing = segment;
+            } else {
+                segments.push(segment);
+            }
+        }
+        if let Some(folder) = &self.meeting_folder {
+            let segments = self.snapshot();
+            let transcript_path = folder.join("transcripts.json");
+            let temp_path = folder.join(".transcripts.json.tmp");
+            let json = serde_json::json!({
+                "version": "1.0",
+                "segments": &segments,
+                "last_updated": chrono::Utc::now().to_rfc3339(),
+                "total_segments": segments.len(),
+            });
+            let persisted = serde_json::to_string_pretty(&json)
+                .map_err(anyhow::Error::from)
+                .and_then(|json| {
+                    std::fs::write(&temp_path, json)?;
+                    std::fs::rename(&temp_path, &transcript_path)?;
+                    Ok(())
+                });
+            if let Err(error) = persisted {
+                warn!("Failed to persist transcript segment: {error}");
+            } else {
+                write_markdown_exports(folder, &segments);
+            }
+        }
+    }
+
+    pub fn snapshot(&self) -> Vec<TranscriptSegment> {
+        self.transcript_segments
+            .lock()
+            .map(|segments| segments.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod transcript_target_tests {
+    use super::*;
+
+    fn segment(sequence_id: u64, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            id: format!("seg_{sequence_id}"),
+            text: text.into(),
+            audio_start_time: 0.0,
+            audio_end_time: 1.0,
+            duration: 1.0,
+            display_time: "00:00:00".into(),
+            confidence: 1.0,
+            sequence_id,
+            speaker: None,
+        }
+    }
+
+    #[test]
+    fn worker_sink_upserts_without_tauri_events() {
+        let saver = RecordingSaver::new();
+        let target = saver.transcript_target();
+        target.upsert(segment(7, "partial"));
+        target.upsert(segment(7, "final"));
+        target.upsert(segment(8, "next"));
+
+        let snapshot = target.snapshot();
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].text, "final");
+        assert_eq!(saver.get_transcript_segments().len(), snapshot.len());
+    }
+}
+
 impl RecordingSaver {
     pub fn new() -> Self {
         Self {
@@ -73,6 +160,13 @@ impl RecordingSaver {
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             is_saving: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    pub fn transcript_target(&self) -> TranscriptTarget {
+        TranscriptTarget {
+            transcript_segments: self.transcript_segments.clone(),
+            meeting_folder: self.meeting_folder.clone(),
         }
     }
 

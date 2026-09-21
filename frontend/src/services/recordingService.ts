@@ -16,10 +16,12 @@ export interface RecordingState {
   active_duration: number | null;
 }
 
-export interface RecordingStoppedPayload {
-  message: string;
-  folder_path?: string;
-  meeting_name?: string;
+export interface FinalizedRecording {
+  meetingId: string;
+  meetingName: string;
+  folderPath?: string;
+  transcriptCount: number;
+  diarizationStatus: 'completed' | 'failed' | 'skipped';
 }
 
 // Bound the start invoke: > ~40s Bluetooth mic cold-start and ~90s worst-case
@@ -73,14 +75,6 @@ export class RecordingService {
   }
 
   /**
-   * Start recording (no device configuration)
-   * @returns Promise<void>
-   */
-  async startRecording(): Promise<void> {
-    return withStartTimeout(invoke('start_recording'));
-  }
-
-  /**
    * Start recording with device configuration and meeting name
    * @param micDeviceName - Microphone device name (null for default)
    * @param systemDeviceName - System audio device name (null for default)
@@ -104,10 +98,8 @@ export class RecordingService {
    * @param savePath - Path to save audio file
    * @returns Promise<void>
    */
-  async stopRecording(savePath: string): Promise<void> {
-    return invoke('stop_recording', {
-      args: { save_path: savePath }
-    });
+  async stopRecording(): Promise<FinalizedRecording | null> {
+    return invoke<FinalizedRecording | null>('stop_recording');
   }
 
   /**
@@ -151,8 +143,8 @@ export class RecordingService {
    * @param callback - Function to call when recording stops
    * @returns Promise that resolves to unlisten function
    */
-  async onRecordingStopped(callback: (payload: RecordingStoppedPayload) => void): Promise<UnlistenFn> {
-    return listen<RecordingStoppedPayload>('recording-stopped', (event) => {
+  async onRecordingStopped(callback: (payload: FinalizedRecording) => void): Promise<UnlistenFn> {
+    return listen<FinalizedRecording>('recording-stopped', (event) => {
       callback(event.payload);
     });
   }

@@ -31,6 +31,7 @@ pub mod recording_commands;
 pub mod recording_manager;
 pub mod recording_preferences;
 pub mod recording_saver;
+pub mod recording_session;
 pub mod recording_state;
 pub mod simple_level_monitor;
 pub mod stream;
@@ -87,10 +88,7 @@ pub use hardware_detector::{AdaptiveWhisperConfig, GpuType, HardwareProfile, Per
 pub use level_monitor::{AudioLevelData, AudioLevelMonitor, AudioLevelUpdate};
 pub use pipeline::AudioPipelineManager;
 pub use post_processor::{PostProcessRequest, PostProcessResponse, PostProcessor};
-pub use recording_commands::{
-    get_transcription_status, is_recording, start_recording, start_recording_with_devices,
-    stop_recording, RecordingArgs, TranscriptUpdate, TranscriptionStatus,
-};
+pub use recording_commands::{is_recording, stop_recording, TranscriptUpdate};
 pub use recording_manager::RecordingManager;
 pub use recording_preferences::{get_default_recordings_folder, RecordingPreferences};
 pub use recording_saver::RecordingSaver;

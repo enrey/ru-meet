@@ -15,11 +15,12 @@
 |---|---|
 | Install dependencies | `pnpm install --frozen-lockfile` |
 | Type-check frontend | `pnpm exec tsc --noEmit` |
-| Check Rust workspace | `cargo check --workspace` (from repository root) |
-| Test Rust workspace | `cargo test --workspace` (from repository root) |
+| Check Rust workspace | `cargo check --workspace --target-dir target/agent-validation` (from repository root) |
+| Test Rust workspace | `cargo test --workspace --target-dir target/agent-validation` (from repository root) |
 | Production build | `pnpm run tauri:build` |
 
 - Use the `herdr` skill to start the app and inspect its logs. The development app runs, or may already be running, as `pnpm run tauri:dev` in the `debug_and_run` pane.
+- Reserve the default `target/` artifacts for `pnpm run tauri:dev`; run agent Cargo checks and tests only with `--target-dir target/agent-validation` so validation cannot invalidate the interactive development cache.
 
 ## External References
 
@@ -30,6 +31,8 @@
 | GPU configuration | `docs/GPU_ACCELERATION.md` |
 | High-level architecture | `docs/architecture.md` |
 | Current CI behavior | `.github/workflows/` |
+
+- Write ADRs under `docs/adr/` in Russian.
 
 ## Architecture and Data
 
