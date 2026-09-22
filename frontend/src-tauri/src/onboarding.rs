@@ -215,6 +215,8 @@ pub async fn complete_onboarding<R: Runtime>(
         crate::audio::diarization::DiarizationSettings {
             enabled: download_diarization,
             engine: diarization_engine.clone(),
+            // Onboarding does not ask about this; take the shipped default.
+            ..Default::default()
         },
     )?;
     info!(

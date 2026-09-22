@@ -18,6 +18,7 @@ const ENGINE_ICONS: Record<DiarizationEngineId, typeof UsersRound> = {
 interface DiarizationSettingsState {
   enabled: boolean;
   engine: string;
+  collapseMinorSpeakers: boolean;
 }
 
 interface DiarizationModelStatus {
@@ -29,6 +30,7 @@ export function DiarizationSettings() {
   const [settings, setSettings] = useState<DiarizationSettingsState>({
     enabled: false,
     engine: DEFAULT_DIARIZATION_ENGINE,
+    collapseMinorSpeakers: true,
   });
   const [modelStatuses, setModelStatuses] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -108,6 +110,22 @@ export function DiarizationSettings() {
           checked={settings.enabled}
           onCheckedChange={(enabled) => save({ ...settings, enabled })}
           aria-label="Enable speaker diarization"
+        />
+      </div>
+
+      <div className="mt-6 flex items-start justify-between gap-6 border-t border-gray-100 pt-6">
+        <div>
+          <h3 className="text-sm font-medium text-gray-900">Merge barely-heard speakers</h3>
+          <p className="mt-1 text-sm text-gray-500">
+            Speakers with under 1% of the talking — and less than 30 seconds of it — are labelled
+            &ldquo;Others&rdquo; instead of getting their own entry. Re-run diarization with this off to
+            get them back.
+          </p>
+        </div>
+        <Switch
+          checked={settings.collapseMinorSpeakers}
+          onCheckedChange={(collapseMinorSpeakers) => save({ ...settings, collapseMinorSpeakers })}
+          aria-label="Merge barely-heard speakers into Others"
         />
       </div>
 

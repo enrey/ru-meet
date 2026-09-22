@@ -73,6 +73,14 @@ const SORTFORMER_V2_MODEL_URL: &str = "https://huggingface.co/altunenes/parakeet
 pub struct DiarizationSettings {
     pub enabled: bool,
     pub engine: String,
+    /// Merge barely-heard speakers into one `Others` label. Defaulted rather
+    /// than required so settings written before this existed still load.
+    #[serde(default = "default_collapse_minor_speakers")]
+    pub collapse_minor_speakers: bool,
+}
+
+fn default_collapse_minor_speakers() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,6 +103,7 @@ impl Default for DiarizationSettings {
         Self {
             enabled: false,
             engine: PYANNOTE_WESPEAKER_ENGINE.into(),
+            collapse_minor_speakers: default_collapse_minor_speakers(),
         }
     }
 }
@@ -297,6 +306,100 @@ impl DiarizationEngine for NvidiaSortformerV2Engine {
     }
 }
 
+/// A speaker is "minor" only if it clears both bars: under this share of all
+/// attributed speech, *and* under the absolute ceiling below. A share alone
+/// scales badly - 1% of a two-hour meeting is 72 seconds, which is a real
+/// participant, while 1% of a ten-minute one is six seconds.
+const MINOR_SPEAKER_SHARE: f64 = 0.01;
+const MINOR_SPEAKER_MAX_SECONDS: f64 = 30.0;
+/// Never collapse the busiest speakers, whatever the arithmetic says, so a
+/// badly fragmented diarization cannot turn the whole meeting into `Others`.
+const MIN_KEPT_SPEAKERS: usize = 2;
+const OTHERS_SPEAKER: &str = "Others";
+
+/// Merge speakers with a negligible amount of speech into a single `Others`.
+///
+/// Diarization on a long meeting routinely invents a tail of speakers that say
+/// one short phrase each; eleven speakers where four spoke is worse than
+/// useless in the timeline. This is deliberately lossy - the original labels
+/// are not stored - because re-running diarization restores them.
+fn collapse_minor_speakers(turns: Vec<SpeakerTurn>) -> Vec<SpeakerTurn> {
+    let mut spoken: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
+    for turn in &turns {
+        *spoken.entry(turn.speaker.as_str()).or_insert(0.0) += (turn.end - turn.start).max(0.0);
+    }
+    let total: f64 = spoken.values().sum();
+    if total <= 0.0 || spoken.len() <= MIN_KEPT_SPEAKERS {
+        return turns;
+    }
+
+    // Rank by speech time so the busiest speakers can be exempted outright.
+    let mut ranked: Vec<(&str, f64)> = spoken.iter().map(|(name, secs)| (*name, *secs)).collect();
+    ranked.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(right.0)));
+
+    let minor: HashSet<String> = ranked
+        .iter()
+        .skip(MIN_KEPT_SPEAKERS)
+        .filter(|(_, secs)| *secs / total < MINOR_SPEAKER_SHARE && *secs < MINOR_SPEAKER_MAX_SECONDS)
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+
+    // Collapsing one speaker just renames them and loses which one they were.
+    if minor.len() < 2 {
+        return turns;
+    }
+    log::info!(
+        "Diarization: merging {} of {} speakers into \"{OTHERS_SPEAKER}\" (each under {:.0}% and {MINOR_SPEAKER_MAX_SECONDS:.0}s of speech)",
+        minor.len(),
+        ranked.len(),
+        MINOR_SPEAKER_SHARE * 100.0,
+    );
+
+    let mut collapsed: Vec<SpeakerTurn> = turns
+        .into_iter()
+        .map(|turn| {
+            if minor.contains(&turn.speaker) {
+                SpeakerTurn {
+                    speaker: OTHERS_SPEAKER.to_owned(),
+                    ..turn
+                }
+            } else {
+                turn
+            }
+        })
+        .collect();
+
+    // Relabelling can leave several `Others` slivers back to back, which would
+    // show up as separate blocks on the timeline. Join only the ones that touch
+    // or overlap, so merging never swallows another speaker's time in between.
+    collapsed.sort_by(|left, right| left.start.total_cmp(&right.start));
+    let mut merged: Vec<SpeakerTurn> = Vec::with_capacity(collapsed.len());
+    for turn in collapsed {
+        match merged.last_mut() {
+            Some(previous)
+                if previous.speaker == OTHERS_SPEAKER
+                    && turn.speaker == OTHERS_SPEAKER
+                    && turn.start <= previous.end =>
+            {
+                previous.end = previous.end.max(turn.end);
+            }
+            _ => merged.push(turn),
+        }
+    }
+    merged
+}
+
+/// Run one engine and apply the app-level speaker post-processing, so every
+/// caller gets turns shaped the same way.
+fn diarize_with_engine(engine: &str, samples: &[f32], collapse: bool) -> Result<Vec<SpeakerTurn>> {
+    let turns = engine_for_id(engine)?.diarize(samples)?;
+    Ok(if collapse {
+        collapse_minor_speakers(turns)
+    } else {
+        turns
+    })
+}
+
 fn engine_for_id(engine: &str) -> Result<Box<dyn DiarizationEngine>> {
     match engine {
         SPEAKRS_ENGINE => Ok(Box::new(SpeakrsEngine)),
@@ -496,11 +599,12 @@ pub fn rerun_diarization<R: Runtime>(
     .find(|path| path.is_file())
     .ok_or_else(|| "No recording audio was found for this meeting".to_string())?;
     let pool = state.db_manager.pool().clone();
-    let engine = SETTINGS
-        .lock()
-        .map_err(|_| "Diarization settings lock is unavailable")?
-        .engine
-        .clone();
+    let (engine, collapse) = {
+        let settings = SETTINGS
+            .lock()
+            .map_err(|_| "Diarization settings lock is unavailable")?;
+        (settings.engine.clone(), settings.collapse_minor_speakers)
+    };
     let _ = app.emit(
         "diarization-progress",
         serde_json::json!({"stage":"processing", "message":"Identifying speakers…", "meetingId": meeting_id}),
@@ -531,7 +635,8 @@ pub fn rerun_diarization<R: Runtime>(
 
         let selected = engine.clone();
         let result =
-            tokio::task::spawn_blocking(move || engine_for_id(&selected)?.diarize(&samples)).await;
+            tokio::task::spawn_blocking(move || diarize_with_engine(&selected, &samples, collapse))
+                .await;
         drop(heartbeat);
 
         let elapsed = started.elapsed().as_secs_f64();
@@ -912,6 +1017,7 @@ pub async fn run_diarization_task<R: Runtime>(
         return Ok(Vec::new());
     }
     let engine = settings.engine;
+    let collapse = settings.collapse_minor_speakers;
 
     if let Ok(mut status) = JOB_STATUS.lock() {
         *status = DiarizationJobStatus {
@@ -942,7 +1048,8 @@ pub async fn run_diarization_task<R: Runtime>(
 
     let selected = engine.clone();
     let result =
-        tokio::task::spawn_blocking(move || engine_for_id(&selected)?.diarize(&samples)).await;
+        tokio::task::spawn_blocking(move || diarize_with_engine(&selected, &samples, collapse))
+            .await;
     drop(heartbeat);
 
     let elapsed = started.elapsed().as_secs_f64();
@@ -995,5 +1102,117 @@ pub async fn run_diarization_task<R: Runtime>(
             }
             Err(error.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod collapse_tests {
+    use super::{collapse_minor_speakers, SpeakerTurn, OTHERS_SPEAKER};
+
+    fn turn(start: f64, end: f64, speaker: &str) -> SpeakerTurn {
+        SpeakerTurn {
+            start,
+            end,
+            speaker: speaker.to_owned(),
+        }
+    }
+
+    fn speakers(turns: &[SpeakerTurn]) -> Vec<&str> {
+        let mut names: Vec<&str> = turns.iter().map(|t| t.speaker.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
+    #[test]
+    fn merges_the_tail_of_one_phrase_speakers() {
+        // Two real speakers plus three that barely register.
+        let turns = vec![
+            turn(0.0, 1800.0, "Speaker 1"),
+            turn(1800.0, 3000.0, "Speaker 2"),
+            turn(3000.0, 3002.0, "Speaker 3"),
+            turn(3010.0, 3013.0, "Speaker 4"),
+            turn(3020.0, 3021.0, "Speaker 5"),
+        ];
+        let result = collapse_minor_speakers(turns);
+        assert_eq!(
+            speakers(&result),
+            vec!["Others", "Speaker 1", "Speaker 2"],
+            "the three brief speakers should become one"
+        );
+    }
+
+    #[test]
+    fn keeps_a_brief_speaker_when_the_recording_is_long() {
+        // 0.9% of speech, but 65s in absolute terms - a real participant.
+        let turns = vec![
+            turn(0.0, 3600.0, "Speaker 1"),
+            turn(3600.0, 7135.0, "Speaker 2"),
+            turn(7135.0, 7200.0, "Speaker 3"),
+            turn(7200.0, 7205.0, "Speaker 4"),
+        ];
+        let result = collapse_minor_speakers(turns);
+        assert!(
+            result.iter().any(|t| t.speaker == "Speaker 3"),
+            "65s of speech is not a one-phrase speaker: {:?}",
+            speakers(&result)
+        );
+    }
+
+    #[test]
+    fn leaves_a_single_minor_speaker_alone() {
+        // Collapsing one speaker only renames them, losing who they were.
+        let turns = vec![
+            turn(0.0, 600.0, "Speaker 1"),
+            turn(600.0, 1200.0, "Speaker 2"),
+            turn(1200.0, 1201.0, "Speaker 3"),
+        ];
+        let result = collapse_minor_speakers(turns);
+        assert!(!speakers(&result).contains(&OTHERS_SPEAKER));
+    }
+
+    #[test]
+    fn never_collapses_every_speaker() {
+        // Heavily fragmented: each speaker is tiny, but the busiest must stay.
+        let turns: Vec<SpeakerTurn> = (0..40)
+            .map(|i| turn(i as f64, i as f64 + 0.5, &format!("Speaker {i}")))
+            .collect();
+        let result = collapse_minor_speakers(turns);
+        let remaining = speakers(&result);
+        assert!(
+            remaining.iter().filter(|s| **s != OTHERS_SPEAKER).count() >= 2,
+            "at least the busiest speakers must survive: {remaining:?}"
+        );
+    }
+
+    #[test]
+    fn joins_touching_others_turns_but_not_across_another_speaker() {
+        let turns = vec![
+            turn(0.0, 1800.0, "Speaker 1"),
+            turn(1800.0, 3000.0, "Speaker 2"),
+            // Two brief speakers back to back, then a gap with Speaker 1.
+            turn(3000.0, 3002.0, "Speaker 3"),
+            turn(3002.0, 3004.0, "Speaker 4"),
+            turn(3004.0, 3100.0, "Speaker 1"),
+            turn(3100.0, 3101.0, "Speaker 5"),
+        ];
+        let result = collapse_minor_speakers(turns);
+        let others: Vec<&SpeakerTurn> = result
+            .iter()
+            .filter(|t| t.speaker == OTHERS_SPEAKER)
+            .collect();
+        assert_eq!(others.len(), 2, "touching turns join, separated ones do not");
+        assert_eq!(others[0].start, 3000.0);
+        assert_eq!(others[0].end, 3004.0);
+    }
+
+    #[test]
+    fn leaves_two_speaker_output_untouched() {
+        let turns = vec![
+            turn(0.0, 600.0, "Speaker 1"),
+            turn(600.0, 601.0, "Speaker 2"),
+        ];
+        let result = collapse_minor_speakers(turns.clone());
+        assert_eq!(speakers(&result), speakers(&turns));
     }
 }
