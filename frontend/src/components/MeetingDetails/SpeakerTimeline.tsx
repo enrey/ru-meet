@@ -64,6 +64,9 @@ export function SpeakerTimeline({
   const [inProgress, setInProgress] = useState(false);
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
+  // Set when the typed name belongs to another speaker: renaming would merge
+  // the two, which cannot be undone, so confirm before doing it.
+  const [pendingMerge, setPendingMerge] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const sectionRef = useRef<HTMLElement>(null);
   const [height, setHeight] = useState<number | null>(null);
@@ -122,6 +125,28 @@ export function SpeakerTimeline({
     if (isSaving) return;
     setEditingSpeaker(null);
     setDraftName('');
+    setPendingMerge(null);
+  };
+
+  const commitRename = async (from: string, to: string) => {
+    setIsSaving(true);
+    try {
+      const merged = await invoke<boolean>('rename_meeting_speaker', {
+        meetingId,
+        oldName: from,
+        newName: to,
+      });
+      setTurns((current) => current.map((turn) => turn.speaker === from ? { ...turn, speaker: to } : turn));
+      onSpeakerRenamed?.(from, to);
+      if (merged) toast.success(`Merged "${from}" into "${to}"`);
+      setEditingSpeaker(null);
+      setDraftName('');
+      setPendingMerge(null);
+    } catch (error) {
+      toast.error('Could not rename speaker', { description: String(error) });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const saveEdit = async () => {
@@ -135,18 +160,13 @@ export function SpeakerTimeline({
       cancelEdit();
       return;
     }
-    setIsSaving(true);
-    try {
-      await invoke('rename_meeting_speaker', { meetingId, oldName: editingSpeaker, newName: name });
-      setTurns((current) => current.map((turn) => turn.speaker === editingSpeaker ? { ...turn, speaker: name } : turn));
-      onSpeakerRenamed?.(editingSpeaker, name);
-      setEditingSpeaker(null);
-      setDraftName('');
-    } catch (error) {
-      toast.error('Could not rename speaker', { description: String(error) });
-    } finally {
-      setIsSaving(false);
+    // Taking another speaker's name folds the two together. Ask first - the
+    // only way back is re-running diarization.
+    if (timeline.speakers.some((speaker) => speaker === name)) {
+      setPendingMerge(name);
+      return;
     }
+    await commitRename(editingSpeaker, name);
   };
 
   useEffect(() => {
@@ -219,6 +239,32 @@ export function SpeakerTimeline({
           {timeline.speakers.map((speaker, index) => (
             <div key={speaker} className="grid grid-cols-[180px_minmax(0,1fr)] items-center gap-3">
               {editingSpeaker === speaker ? (
+                pendingMerge ? (
+                <div className="flex min-w-0 flex-col gap-1">
+                  <p className="text-[11px] leading-tight text-gray-700">
+                    Merge into <span className="font-medium">&ldquo;{pendingMerge}&rdquo;</span>? Their
+                    lines become one speaker. Only re-running diarization undoes this.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      className="rounded bg-blue-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      onClick={() => void commitRename(speaker, pendingMerge)}
+                    >
+                      Merge
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSaving}
+                      className="text-[11px] text-gray-600 hover:text-gray-900 disabled:opacity-50"
+                      onClick={() => setPendingMerge(null)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+                ) : (
                 <div className="flex min-w-0 items-center gap-1">
                   <input
                     autoFocus
@@ -240,6 +286,7 @@ export function SpeakerTimeline({
                   <button type="button" aria-label="Cancel speaker rename" title="Cancel" disabled={isSaving}
                     className="text-gray-500 disabled:opacity-50" onClick={cancelEdit}><X size={16} /></button>
                 </div>
+                )
               ) : (
                 <button type="button" title={`Rename ${speaker}`} aria-label={`Rename ${speaker}`}
                   className="group flex min-w-0 items-center gap-1 text-left text-xs font-medium text-gray-700 hover:text-blue-700"

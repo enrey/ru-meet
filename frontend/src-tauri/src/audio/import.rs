@@ -15,7 +15,10 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{
+    create_transcript_segments, rejoin_split_utterances, split_segment_at_silence,
+    write_transcripts_json,
+};
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
 
@@ -709,8 +712,10 @@ async fn run_import<R: Runtime>(
     // for the lowest-energy window near the target split point and cut there.
     const MAX_SEGMENT_SAMPLES: usize = 25 * 16000; // 25 seconds at 16kHz
 
-    let mut processable_segments: Vec<crate::audio::vad::SpeechSegment> = Vec::new();
-    for segment in &speech_segments {
+    // Each entry carries the index of the VAD segment it came from, so the
+    // pieces of one utterance can be put back together after transcription.
+    let mut processable_segments: Vec<(usize, crate::audio::vad::SpeechSegment)> = Vec::new();
+    for (source_index, segment) in speech_segments.iter().enumerate() {
         if segment.samples.len() > MAX_SEGMENT_SAMPLES {
             debug!(
                 "Splitting large segment ({:.0}ms, {} samples) at silence boundaries",
@@ -720,16 +725,17 @@ async fn run_import<R: Runtime>(
 
             let sub_segments = split_segment_at_silence(segment, MAX_SEGMENT_SAMPLES);
             debug!("Split into {} sub-segments", sub_segments.len());
-            processable_segments.extend(sub_segments);
+            processable_segments
+                .extend(sub_segments.into_iter().map(|piece| (source_index, piece)));
         } else {
-            processable_segments.push(segment.clone());
+            processable_segments.push((source_index, segment.clone()));
         }
     }
 
     let processable_count = processable_segments.len();
     let processable_audio_seconds: f64 = processable_segments
         .iter()
-        .map(|segment| (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0)
+        .map(|(_, segment)| (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0)
         .sum();
     log.info(format!(
         "Transcribing {} segments ({:.1}s of audio) after splitting at {}s max",
@@ -739,13 +745,15 @@ async fn run_import<R: Runtime>(
     ));
 
     // Process each speech segment
-    let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new();
+    // (source VAD segment, text, start ms, end ms) - the first field is dropped
+    // once the pieces are rejoined below.
+    let mut all_transcripts: Vec<(usize, String, f64, f64)> = Vec::new();
     let mut total_confidence = 0.0f32;
     let transcribe_started = Instant::now();
     // Audio actually fed to the engine so far, for a running real-time factor.
     let mut audio_seconds_done = 0.0f64;
 
-    for (i, segment) in processable_segments.iter().enumerate() {
+    for (i, (source_index, segment)) in processable_segments.iter().enumerate() {
         if IMPORT_CANCELLED.load(Ordering::SeqCst) {
             let _ = std::fs::remove_dir_all(&meeting_folder);
             return Err(anyhow!("Import cancelled"));
@@ -822,7 +830,12 @@ async fn run_import<R: Runtime>(
         ));
 
         if !trimmed.is_empty() {
-            all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+            all_transcripts.push((
+                *source_index,
+                text,
+                segment.start_timestamp_ms,
+                segment.end_timestamp_ms,
+            ));
             total_confidence += conf;
         }
     }
@@ -830,12 +843,26 @@ async fn run_import<R: Runtime>(
     let transcribe_seconds = transcribe_started.elapsed().as_secs_f64();
     timings.record("transcribe", transcribe_seconds);
 
+    // Average over the clips actually sent to the engine, before rejoining.
     let transcribed_count = all_transcripts.len();
     let avg_confidence = if transcribed_count > 0 {
         total_confidence / transcribed_count as f32
     } else {
         0.0
     };
+
+    // Put utterances back together: the 25s cap above is an ASR limitation, and
+    // without this it leaks into the saved transcript as sentences broken
+    // mid-phrase, which also splits one speaker turn across several rows.
+    let all_transcripts = rejoin_split_utterances(all_transcripts);
+    if all_transcripts.len() < transcribed_count {
+        log.info(format!(
+            "Rejoined {} clips into {} utterances split only by the {}s transcription cap",
+            transcribed_count,
+            all_transcripts.len(),
+            MAX_SEGMENT_SAMPLES / 16000
+        ));
+    }
 
     log.info(format!(
         "Transcribed {} of {} segments in {:.2}s (RTF {:.3}, {:.1}x realtime), avg confidence {:.2}",
@@ -1128,6 +1155,55 @@ mod tests {
         assert!(AUDIO_EXTENSIONS.contains(&"wav"));
         assert!(AUDIO_EXTENSIONS.contains(&"mp3"));
         assert!(!AUDIO_EXTENSIONS.contains(&"txt"));
+    }
+
+    #[test]
+    fn rejoin_merges_pieces_of_one_utterance() {
+        // Two clips the 25s cap cut out of one VAD segment, back to back.
+        let pieces = vec![
+            (0usize, "the first half of a sentence".to_string(), 0.0, 25_000.0),
+            (0usize, "and the second half".to_string(), 25_000.0, 41_000.0),
+        ];
+        let merged = rejoin_split_utterances(pieces);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0, "the first half of a sentence and the second half");
+        assert_eq!(merged[0].1, 0.0);
+        assert_eq!(merged[0].2, 41_000.0);
+    }
+
+    #[test]
+    fn rejoin_keeps_separate_vad_segments_apart() {
+        // Different VAD segments are different utterances, however close.
+        let pieces = vec![
+            (0usize, "first utterance".to_string(), 0.0, 5_000.0),
+            (1usize, "second utterance".to_string(), 5_000.0, 9_000.0),
+        ];
+        let merged = rejoin_split_utterances(pieces);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn rejoin_leaves_overlapping_seams_alone() {
+        // No quiet point found, so the splitter repeated a second of audio:
+        // both clips transcribed the same words and joining them would stutter.
+        let pieces = vec![
+            (0usize, "we should ship it on Friday".to_string(), 0.0, 26_000.0),
+            (0usize, "on Friday if the tests pass".to_string(), 25_000.0, 45_000.0),
+        ];
+        let merged = rejoin_split_utterances(pieces);
+        assert_eq!(merged.len(), 2, "an overlapping cut must not be rejoined");
+    }
+
+    #[test]
+    fn rejoin_handles_an_empty_piece() {
+        let pieces = vec![
+            (0usize, "spoken text".to_string(), 0.0, 25_000.0),
+            (0usize, "   ".to_string(), 25_000.0, 30_000.0),
+        ];
+        let merged = rejoin_split_utterances(pieces);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0, "spoken text", "no trailing separator");
+        assert_eq!(merged[0].2, 30_000.0);
     }
 
     #[test]

@@ -540,24 +540,27 @@ pub async fn get_meeting_speaker_turns<R: Runtime>(
         .map_err(|error| format!("Failed to load speaker timeline: {error}"))
 }
 
+/// Returns `true` when the new name already belonged to another speaker, so
+/// the two were merged into one rather than simply relabelled.
 #[tauri::command]
 pub async fn rename_meeting_speaker(
     state: tauri::State<'_, AppState>,
     meeting_id: String,
     old_name: String,
     new_name: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let new_name = new_name.trim();
     if new_name.is_empty() || new_name.chars().count() > 80 {
         return Err("Speaker name must be between 1 and 80 characters".into());
     }
     if old_name == new_name {
-        return Ok(());
+        return Ok(false);
     }
     let pool = state.db_manager.pool();
-    TranscriptsRepository::rename_speaker(pool, &meeting_id, &old_name, new_name).await?;
+    let merged =
+        TranscriptsRepository::rename_speaker(pool, &meeting_id, &old_name, new_name).await?;
     crate::audio::transcript_export::export_meeting_transcripts_logged(pool, &meeting_id).await;
-    Ok(())
+    Ok(merged)
 }
 
 #[tauri::command]

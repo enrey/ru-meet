@@ -1,7 +1,7 @@
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_store::StoreExt;
 
 use anyhow::Result;
@@ -140,6 +140,24 @@ pub async fn load_recording_preferences<R: Runtime>(
     Ok(prefs)
 }
 
+/// Let the webview read audio out of the recordings folder.
+///
+/// The asset protocol is scoped to `$APPDATA/**` in `tauri.conf.json`, but
+/// recordings live wherever the user pointed `save_folder` - by default
+/// `~/Music/meetily-recordings`, outside that scope. Without this the
+/// per-phrase player in the transcript cannot load the file at all. Only this
+/// one directory is opened, and only for reading; the scope is not widened to
+/// the home directory.
+pub fn allow_recordings_folder<R: Runtime>(app: &AppHandle<R>, folder: &std::path::Path) {
+    match app.asset_protocol_scope().allow_directory(folder, true) {
+        Ok(()) => info!("Recordings folder readable by the webview: {:?}", folder),
+        Err(error) => warn!(
+            "Could not grant the webview read access to {:?}: {error}. In-transcript audio playback will not work.",
+            folder
+        ),
+    }
+}
+
 /// Save recording preferences to store
 pub async fn save_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
@@ -179,6 +197,9 @@ pub async fn save_recording_preferences<R: Runtime>(
 
     // Ensure the directory exists
     ensure_recordings_directory(&preferences.save_folder)?;
+    // The folder may have just moved; open the new one to the webview so
+    // playback keeps working without a restart.
+    allow_recordings_folder(app, &preferences.save_folder);
 
     Ok(())
 }

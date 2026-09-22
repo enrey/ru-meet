@@ -9,6 +9,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
+import { Play, Square } from "lucide-react";
+import { usePhrasePlayback } from "@/hooks/usePhrasePlayback";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -27,6 +29,8 @@ export interface VirtualizedTranscriptViewProps {
     showConfidence?: boolean;
     /** Completely disable auto-scroll behavior (for meeting details page) */
     disableAutoScroll?: boolean;
+    /** Meeting whose recording backs the per-phrase play buttons. Omit to hide them. */
+    meetingId?: string;
 
     // Pagination props (infinite scroll)
     hasMore?: boolean;
@@ -71,30 +75,54 @@ function cleanStopWords(text: string): string {
 const TranscriptSegment = memo(function TranscriptSegment({
     id,
     timestamp,
+    endTime,
     text,
     confidence,
     speaker,
     isHighlighted,
     isStreaming,
     showConfidence,
+    showSpeaker,
+    tightBelow,
+    canPlay,
+    isPlaying,
+    onTogglePlay,
 }: {
     id: string;
     timestamp: number;
+    endTime?: number;
     text: string;
     confidence?: number;
     speaker?: string;
     isHighlighted?: boolean;
     isStreaming: boolean;
     showConfidence: boolean;
+    showSpeaker: boolean;
+    /** The next line is the same speaker continuing, so sit closer to it. */
+    tightBelow: boolean;
+    canPlay: boolean;
+    isPlaying: boolean;
+    onTogglePlay: (id: string, start: number, end?: number) => void;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
     return (
-        <div id={`segment-${id}`} className={`mb-3 rounded-md ${isHighlighted ? 'bg-blue-50 ring-2 ring-blue-400 ring-offset-2' : ''}`}>
+        <div id={`segment-${id}`} className={`${tightBelow ? 'mb-1' : 'mb-3'} rounded-md ${isHighlighted ? 'bg-blue-50 ring-2 ring-blue-400 ring-offset-2' : ''}`}>
             <div className="flex items-start gap-2">
+                {canPlay && (
+                    <button
+                        type="button"
+                        onClick={() => onTogglePlay(id, timestamp, endTime)}
+                        className="mt-1 flex-shrink-0 leading-none text-gray-400 transition-colors hover:text-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:ring-offset-1 rounded-sm"
+                        aria-label={isPlaying ? 'Stop playback' : 'Play this phrase'}
+                        title={isPlaying ? 'Stop' : 'Play this phrase'}
+                    >
+                        {isPlaying ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3" />}
+                    </button>
+                )}
                 <Tooltip>
                     <TooltipTrigger>
-                        <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
+                        <span className={`text-xs mt-1 flex-shrink-0 min-w-[50px] ${isPlaying ? 'text-blue-600 font-medium' : 'text-gray-400'}`}>
                             {formatRecordingTime(timestamp)}
                         </span>
                     </TooltipTrigger>
@@ -105,7 +133,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">
-                    {speaker && <p className="text-xs font-medium text-blue-600 mb-1">{speaker}</p>}
+                    {speaker && showSpeaker && <p className="text-xs font-medium text-blue-600 mb-1">{speaker}</p>}
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
                             <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
@@ -128,6 +156,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     enableStreaming = false,
     showConfidence = true,
     disableAutoScroll = false,
+    meetingId,
     hasMore = false,
     isLoadingMore = false,
     isLoadingPrevious = false,
@@ -138,6 +167,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     onLoadPrevious,
     scrollTarget,
 }) => {
+    // Per-phrase audio playback from the meeting's own recording.
+    const playback = usePhrasePlayback(meetingId);
+
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
     const lastAppliedJumpRef = useRef<string | null>(null);
@@ -313,6 +345,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         {virtualizer.getVirtualItems().map((virtualRow) => {
                             const segment = segments[virtualRow.index];
                             const isStreaming = streamingSegmentId === segment.id;
+                            // A speaker's name belongs on the first line of
+                            // their turn; repeating it on every pause they take
+                            // is noise, not information.
+                            const startsTurn = segments[virtualRow.index - 1]?.speaker !== segment.speaker;
+                            const continuesBelow = segments[virtualRow.index + 1]?.speaker === segment.speaker;
 
                             return (
                                 <div
@@ -330,12 +367,18 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                     <TranscriptSegment
                                         id={segment.id}
                                         timestamp={segment.timestamp}
+                                        endTime={segment.endTime}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
                                         speaker={segment.speaker}
                                         isHighlighted={scrollTarget?.id === segment.id}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        showSpeaker={startsTurn}
+                                        tightBelow={continuesBelow}
+                                        canPlay={playback.isAvailable}
+                                        isPlaying={playback.playingId === segment.id}
+                                        onTogglePlay={playback.toggle}
                                     />
                                 </div>
                             );
@@ -375,7 +418,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 // Simple rendering for small lists (better animations)
                 <>
                     <div className="space-y-1">
-                        {segments.map((segment) => {
+                        {segments.map((segment, segmentIndex) => {
                             const isStreaming = streamingSegmentId === segment.id;
 
                             return (
@@ -388,12 +431,18 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                     <TranscriptSegment
                                         id={segment.id}
                                         timestamp={segment.timestamp}
+                                        endTime={segment.endTime}
                                         text={getDisplayText(segment)}
                                         confidence={segment.confidence}
                                         speaker={segment.speaker}
                                         isHighlighted={scrollTarget?.id === segment.id}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        showSpeaker={segments[segmentIndex - 1]?.speaker !== segment.speaker}
+                                        tightBelow={segments[segmentIndex + 1]?.speaker === segment.speaker}
+                                        canPlay={playback.isAvailable}
+                                        isPlaying={playback.playingId === segment.id}
+                                        onTogglePlay={playback.toggle}
                                     />
                                 </motion.div>
                             );

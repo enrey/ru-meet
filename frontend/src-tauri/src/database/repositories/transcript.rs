@@ -374,12 +374,20 @@ impl TranscriptsRepository {
             .collect())
     }
 
+    /// Rename a speaker, merging into an existing one when the name is taken.
+    ///
+    /// Diarization routinely splits one person into several speakers - a voice
+    /// that changes character partway through a recording is enough - so
+    /// renaming onto an existing name is how the user says "these are the same
+    /// person". Returns whether such a merge happened, so the caller can say so.
+    /// Merging cannot be undone short of re-running diarization; the UI asks
+    /// first.
     pub async fn rename_speaker(
         pool: &SqlitePool,
         meeting_id: &str,
         old_name: &str,
         new_name: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
         let old_count: i64 = sqlx::query_scalar(
             "SELECT (SELECT COUNT(*) FROM diarization_turns WHERE meeting_id = ? AND speaker = ?) + \
@@ -396,9 +404,9 @@ impl TranscriptsRepository {
         )
         .bind(meeting_id).bind(new_name).bind(meeting_id).bind(new_name)
         .fetch_one(&mut *transaction).await.map_err(|error| error.to_string())?;
-        if existing_count > 0 {
-            return Err("Another speaker already has this name".into());
-        }
+        // Not an error: the two speakers simply become one. Both statements
+        // below are plain relabels, so no constraint stands in the way.
+        let merged = existing_count > 0;
         sqlx::query(
             "UPDATE diarization_turns SET speaker = ? WHERE meeting_id = ? AND speaker = ?",
         )
@@ -418,7 +426,8 @@ impl TranscriptsRepository {
         transaction
             .commit()
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(merged)
     }
 
     /// Searches for a query string within the transcripts.

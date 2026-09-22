@@ -438,6 +438,26 @@ pub fn run() {
                 )),
             };
 
+            // Open the recordings folder to the webview so the transcript's
+            // per-phrase player can read the audio. Preferences load from the
+            // store, so do it off the setup thread.
+            let app_for_recordings = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match audio::recording_preferences::load_recording_preferences(
+                    &app_for_recordings,
+                )
+                .await
+                {
+                    Ok(preferences) => audio::recording_preferences::allow_recordings_folder(
+                        &app_for_recordings,
+                        &preferences.save_folder,
+                    ),
+                    Err(error) => log::warn!(
+                        "Could not read recording preferences to grant audio access: {error}"
+                    ),
+                }
+            });
+
             log::info!("Application setup complete");
 
             // Initialize system tray
@@ -665,6 +685,7 @@ pub fn run() {
             audio::recording_commands::is_recording_paused,
             audio::recording_commands::get_recording_state,
             audio::recording_commands::get_meeting_folder_path,
+            audio::recording_commands::get_meeting_audio_path,
             // Reload sync commands (retrieve transcript history and meeting name)
             audio::recording_commands::get_transcript_history,
             audio::recording_commands::get_recording_meeting_name,

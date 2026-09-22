@@ -80,6 +80,48 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
 ///
 /// Scans for 100ms windows with minimal RMS energy within +/-3 seconds of each target
 /// split point. If no clear silence is found, falls back to a 1-second overlap split
+/// Reassemble utterances that were split only so each clip would fit the
+/// transcription engine's length cap.
+///
+/// `split_segment_at_silence` cuts a long VAD segment into ~25s pieces. That is
+/// purely an ASR concern, but every piece became its own transcript row, so a
+/// sentence could end mid-phrase and one speaker turn could span several rows.
+/// Pieces of the same VAD segment are joined back into one row here.
+///
+/// Overlapping seams are deliberately left alone: when the splitter finds no
+/// quiet point it repeats a second of audio on both sides of the cut, so the
+/// same words appear at the end of one piece and the start of the next.
+/// Joining those would stutter, so only contiguous cuts are rejoined.
+pub(crate) fn rejoin_split_utterances(pieces: Vec<(usize, String, f64, f64)>) -> Vec<(String, f64, f64)> {
+    let mut merged: Vec<(usize, String, f64, f64)> = Vec::with_capacity(pieces.len());
+
+    for (source_index, text, start_ms, end_ms) in pieces {
+        let text = text.trim().to_owned();
+        match merged.last_mut() {
+            Some((previous_index, previous_text, _, previous_end))
+                // 1ms of slack absorbs the rounding in the splitter's
+                // per-sample timestamps; a real overlap is a full second, so it
+                // cannot slip through this check.
+                if *previous_index == source_index && start_ms >= *previous_end - 1.0 =>
+            {
+                if !text.is_empty() {
+                    if !previous_text.is_empty() {
+                        previous_text.push(' ');
+                    }
+                    previous_text.push_str(&text);
+                }
+                *previous_end = end_ms;
+            }
+            _ => merged.push((source_index, text, start_ms, end_ms)),
+        }
+    }
+
+    merged
+        .into_iter()
+        .map(|(_, text, start_ms, end_ms)| (text, start_ms, end_ms))
+        .collect()
+}
+
 /// to avoid cutting words at boundaries.
 pub(crate) fn split_segment_at_silence(
     segment: &crate::audio::vad::SpeechSegment,

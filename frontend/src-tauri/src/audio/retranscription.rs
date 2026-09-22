@@ -1,6 +1,9 @@
 // Retranscription module - allows re-processing stored audio with different settings
 
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{
+    create_transcript_segments, rejoin_split_utterances, split_segment_at_silence,
+    write_transcripts_json,
+};
 use super::constants::AUDIO_EXTENSIONS;
 use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
@@ -345,8 +348,10 @@ async fn run_retranscription<R: Runtime>(
     // for the lowest-energy window near the target split point and cut there.
     const MAX_SEGMENT_SAMPLES: usize = 25 * 16000; // 25 seconds at 16kHz
 
-    let mut processable_segments: Vec<crate::audio::vad::SpeechSegment> = Vec::new();
-    for segment in &speech_segments {
+    // Each entry carries the index of the VAD segment it came from, so the
+    // pieces of one utterance can be put back together after transcription.
+    let mut processable_segments: Vec<(usize, crate::audio::vad::SpeechSegment)> = Vec::new();
+    for (source_index, segment) in speech_segments.iter().enumerate() {
         if segment.samples.len() > MAX_SEGMENT_SAMPLES {
             debug!(
                 "Splitting large segment ({:.0}ms, {} samples) at silence boundaries",
@@ -356,9 +361,10 @@ async fn run_retranscription<R: Runtime>(
 
             let sub_segments = split_segment_at_silence(segment, MAX_SEGMENT_SAMPLES);
             debug!("Split into {} sub-segments", sub_segments.len());
-            processable_segments.extend(sub_segments);
+            processable_segments
+                .extend(sub_segments.into_iter().map(|piece| (source_index, piece)));
         } else {
-            processable_segments.push(segment.clone());
+            processable_segments.push((source_index, segment.clone()));
         }
     }
 
@@ -369,10 +375,11 @@ async fn run_retranscription<R: Runtime>(
     );
 
     // Process each speech segment with progress updates
-    let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new(); // (text, start_ms, end_ms)
+    // (source VAD segment, text, start ms, end ms); rejoined below.
+    let mut all_transcripts: Vec<(usize, String, f64, f64)> = Vec::new();
     let mut total_confidence = 0.0f32;
 
-    for (i, segment) in processable_segments.iter().enumerate() {
+    for (i, (source_index, segment)) in processable_segments.iter().enumerate() {
         // Check for cancellation before each segment
         if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
             return Err(anyhow!("Retranscription cancelled"));
@@ -431,7 +438,12 @@ async fn run_retranscription<R: Runtime>(
                     trimmed
                 }
             );
-            all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+            all_transcripts.push((
+                *source_index,
+                text,
+                segment.start_timestamp_ms,
+                segment.end_timestamp_ms,
+            ));
             total_confidence += conf;
         } else {
             debug!(
@@ -454,6 +466,19 @@ async fn run_retranscription<R: Runtime>(
         "Transcription complete: {} segments transcribed out of {}, avg confidence: {:.2}",
         transcribed_count, processable_count, avg_confidence
     );
+
+    // Put utterances back together: the 25s cap above is an ASR limitation, and
+    // without this it leaks into the saved transcript as sentences broken
+    // mid-phrase, which also splits one speaker turn across several rows.
+    let all_transcripts = rejoin_split_utterances(all_transcripts);
+    if all_transcripts.len() < transcribed_count {
+        info!(
+            "Rejoined {} clips into {} utterances split only by the {}s transcription cap",
+            transcribed_count,
+            all_transcripts.len(),
+            MAX_SEGMENT_SAMPLES / 16000
+        );
+    }
 
     // Check for cancellation
     if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {

@@ -867,6 +867,54 @@ pub async fn get_meeting_folder_path() -> Result<Option<String>, String> {
         .unwrap_or(None))
 }
 
+/// Resolve a saved meeting's audio file so the transcript can play a phrase
+/// from it, and make sure the webview is allowed to read that file.
+///
+/// Startup already opens the current recordings folder, but a meeting recorded
+/// before the user moved that folder lives somewhere else, so grant the file
+/// itself here too. Returns `None` when the meeting has no audio on disk,
+/// which is how the UI decides whether to offer playback at all.
+#[tauri::command]
+pub async fn get_meeting_audio_path<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, crate::state::AppState>,
+    meeting_id: String,
+) -> Result<Option<String>, String> {
+    let folder: Option<String> =
+        sqlx::query_scalar("SELECT folder_path FROM meetings WHERE id = ?")
+            .bind(&meeting_id)
+            .fetch_optional(state.db_manager.pool())
+            .await
+            .map_err(|error| format!("Failed to look up meeting folder: {error}"))?
+            .flatten();
+    let Some(folder) = folder else {
+        return Ok(None);
+    };
+
+    // Same candidate list the diarization re-run uses, so both agree on which
+    // file is "the recording".
+    let folder = std::path::PathBuf::from(folder);
+    let Some(audio_path) = [
+        "audio.mp4",
+        "audio.m4a",
+        "audio.wav",
+        "audio.mp3",
+        "audio.flac",
+        "audio.ogg",
+        "audio.webm",
+    ]
+    .iter()
+    .map(|name| folder.join(name))
+    .find(|path| path.is_file()) else {
+        return Ok(None);
+    };
+
+    if let Err(error) = app.asset_protocol_scope().allow_file(&audio_path) {
+        return Err(format!("Could not grant access to the recording: {error}"));
+    }
+    Ok(Some(audio_path.to_string_lossy().to_string()))
+}
+
 /// Get accumulated transcript segments from current recording session
 /// Used for syncing frontend state after page reload during active recording
 #[tauri::command]

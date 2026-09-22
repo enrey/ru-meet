@@ -87,6 +87,7 @@ export function TranscriptPanel({
       <div className="flex-1 overflow-hidden pb-4">
         <VirtualizedTranscriptView
           segments={convertedSegments}
+          meetingId={meetingId}
           isRecording={isRecording}
           isPaused={false}
           isProcessing={false}
