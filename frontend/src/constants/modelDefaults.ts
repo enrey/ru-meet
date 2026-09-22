@@ -17,6 +17,13 @@ export const DEFAULT_PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
 export const DEFAULT_GIGAAM_MODEL = 'gigaam-v3-e2e-ctc';
 
 /**
+ * Provider assumed when nothing is configured - a fresh install, or one whose
+ * database was reinitialized. Must match `TranscriptConfig::local_default()`
+ * in src-tauri/src/api/api.rs and the provider onboarding preselects.
+ */
+export const DEFAULT_TRANSCRIPTION_PROVIDER = 'gigaam';
+
+/**
  * Model defaults by provider type
  */
 export const MODEL_DEFAULTS = {

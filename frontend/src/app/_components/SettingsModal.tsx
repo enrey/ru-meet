@@ -5,7 +5,7 @@ import { LanguageSelection } from "@/components/LanguageSelection";
 import { TranscriptSettings } from "@/components/TranscriptSettings";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { DIARIZATION_MODELS } from "@/lib/diarization-models";
+import { DEFAULT_DIARIZATION_ENGINE, DIARIZATION_MODELS } from "@/lib/diarization-models";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { invoke } from "@tauri-apps/api/core";
@@ -44,7 +44,7 @@ export function SettingsModals({
   onClose,
 }: SettingsModalsProps) {
   const [diarizationEnabled, setDiarizationEnabled] = useState(false);
-  const [diarizationEngine, setDiarizationEngine] = useState('pyannote-wespeaker');
+  const [diarizationEngine, setDiarizationEngine] = useState<string>(DEFAULT_DIARIZATION_ENGINE);
   const [isDownloadingDiarization, setIsDownloadingDiarization] = useState(false);
   // Contexts
   const {

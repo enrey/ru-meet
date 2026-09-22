@@ -111,10 +111,19 @@ futures-util = "0.3"
 ort = { version = "2.0.0-rc.13" }  # ONNX Runtime shared by Parakeet, direct Silero VAD, and GigaAM
 thiserror = "2.0.16"                # Error handling for Parakeet
 rustfft = "6.4"                      # Mel spectrogram FFT for gigaam_onnx.rs
-# Offline speaker diarization. Both engines share the application's ORT
+# Offline speaker diarization. All engines share the application's ORT
 # runtime; do not enable parakeet-rs defaults, which would load another runtime.
-polyvoice = { version = "0.19.0", default-features = false, features = ["pipeline-native", "vbx"] }
+polyvoice = { version = "0.21.0", default-features = false, features = ["pipeline-native", "vbx"] }
 parakeet-rs = { version = "=0.3.6", default-features = false, features = ["sortformer"] }
+# speakrs runs the full pyannote community-1 pipeline (segmentation, PLDA, VBx)
+# on `ort`. `online` stays off so models come from download_speakrs_models,
+# which reports progress and writes into the app's data root instead of the
+# HuggingFace cache; `load-dynamic` stays off so speakrs uses the ORT
+# environment lib.rs already commits instead of committing a second one.
+# `default-linalg` selects speakrs' `ndarray-linalg` dependency, which the
+# workspace patches to a pure-Rust nalgebra shim so no BLAS/LAPACK toolchain is
+# needed - see `[patch.crates-io]` in the root Cargo.toml.
+speakrs = { version = "0.5.0", default-features = false, features = ["default-linalg"] }
 flate2 = "1.0"
 tar = "0.4"
 sha2 = "0.10"

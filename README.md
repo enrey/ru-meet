@@ -34,7 +34,8 @@ Ru-Meet подходит для совещаний, интервью, иссле
 Ru-Meet определяет, **кто и когда говорил**, размечает реплики участников и сохраняет временную шкалу спикеров вместе с расшифровкой.
 
 - полностью локальная обработка аудио;
-- движки **Pyannote + WeSpeaker** и **NVIDIA Sortformer v2**;
+- движки **polyvoice (Pyannote + WeSpeaker)** (по умолчанию, INT8, быстрый), **speakrs (Pyannote + WeSpeaker)** (точнее, но заметно медленнее на CPU) и **NVIDIA Sortformer v2**;
+- записи длиннее часа: ограничение polyvoice снимается через `max_audio_samples` (см. `docs/upstream/polyvoice-max-audio-samples.md`);
 - автоматическое назначение спикеров после записи или импорта;
 - повторный запуск диаризации для готовой встречи;
 - ручное переименование участников с обновлением всех связанных реплик.
@@ -148,7 +149,7 @@ pnpm tauri:dev
 - **Tauri 2** и **Rust** — нативная часть приложения;
 - **Next.js** и **React** — пользовательский интерфейс;
 - **GigaAM v3**, **Whisper** и **Parakeet** — распознавание речи;
-- **Pyannote + WeSpeaker** и **NVIDIA Sortformer v2** — диаризация;
+- **speakrs**, **polyvoice** (оба Pyannote + WeSpeaker) и **NVIDIA Sortformer v2** — диаризация;
 - **Silero VAD** — определение голосовой активности;
 - **ONNX Runtime**, DirectML, CUDA, Vulkan, Metal и CoreML — выполнение моделей и аппаратное ускорение;
 - **SQLite** — локальное хранение встреч, расшифровок и настроек.

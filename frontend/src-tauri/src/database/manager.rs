@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha384};
 use sqlx::{migrate::MigrateDatabase, Result, Sqlite, SqlitePool, Transaction};
 use std::fs;
 use std::path::Path;
@@ -31,10 +32,67 @@ impl DatabaseManager {
 
         let pool = SqlitePool::connect(tauri_db_path).await?;
 
+        Self::repair_line_ending_checksums(&pool).await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         Self::recover_interrupted_summary_processes(&pool).await?;
 
         Ok(DatabaseManager { pool })
+    }
+
+    /// Reconcile stored migration checksums that differ only by line endings.
+    ///
+    /// sqlx checksums a migration's exact bytes, so a database written by a
+    /// build whose `.sql` files had CRLF endings is rejected by a build that
+    /// has the canonical LF bytes - "migration N was previously applied but has
+    /// been modified" - even though the SQL is character-for-character the same
+    /// statement. Which endings a given build saw depends on the developer's
+    /// checkout, so neither side is authoritative and the user cannot fix it.
+    ///
+    /// Rewrite those checksums to match this build. This is deliberately not a
+    /// blanket "skip the checksum" switch: a migration whose SQL genuinely
+    /// changed hashes to neither line-ending variant, so it is left alone and
+    /// sqlx still refuses to run it. Migrations stay immutable; only the
+    /// representation of their line breaks is treated as insignificant.
+    async fn repair_line_ending_checksums(pool: &SqlitePool) -> Result<()> {
+        // A database that has never been migrated has no table to repair, and
+        // `_sqlx_migrations` is created by the migrator itself further on.
+        let Ok(applied) =
+            sqlx::query_as::<_, (i64, Vec<u8>)>("SELECT version, checksum FROM _sqlx_migrations")
+                .fetch_all(pool)
+                .await
+        else {
+            return Ok(());
+        };
+
+        for migration in sqlx::migrate!("./migrations").iter() {
+            let Some((_, stored)) = applied
+                .iter()
+                .find(|(version, _)| *version == migration.version)
+            else {
+                continue;
+            };
+            if stored.as_slice() == migration.checksum.as_ref() {
+                continue;
+            }
+            if !line_ending_checksums(&migration.sql).contains(stored) {
+                // Not a line-ending difference - the migration really was
+                // edited after it shipped. Leave it for sqlx to reject.
+                continue;
+            }
+
+            log::warn!(
+                "Migration {} is recorded with a checksum that differs only in line endings; \
+                 updating the stored checksum to match this build",
+                migration.version
+            );
+            sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+                .bind(migration.checksum.as_ref())
+                .bind(migration.version)
+                .execute(pool)
+                .await?;
+        }
+
+        Ok(())
     }
 
     // NOTE: So for the first time users they needs to start the application
@@ -241,5 +299,45 @@ impl DatabaseManager {
         log::info!("Database connection pool closed");
 
         Ok(())
+    }
+}
+
+/// The two checksums the same SQL produces under either line-ending
+/// convention. sqlx hashes the migration text verbatim, so these are the only
+/// values a byte-for-byte equivalent migration can have been stored as.
+fn line_ending_checksums(sql: &str) -> [Vec<u8>; 2] {
+    let with_lf = sql.replace("\r\n", "\n");
+    let with_crlf = with_lf.replace('\n', "\r\n");
+    [
+        Sha384::digest(with_lf.as_bytes()).to_vec(),
+        Sha384::digest(with_crlf.as_bytes()).to_vec(),
+    ]
+}
+
+#[cfg(test)]
+mod line_ending_tests {
+    use super::line_ending_checksums;
+    use sha2::{Digest, Sha384};
+
+    #[test]
+    fn both_conventions_are_recognized() {
+        let lf = "CREATE TABLE a (\n  id TEXT\n);\n";
+        let crlf = "CREATE TABLE a (\r\n  id TEXT\r\n);\r\n";
+
+        // Whichever form this build embedded, the other build's stored
+        // checksum has to be recognized as equivalent.
+        let from_lf = line_ending_checksums(lf);
+        assert!(from_lf.contains(&Sha384::digest(lf.as_bytes()).to_vec()));
+        assert!(from_lf.contains(&Sha384::digest(crlf.as_bytes()).to_vec()));
+        assert_eq!(from_lf, line_ending_checksums(crlf));
+    }
+
+    #[test]
+    fn edited_sql_is_not_recognized() {
+        let original = "CREATE TABLE a (\n  id TEXT\n);\n";
+        let edited = "CREATE TABLE a (\n  id INTEGER\n);\n";
+
+        assert!(!line_ending_checksums(original)
+            .contains(&Sha384::digest(edited.as_bytes()).to_vec()));
     }
 }

@@ -103,6 +103,20 @@ pub struct TranscriptConfig {
     pub api_key: Option<String>,
 }
 
+impl TranscriptConfig {
+    /// What a database with no saved transcript settings falls back to - a
+    /// fresh install, or one whose database was reinitialized. It has to match
+    /// the provider onboarding preselects, or a reset silently moves the user
+    /// to a different engine than the one the setup flow offered them.
+    pub fn local_default() -> Self {
+        Self {
+            provider: "gigaam".to_string(),
+            model: crate::config::DEFAULT_GIGAAM_MODEL.to_string(),
+            api_key: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SaveTranscriptConfigRequest {
     pub provider: String,
@@ -637,11 +651,7 @@ pub async fn api_get_transcript_config<R: Runtime>(
         }
         Ok(None) => {
             log_info!("No transcript config found, returning default.");
-            Ok(Some(TranscriptConfig {
-                provider: "parakeet".to_string(),
-                model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
-                api_key: None,
-            }))
+            Ok(Some(TranscriptConfig::local_default()))
         }
         Err(e) => {
             log_error!("Failed to get transcript config: {}", e);

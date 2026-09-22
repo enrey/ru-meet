@@ -2,12 +2,18 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { CheckCircle2, Download, Loader2, RadioTower, UsersRound } from 'lucide-react';
+import { CheckCircle2, Download, Loader2, RadioTower, Sparkles, UsersRound } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { DIARIZATION_MODELS, type DiarizationEngineId } from '@/lib/diarization-models';
+import { DEFAULT_DIARIZATION_ENGINE, DIARIZATION_MODELS, type DiarizationEngineId } from '@/lib/diarization-models';
+
+const ENGINE_ICONS: Record<DiarizationEngineId, typeof UsersRound> = {
+  'pyannote-wespeaker': UsersRound,
+  'speakrs-pyannote-wespeaker': Sparkles,
+  'nvidia-sortformer-v2': RadioTower,
+};
 
 interface DiarizationSettingsState {
   enabled: boolean;
@@ -22,7 +28,7 @@ interface DiarizationModelStatus {
 export function DiarizationSettings() {
   const [settings, setSettings] = useState<DiarizationSettingsState>({
     enabled: false,
-    engine: 'pyannote-wespeaker',
+    engine: DEFAULT_DIARIZATION_ENGINE,
   });
   const [modelStatuses, setModelStatuses] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -112,17 +118,18 @@ export function DiarizationSettings() {
         </div>
 
         {isLoading ? (
-          <div className="grid gap-4">
-            <div className="h-40 animate-pulse rounded-xl bg-gray-100" />
-            <div className="h-40 animate-pulse rounded-xl bg-gray-100" />
+          <div className="grid gap-2">
+            <div className="h-16 animate-pulse rounded-lg bg-gray-100" />
+            <div className="h-16 animate-pulse rounded-lg bg-gray-100" />
+            <div className="h-16 animate-pulse rounded-lg bg-gray-100" />
           </div>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid gap-2">
             {(Object.entries(DIARIZATION_MODELS) as Array<[DiarizationEngineId, (typeof DIARIZATION_MODELS)[DiarizationEngineId]]>).map(([id, model]) => {
               const selected = settings.engine === id;
               const ready = modelStatuses[id] ?? false;
               const downloading = isDownloading && downloadingEngine === id;
-              const Icon = id === 'pyannote-wespeaker' ? UsersRound : RadioTower;
+              const Icon = ENGINE_ICONS[id];
 
               return (
                 <div
@@ -136,52 +143,52 @@ export function DiarizationSettings() {
                       save({ ...settings, engine: id });
                     }
                   }}
-                  className={`group flex min-h-40 cursor-pointer flex-col rounded-xl border-2 p-5 text-left transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                  className={`group cursor-pointer rounded-lg border px-3 py-2.5 text-left transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
                     selected
-                      ? 'border-blue-500 bg-blue-50 shadow-sm'
-                      : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+                      ? 'border-blue-500 bg-blue-50'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
                   }`}
                   aria-pressed={selected}
                 >
-                  <div className="flex w-full items-start justify-between gap-4">
-                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${selected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
-                      <Icon className="h-5 w-5" />
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${selected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                      <Icon className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-baseline gap-x-2">
+                        <span className="text-sm font-semibold text-gray-900">{model.name}</span>
+                        <span className="text-xs font-medium text-gray-500">{model.size}</span>
+                      </div>
+                      <p className="truncate text-xs leading-4 text-gray-600" title={model.description}>
+                        {model.description}
+                      </p>
                     </div>
                     {ready ? (
-                      <span className="flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-700">
+                      <span className="flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
                         <CheckCircle2 className="h-3.5 w-3.5" /> Ready
                       </span>
                     ) : downloading ? (
-                      <span className="flex items-center gap-1.5 text-sm font-medium text-blue-600">
-                        <Loader2 className="h-4 w-4 animate-spin" /> {downloadProgress}%
+                      <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-blue-600">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> {downloadProgress}%
                       </span>
                     ) : (
                       <Button
                         type="button"
                         size="sm"
+                        className="h-7 shrink-0 px-2.5 text-xs"
                         onClick={(event) => {
                           event.stopPropagation();
                           void downloadModels(id);
                         }}
                       >
-                        <Download className="mr-2 h-4 w-4" /> Download
+                        <Download className="mr-1.5 h-3.5 w-3.5" /> Download
                       </Button>
                     )}
                   </div>
 
-                  <div className="mt-4">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-gray-900">{model.name}</span>
-                      <span className="text-xs font-medium text-gray-500">{model.size}</span>
-                    </div>
-                    <p className="mt-1.5 text-sm leading-5 text-gray-600">{model.description}</p>
-                  </div>
-
                   {downloading && (
-                    <div className="mt-auto w-full pt-4">
-                      <div className="h-2 overflow-hidden rounded-full bg-blue-100">
-                        <div className="h-full bg-blue-600 transition-all" style={{ width: `${downloadProgress}%` }} />
-                      </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-blue-100">
+                      <div className="h-full bg-blue-600 transition-all" style={{ width: `${downloadProgress}%` }} />
                     </div>
                   )}
                 </div>

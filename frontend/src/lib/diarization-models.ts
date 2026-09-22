@@ -1,8 +1,13 @@
 export const DIARIZATION_MODELS = {
   'pyannote-wespeaker': {
-    name: 'PyAnnote + WeSpeaker',
+    name: 'polyvoice (PyAnnote + WeSpeaker)',
     size: '~8.7 MB',
-    description: 'Compact speaker segmentation and voice embeddings for local processing.',
+    description: 'Compact INT8 segmentation and voice embeddings. Fastest on CPU. Recommended.',
+  },
+  'speakrs-pyannote-wespeaker': {
+    name: 'speakrs (PyAnnote + WeSpeaker)',
+    size: '~57 MB',
+    description: 'Full pyannote community-1 pipeline with PLDA and VBx. More accurate, much slower on CPU.',
   },
   'nvidia-sortformer-v2': {
     name: 'NVIDIA Sortformer v2',
@@ -13,6 +18,8 @@ export const DIARIZATION_MODELS = {
 
 export type DiarizationEngineId = keyof typeof DIARIZATION_MODELS;
 
+export const DEFAULT_DIARIZATION_ENGINE: DiarizationEngineId = 'pyannote-wespeaker';
+
 export function getDiarizationModelInfo(engine: string) {
-  return DIARIZATION_MODELS[engine as DiarizationEngineId] ?? DIARIZATION_MODELS['pyannote-wespeaker'];
+  return DIARIZATION_MODELS[engine as DiarizationEngineId] ?? DIARIZATION_MODELS[DEFAULT_DIARIZATION_ENGINE];
 }

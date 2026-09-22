@@ -1,5 +1,7 @@
 #[path = "build/ffmpeg.rs"]
 mod ffmpeg;
+#[path = "build/migrations.rs"]
+mod migrations;
 #[path = "build/onnxruntime.rs"]
 mod onnxruntime;
 #[path = "build/silero_vad.rs"]
@@ -18,6 +20,10 @@ fn main() {
         // Let the enhanced_macos crate handle its own Swift compilation
         // The swift-rs crate build will be handled in the enhanced_macos crate's build.rs
     }
+
+    // sqlx checksums each migration's exact bytes; keep them canonical so this
+    // build cannot disagree with one made on another machine.
+    migrations::ensure_lf_line_endings();
 
     // Download and bundle FFmpeg binary at build-time to eliminate runtime download delays
     ffmpeg::ensure_ffmpeg_binary();

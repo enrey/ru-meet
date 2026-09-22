@@ -89,47 +89,7 @@ impl Drop for StopGuard<'_> {
 }
 
 async fn unload_transcription_engine<R: Runtime>(app: &AppHandle<R>) {
-    let Some(state) = app.try_state::<crate::state::AppState>() else {
-        return;
-    };
-    let provider = crate::api::api::api_get_transcript_config(app.clone(), state, None)
-        .await
-        .ok()
-        .flatten()
-        .map(|config| config.provider);
-
-    match provider.as_deref() {
-        Some("parakeet") => {
-            let engine = crate::parakeet_engine::commands::PARAKEET_ENGINE
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_ref()
-                .cloned();
-            if let Some(engine) = engine {
-                let _ = engine.unload_model().await;
-            }
-        }
-        Some("gigaam") => {
-            let engine = crate::gigaam_engine::GIGAAM_ENGINE
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_ref()
-                .cloned();
-            if let Some(engine) = engine {
-                let _ = engine.unload_model().await;
-            }
-        }
-        _ => {
-            let engine = crate::whisper_engine::commands::WHISPER_ENGINE
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .as_ref()
-                .cloned();
-            if let Some(engine) = engine {
-                let _ = engine.unload_model().await;
-            }
-        }
-    }
+    transcription::unload_configured_engine(app).await;
 }
 
 fn recording_source_mutes(state: &RecordingState) -> RecordingSourceMutes {
@@ -537,8 +497,6 @@ pub(crate) async fn start_session<R: Runtime>(
 
     let generation = authority.begin_start()?;
     let _start_guard = StartGuard(authority, generation);
-    let engine_lifecycle_guard = super::common::acquire_engine_lifecycle_lock().await;
-
     if let Err(error) = crate::ensure_onnx_runtime_available() {
         return Err(map_recording_start_error(
             &app,
@@ -649,7 +607,6 @@ pub(crate) async fn start_session<R: Runtime>(
 
     MIC_FALLBACK_FAILED_ATTEMPTS.store(0, Ordering::SeqCst);
     reset_speech_detected_flag();
-    drop(engine_lifecycle_guard);
 
     let task_handle = transcription::start_transcription_task(
         app.clone(),

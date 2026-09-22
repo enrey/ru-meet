@@ -38,7 +38,9 @@
 
 - Audio capture, transcription, persistence, diarization, and summary orchestration live in the Tauri core; the UI communicates through Tauri commands and events.
 - Keep recording audio and VAD-filtered transcription as separate pipeline paths in `frontend/src-tauri/src/audio/pipeline.rs`.
-- Diarization engines `PyAnnote + WeSpeaker` (`polyvoice`) and `NVIDIA Sortformer v2` (`parakeet-rs`) implement `DiarizationEngine` in `frontend/src-tauri/src/audio/diarization.rs`.
+- Diarization engines `polyvoice (PyAnnote + WeSpeaker)` (`polyvoice`, the default), `speakrs (PyAnnote + WeSpeaker)` (`speakrs`) and `NVIDIA Sortformer v2` (`parakeet-rs`) implement `DiarizationEngine` in `frontend/src-tauri/src/audio/diarization.rs`. Engine ids in the store are stable: the polyvoice engine keeps its original `pyannote-wespeaker` id.
+- `speakrs` is the accuracy option, not the default: its CPU path pins the embedding session to one thread (`embedding/session.rs`) and runs an FP32 ResNet34, and its `ExecutionMode` has no DirectML variant, so it cannot use the GPU on Windows.
+- Two workspace `[patch.crates-io]` entries must stay (root `Cargo.toml` explains each): `ndarray-linalg` → `crates/ndarray-linalg-nalgebra`, a pure-Rust nalgebra shim, because the real crate needs an Intel MKL blob on x86_64 and a Fortran compiler on Apple Silicon; and `polyvoice` → our fork, pinned by `rev`, carrying [PR #94](https://github.com/ekhodzitsky/polyvoice/pull/94) which makes the one-hour `MAX_AUDIO_SAMPLES` configurable. `diarization.rs` then raises it via `.max_audio_samples(MAX_DIARIZATION_SAMPLES)`; that builder call is permanent, only the patch entry is temporary. See `docs/upstream/polyvoice-max-audio-samples.md`.
 - Completed speaker turns are stored in `diarization_turns`; the meeting timeline reads them independently of paginated transcript segments.
 - Resolve application/model storage through `frontend/src-tauri/src/portable.rs` and Tauri path APIs; do not hardcode OS paths or introduce an independent data root.
 

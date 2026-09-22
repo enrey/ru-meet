@@ -6,6 +6,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
 import { recordingService } from '@/services/recordingService';
 import { showRecordingNotification } from '@/lib/recordingNotification';
+import { DEFAULT_TRANSCRIPTION_PROVIDER } from '@/constants/modelDefaults';
 import {
   getProviderCommands,
   hasDownloadingModel,
@@ -69,10 +70,10 @@ export function useRecordingStart(
   const getTranscriptionProvider = useCallback(async (): Promise<string> => {
     try {
       const config = await invoke<TranscriptConfig | null>('api_get_transcript_config');
-      return config?.provider || 'parakeet';
+      return config?.provider || DEFAULT_TRANSCRIPTION_PROVIDER;
     } catch (error) {
       console.error('Failed to load transcription provider:', error);
-      return 'parakeet';
+      return DEFAULT_TRANSCRIPTION_PROVIDER;
     }
   }, []);
 

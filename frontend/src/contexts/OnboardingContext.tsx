@@ -6,11 +6,12 @@ import { listen } from '@tauri-apps/api/event';
 import type { PermissionStatus, OnboardingPermissions } from '@/types/onboarding';
 import { resolveOnboardingSummaryModelStatus } from '@/lib/onboarding-summary-model';
 import type { ParakeetDownloadProgressEvent } from '@/lib/parakeet';
+import { DEFAULT_DIARIZATION_ENGINE, DIARIZATION_MODELS, type DiarizationEngineId } from '@/lib/diarization-models';
 
 const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
 const GIGAAM_MODEL = 'gigaam-v3-e2e-ctc';
 type TranscriptionProvider = 'gigaam' | 'parakeet';
-type DiarizationEngine = 'pyannote-wespeaker' | 'nvidia-sortformer-v2';
+type DiarizationEngine = DiarizationEngineId;
 
 interface OnboardingStatus {
   version: string;
@@ -100,7 +101,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   const [downloadTranscription, setDownloadTranscription] = useState(true);
   const [downloadSummary, setDownloadSummary] = useState(false);
   const [downloadDiarization, setDownloadDiarization] = useState(true);
-  const [diarizationEngine, setDiarizationEngine] = useState<DiarizationEngine>('pyannote-wespeaker');
+  const [diarizationEngine, setDiarizationEngine] = useState<DiarizationEngine>(DEFAULT_DIARIZATION_ENGINE);
   const [completed, setCompleted] = useState(false);
   const [statusLoaded, setStatusLoaded] = useState(false);
   const [parakeetDownloaded, setParakeetDownloaded] = useState(false);
@@ -381,7 +382,11 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         setDownloadTranscription(status.download_transcription ?? true);
         setDownloadSummary(status.download_summary ?? false);
         setDownloadDiarization(status.download_diarization ?? false);
-        setDiarizationEngine(status.diarization_engine === 'nvidia-sortformer-v2' ? 'nvidia-sortformer-v2' : 'pyannote-wespeaker');
+        setDiarizationEngine(
+          status.diarization_engine && status.diarization_engine in DIARIZATION_MODELS
+            ? status.diarization_engine
+            : DEFAULT_DIARIZATION_ENGINE,
+        );
 
         if (status.completed) {
           setCurrentStep(status.current_step);

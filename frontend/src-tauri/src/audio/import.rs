@@ -3,16 +3,12 @@
 use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
 use crate::audio::vad::get_speech_chunks_with_progress;
-use crate::config::{DEFAULT_PARAKEET_MODEL, DEFAULT_WHISPER_MODEL};
-use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
-use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
@@ -391,7 +387,7 @@ pub async fn start_import<R: Runtime>(
 
     // Unload the engine after the batch job (success, failure, or cancellation)
     let unload_started = Instant::now();
-    super::common::unload_engine_after_batch(provider_to_unload.as_deref()).await;
+    super::transcription::unload_batch_engine(provider_to_unload.as_deref()).await;
     log.info(format!(
         "Unloaded transcription engine in {:.2}s",
         unload_started.elapsed().as_secs_f64()
@@ -470,10 +466,6 @@ async fn run_import<R: Runtime>(
              several times slower than a release build",
         );
     }
-
-    // Determine which provider to use (default to whisper)
-    let use_parakeet = provider.as_deref() == Some("parakeet");
-    let use_gigaam = provider.as_deref() == Some("gigaam");
 
     emit_progress(&app, "copying", 5, "Creating meeting folder...");
 
@@ -688,20 +680,18 @@ async fn run_import<R: Runtime>(
 
     emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
 
-    // Initialize the appropriate engine
+    // Initialize the selected provider through the transcription seam.
     let engine_load_started = Instant::now();
-    let whisper_engine = if !use_parakeet && !use_gigaam && total_segments > 0 {
-        Some(get_or_init_whisper(&app, model.as_deref()).await?)
-    } else {
-        None
-    };
-    let parakeet_engine = if use_parakeet && total_segments > 0 {
-        Some(get_or_init_parakeet(&app, model.as_deref()).await?)
-    } else {
-        None
-    };
-    let gigaam_engine = if use_gigaam && total_segments > 0 {
-        Some(get_or_init_gigaam(model.as_deref()).await?)
+    let transcription_engine = if total_segments > 0 {
+        Some(
+            super::transcription::get_or_init_batch_engine(
+                &app,
+                provider.as_deref(),
+                model.as_deref(),
+            )
+            .await
+            .map_err(|error| anyhow!(error))?,
+        )
     } else {
         None
     };
@@ -800,29 +790,14 @@ async fn run_import<R: Runtime>(
 
         // Transcribe
         let segment_started = Instant::now();
-        let (text, conf) = if use_gigaam {
-            let text = gigaam_engine
-                .as_ref()
-                .unwrap()
-                .transcribe_audio(segment.samples.clone())
-                .await
-                .map_err(|e| anyhow!("GigaAM transcription failed on segment {}: {}", i, e))?;
-            (text, 0.9f32)
-        } else if use_parakeet {
-            let engine = parakeet_engine.as_ref().unwrap();
-            let text = engine
-                .transcribe_audio(segment.samples.clone())
-                .await
-                .map_err(|e| anyhow!("Parakeet transcription failed on segment {}: {}", i, e))?;
-            (text, 0.9f32)
-        } else {
-            let engine = whisper_engine.as_ref().unwrap();
-            let (text, conf, _) = engine
-                .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
-                .await
-                .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-            (text, conf)
-        };
+        let result = transcription_engine
+            .as_ref()
+            .expect("engine exists when processable segments exist")
+            .transcribe(segment.samples.clone(), language.clone())
+            .await
+            .map_err(|error| anyhow!("Transcription failed on segment {}: {}", i, error))?;
+        let text = result.text;
+        let conf = result.confidence.unwrap_or(0.9);
 
         let segment_seconds = segment_started.elapsed().as_secs_f64();
         audio_seconds_done += segment_duration_sec;
@@ -935,24 +910,6 @@ async fn run_import<R: Runtime>(
     })
 }
 
-async fn get_or_init_gigaam(
-    requested_model: Option<&str>,
-) -> Result<Arc<crate::gigaam_engine::GigaAmEngine>> {
-    crate::gigaam_engine::gigaam_init()
-        .await
-        .map_err(|e| anyhow!(e))?;
-    let engine = crate::gigaam_engine::GIGAAM_ENGINE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| anyhow!("GigaAM engine not initialized"))?;
-    engine
-        .load_model(requested_model.unwrap_or(crate::config::DEFAULT_GIGAAM_MODEL))
-        .await?;
-    Ok(engine)
-}
-
 /// Emit progress event
 fn emit_progress<R: Runtime>(app: &AppHandle<R>, stage: &str, progress: u32, message: &str) {
     let _ = app.emit(
@@ -1027,136 +984,6 @@ async fn create_meeting_with_transcripts(
     );
 
     Ok(meeting_id)
-}
-
-/// Get or initialize the Whisper engine
-async fn get_or_init_whisper<R: Runtime>(
-    app: &AppHandle<R>,
-    requested_model: Option<&str>,
-) -> Result<Arc<WhisperEngine>> {
-    use crate::whisper_engine::commands::WHISPER_ENGINE;
-
-    let engine = {
-        let guard = WHISPER_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().cloned()
-    };
-
-    match engine {
-        Some(e) => {
-            let target_model = match requested_model {
-                Some(model) => model.to_string(),
-                None => get_configured_model(app, "whisper").await?,
-            };
-
-            let current_model = e.get_current_model().await;
-            let needs_load = match &current_model {
-                Some(loaded) => loaded != &target_model,
-                None => true,
-            };
-
-            if needs_load {
-                info!(
-                    "Loading Whisper model '{}' (current: {:?})",
-                    target_model, current_model
-                );
-
-                if let Err(e) = e.discover_models().await {
-                    warn!("Model discovery error (continuing): {}", e);
-                }
-
-                e.load_model(&target_model)
-                    .await
-                    .map_err(|e| anyhow!("Failed to load model '{}': {}", target_model, e))?;
-            }
-
-            Ok(e)
-        }
-        None => Err(anyhow!("Whisper engine not initialized")),
-    }
-}
-
-/// Get or initialize the Parakeet engine
-async fn get_or_init_parakeet<R: Runtime>(
-    app: &AppHandle<R>,
-    requested_model: Option<&str>,
-) -> Result<Arc<ParakeetEngine>> {
-    use crate::parakeet_engine::commands::PARAKEET_ENGINE;
-
-    let engine = {
-        let guard = PARAKEET_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().cloned()
-    };
-
-    match engine {
-        Some(e) => {
-            let target_model = match requested_model {
-                Some(model) => model.to_string(),
-                None => get_configured_model(app, "parakeet").await?,
-            };
-
-            let current_model = e.get_current_model().await;
-            let needs_load = match &current_model {
-                Some(loaded) => loaded != &target_model,
-                None => true,
-            };
-
-            if needs_load {
-                info!(
-                    "Loading Parakeet model '{}' (current: {:?})",
-                    target_model, current_model
-                );
-
-                if let Err(e) = e.discover_models().await {
-                    warn!("Model discovery error (continuing): {}", e);
-                }
-
-                e.load_model(&target_model)
-                    .await
-                    .map_err(|e| anyhow!("Failed to load model '{}': {}", target_model, e))?;
-            }
-
-            Ok(e)
-        }
-        None => Err(anyhow!("Parakeet engine not initialized")),
-    }
-}
-
-/// Get the configured model from database
-async fn get_configured_model<R: Runtime>(
-    app: &AppHandle<R>,
-    provider_type: &str,
-) -> Result<String> {
-    let app_state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| anyhow!("App state not available"))?;
-
-    let result: Option<(String, String)> =
-        sqlx::query_as("SELECT provider, model FROM transcript_settings WHERE id = '1'")
-            .fetch_optional(app_state.db_manager.pool())
-            .await
-            .map_err(|e| anyhow!("Failed to query config: {}", e))?;
-
-    match result {
-        Some((provider, model)) => {
-            if (provider_type == "whisper" && (provider == "localWhisper" || provider == "whisper"))
-                || (provider_type == "parakeet" && provider == "parakeet")
-            {
-                Ok(model)
-            } else {
-                // Return default model for the requested type
-                Ok(if provider_type == "parakeet" {
-                    DEFAULT_PARAKEET_MODEL.to_string()
-                } else {
-                    DEFAULT_WHISPER_MODEL.to_string()
-                })
-            }
-        }
-        None => Ok(if provider_type == "parakeet" {
-            DEFAULT_PARAKEET_MODEL.to_string()
-        } else {
-            DEFAULT_WHISPER_MODEL.to_string()
-        }),
-    }
 }
 
 /// Write metadata.json to a meeting folder (atomic write with temp file)

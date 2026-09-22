@@ -1,8 +1,9 @@
 //! Offline speaker diarization with a replaceable engine backend.
 //!
-//! Engines are PyAnnote segmentation + WeSpeaker embeddings and NVIDIA
-//! Sortformer v2. The application-facing trait deliberately does not expose
-//! either implementation's types.
+//! Engines are speakrs and polyvoice - two independent implementations of
+//! PyAnnote segmentation + WeSpeaker embeddings - and NVIDIA Sortformer v2. The
+//! application-facing trait deliberately does not expose any implementation's
+//! types.
 
 use super::decoder::decode_audio_file;
 use super::recording_saver::DiarizationTarget;
@@ -13,11 +14,26 @@ use once_cell::sync::Lazy;
 use parakeet_rs::sortformer::{DiarizationConfig, Sortformer};
 use polyvoice::{ModelRegistry, Pipeline, Profile, SampleRate};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, path::PathBuf, sync::Mutex, time::Duration};
+use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, Instant},
+};
 use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_store::StoreExt;
 use tokio::io::AsyncWriteExt;
 
+/// Longest recording polyvoice will diarize, in 16 kHz samples (12 hours).
+/// Bounded rather than unlimited so a corrupt duration still cannot make the
+/// pipeline allocate without limit.
+const MAX_DIARIZATION_SAMPLES: usize = 16_000 * 3_600 * 12;
+
+const SPEAKRS_ENGINE: &str = "speakrs-pyannote-wespeaker";
 const PYANNOTE_WESPEAKER_ENGINE: &str = "pyannote-wespeaker";
 const SORTFORMER_V2_ENGINE: &str = "nvidia-sortformer-v2";
 const SORTFORMER_V2_MODEL: &str = "diar_streaming_sortformer_4spk-v2.onnx";
@@ -30,6 +46,23 @@ const PYANNOTE_WESPEAKER_MODEL_FILES: [&str; 8] = [
     "plda_mu.npy",
     "plda_phi_computed.npy",
     "plda_transform.npy",
+];
+// speakrs pins this revision of its model repository, so the app downloads the
+// exact bundle the linked crate version expects. Sizes come from that revision
+// and double as the integrity check, since HuggingFace serves no per-file hash
+// on the resolve endpoint.
+const SPEAKRS_MODEL_REVISION: &str = "a785ebdbe6313868088c36c93d9efa71c470bd34";
+const SPEAKRS_MODEL_FILES: [(&str, u64); 10] = [
+    ("segmentation-3.0.onnx", 5_916_308),
+    ("wespeaker-voxceleb-resnet34.onnx", 26_894_815),
+    ("wespeaker-voxceleb-resnet34.onnx.data", 26_673_152),
+    ("wespeaker-voxceleb-resnet34.min_num_samples.txt", 4),
+    ("plda_lda.npy", 131_200),
+    ("plda_tr.npy", 131_200),
+    ("plda_mu.npy", 1_152),
+    ("plda_psi.npy", 1_152),
+    ("plda_mean1.npy", 2_176),
+    ("plda_mean2.npy", 640),
 ];
 // NVIDIA publishes the checkpoint; this is its ONNX conversion maintained by
 // parakeet-rs, which is the native Rust inference implementation used below.
@@ -79,6 +112,93 @@ pub trait DiarizationEngine: Send + Sync {
     fn diarize(&self, samples: &[f32]) -> Result<Vec<SpeakerTurn>>;
 }
 
+/// Full pyannote `community-1` pipeline (segmentation, powerset decode,
+/// WeSpeaker embeddings, PLDA, VBx) as implemented by the `speakrs` crate. It
+/// runs on the application's shared ONNX Runtime and reads a model bundle the
+/// app downloads itself, so no HuggingFace cache is involved at runtime.
+struct SpeakrsEngine;
+
+impl SpeakrsEngine {
+    fn model_dir() -> Result<PathBuf> {
+        Ok(crate::portable::data_root()
+            .cloned()
+            .or_else(|| dirs::data_local_dir().map(|path| path.join("Meetily")))
+            .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
+            .join("models")
+            .join("diarization")
+            .join("speakrs"))
+    }
+
+    fn is_ready() -> bool {
+        let Ok(dir) = Self::model_dir() else {
+            return false;
+        };
+        SPEAKRS_MODEL_FILES.iter().all(|(name, size)| {
+            std::fs::metadata(dir.join(name))
+                .map(|metadata| metadata.is_file() && metadata.len() == *size)
+                .unwrap_or(false)
+        })
+    }
+}
+
+/// speakrs emits `SPEAKER_00`-style labels; the rest of the app stores the
+/// same `Speaker N` names every other engine produces.
+fn speakrs_speaker_label(label: &str) -> String {
+    label
+        .rsplit('_')
+        .next()
+        .and_then(|index| index.parse::<usize>().ok())
+        .map(|index| format!("Speaker {}", index + 1))
+        .unwrap_or_else(|| label.to_string())
+}
+
+impl DiarizationEngine for SpeakrsEngine {
+    fn id(&self) -> &'static str {
+        SPEAKRS_ENGINE
+    }
+
+    fn diarize(&self, samples: &[f32]) -> Result<Vec<SpeakerTurn>> {
+        if !Self::is_ready() {
+            return Err(anyhow!(
+                "speakrs is not downloaded. Open Settings and select Download models."
+            ));
+        }
+        crate::ensure_onnx_runtime_available()?;
+
+        // Loading the FP32 WeSpeaker ResNet34 is itself slow enough to look
+        // like a stall, so time the two phases separately.
+        let loading = Instant::now();
+        let mut pipeline = OwnedDiarizationPipeline::from_dir(Self::model_dir()?, ExecutionMode::Cpu)
+            .map_err(|error| anyhow!("Could not load speakrs: {error}"))?;
+        log::info!(
+            "speakrs: models loaded in {:.1}s, starting inference",
+            loading.elapsed().as_secs_f64()
+        );
+
+        let inference = Instant::now();
+        let result = pipeline
+            .run(samples)
+            .map_err(|error| anyhow!("speakrs diarization failed: {error}"))?;
+        log::info!(
+            "speakrs: inference finished in {:.1}s, {} raw segments",
+            inference.elapsed().as_secs_f64(),
+            result.segments.len()
+        );
+        // These are merged per-speaker turns and may overlap during crosstalk;
+        // `apply_speaker_turns` resolves that by longest overlap, the same way
+        // it does for the other engines.
+        Ok(result
+            .segments
+            .into_iter()
+            .map(|segment| SpeakerTurn {
+                start: segment.start,
+                end: segment.end,
+                speaker: speakrs_speaker_label(&segment.speaker),
+            })
+            .collect())
+    }
+}
+
 /// Full-recording PyAnnote + WeSpeaker pipeline.  Models are verified by the
 /// registry before use and cached under Meetily's application data directory.
 struct PyannoteWeSpeakerEngine;
@@ -103,6 +223,11 @@ impl DiarizationEngine for PyannoteWeSpeakerEngine {
     fn diarize(&self, samples: &[f32]) -> Result<Vec<SpeakerTurn>> {
         let pipeline = Pipeline::builder()
             .profile(Profile::Balanced)
+            // polyvoice defaults to refusing anything over an hour, a guard
+            // aimed at untrusted buffers reaching its C FFI and Python
+            // bindings. Our audio is a recording the app just made and decoded
+            // in-process, so raise it rather than fail a long meeting outright.
+            .max_audio_samples(MAX_DIARIZATION_SAMPLES)
             .with_models_from(Self::model_registry()?)
             .build()
             .map_err(|error| anyhow!(error))?;
@@ -174,6 +299,7 @@ impl DiarizationEngine for NvidiaSortformerV2Engine {
 
 fn engine_for_id(engine: &str) -> Result<Box<dyn DiarizationEngine>> {
     match engine {
+        SPEAKRS_ENGINE => Ok(Box::new(SpeakrsEngine)),
         PYANNOTE_WESPEAKER_ENGINE => Ok(Box::new(PyannoteWeSpeakerEngine)),
         SORTFORMER_V2_ENGINE => Ok(Box::new(NvidiaSortformerV2Engine)),
         _ => Err(anyhow!(
@@ -257,6 +383,10 @@ pub fn get_diarization_model_statuses() -> Result<Vec<DiarizationModelStatus>, S
         DiarizationModelStatus {
             engine: PYANNOTE_WESPEAKER_ENGINE.into(),
             ready: pyannote_ready,
+        },
+        DiarizationModelStatus {
+            engine: SPEAKRS_ENGINE.into(),
+            ready: SpeakrsEngine::is_ready(),
         },
         DiarizationModelStatus {
             engine: SORTFORMER_V2_ENGINE.into(),
@@ -377,11 +507,38 @@ pub fn rerun_diarization<R: Runtime>(
     );
 
     tauri::async_runtime::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || -> Result<Vec<SpeakerTurn>> {
-            let decoded = decode_audio_file(&audio_path)?;
-            engine_for_id(&engine)?.diarize(&decoded.to_whisper_format())
-        })
-        .await;
+        // Decode first so the heartbeat below can quote the recording's real
+        // length, and so a decode failure is reported as such.
+        let decoded =
+            tokio::task::spawn_blocking(move || decode_for_diarization(&audio_path)).await;
+        let samples = match decoded {
+            Ok(Ok(samples)) => samples,
+            Ok(Err(error)) => return emit_rerun_error(&app, &meeting_id, error.to_string()),
+            Err(error) => return emit_rerun_error(&app, &meeting_id, error.to_string()),
+        };
+
+        let audio_seconds = samples.len() as f64 / 16_000.0;
+        log::info!(
+            "Diarization: starting {engine} on {audio_seconds:.0}s of audio for meeting {meeting_id}"
+        );
+        let started = Instant::now();
+        let heartbeat = spawn_progress_heartbeat(
+            app.clone(),
+            Some(meeting_id.clone()),
+            engine.clone(),
+            audio_seconds,
+        );
+
+        let selected = engine.clone();
+        let result =
+            tokio::task::spawn_blocking(move || engine_for_id(&selected)?.diarize(&samples)).await;
+        drop(heartbeat);
+
+        let elapsed = started.elapsed().as_secs_f64();
+        log::info!(
+            "Diarization: {engine} finished in {elapsed:.1}s ({:.1}x realtime)",
+            audio_seconds / elapsed.max(0.001)
+        );
 
         match result {
             _ if take_rerun_cancellation(&meeting_id) => {
@@ -440,6 +597,108 @@ pub fn cancel_diarization<R: Runtime>(app: AppHandle<R>, meeting_id: String) -> 
         serde_json::json!({"meetingId": meeting_id, "message": "Stopping speaker diarization…"}),
     );
     Ok(())
+}
+
+/// Stops the heartbeat when the diarization call it accompanies returns,
+/// including on an early return or a panic.
+struct ProgressHeartbeat(Arc<AtomicBool>);
+
+impl Drop for ProgressHeartbeat {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Report elapsed time while a diarization engine runs.
+///
+/// The engines are single opaque blocking calls - none of them reports how far
+/// along it is - and on CPU speakrs can take minutes on a long meeting. Without
+/// this the UI sits on one unchanging "Identifying speakers…" line and the logs
+/// stay silent, which is indistinguishable from a hang. Report elapsed time
+/// against the recording's own length rather than a made-up percentage: it is
+/// the honest signal, and it lets the user judge the rate themselves.
+fn spawn_progress_heartbeat<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: Option<String>,
+    engine: String,
+    audio_seconds: f64,
+) -> ProgressHeartbeat {
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+
+    tauri::async_runtime::spawn(async move {
+        let started = Instant::now();
+        let mut ticker = tokio::time::interval(Duration::from_secs(5));
+        ticker.tick().await; // the first tick completes immediately
+
+        while !flag.load(Ordering::Relaxed) {
+            ticker.tick().await;
+            if flag.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let elapsed = started.elapsed().as_secs();
+            let message = format!(
+                "Identifying speakers with {engine}… {} elapsed, {} of audio",
+                format_elapsed(elapsed),
+                format_elapsed(audio_seconds as u64),
+            );
+            log::info!(
+                "Diarization in progress: {} elapsed for {:.0}s of audio ({engine})",
+                format_elapsed(elapsed),
+                audio_seconds
+            );
+
+            if let Ok(mut status) = JOB_STATUS.lock() {
+                status.message = message.clone();
+            }
+            let mut payload = serde_json::json!({ "stage": "processing", "message": message });
+            if let Some(meeting_id) = &meeting_id {
+                payload["meetingId"] = serde_json::json!(meeting_id);
+            }
+            let _ = app.emit("diarization-progress", payload);
+        }
+    });
+
+    ProgressHeartbeat(stop)
+}
+
+/// Report a failure from the recording-finalization path, where there is no
+/// meeting id yet and the caller returns the error to its own caller.
+fn finish_failed_diarization<R: Runtime>(
+    app: &AppHandle<R>,
+    error: String,
+) -> std::result::Result<Vec<SpeakerTurn>, String> {
+    log::warn!("Diarization failed: {error}");
+    let _ = app.emit("diarization-error", error.clone());
+    if let Ok(mut status) = JOB_STATUS.lock() {
+        *status = DiarizationJobStatus {
+            in_progress: false,
+            message: "Speaker diarization failed".into(),
+            meeting_id: None,
+        };
+    }
+    Err(error)
+}
+
+fn format_elapsed(seconds: u64) -> String {
+    match (seconds / 60, seconds % 60) {
+        (0, seconds) => format!("{seconds}s"),
+        (minutes, seconds) => format!("{minutes}m {seconds:02}s"),
+    }
+}
+
+/// Decode a recording to the 16 kHz mono buffer every engine expects, and
+/// report how long that took separately from diarization itself.
+fn decode_for_diarization(path: &std::path::Path) -> Result<Vec<f32>> {
+    let started = Instant::now();
+    let samples = decode_audio_file(path)?.to_whisper_format();
+    log::info!(
+        "Diarization: decoded {:.0}s of audio in {:.1}s",
+        samples.len() as f64 / 16_000.0,
+        started.elapsed().as_secs_f64()
+    );
+    Ok(samples)
 }
 
 fn take_rerun_cancellation(meeting_id: &str) -> bool {
@@ -501,6 +760,7 @@ pub async fn download_diarization_models<R: Runtime>(
     )
     .map_err(|error| error.to_string())?;
     let result = match engine.as_str() {
+        SPEAKRS_ENGINE => download_speakrs_models(app.clone()).await,
         PYANNOTE_WESPEAKER_ENGINE => tokio::task::spawn_blocking(|| -> Result<()> {
             Pipeline::builder()
                 .profile(Profile::Balanced)
@@ -522,6 +782,71 @@ pub async fn download_diarization_models<R: Runtime>(
         serde_json::json!({ "progress": 100, "message": "Speaker models are ready", "engine": engine }),
     )
     .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Fetch the pinned speakrs model bundle. Progress is reported against the
+/// revision's known byte total, and each file's size is checked before it is
+/// moved into place so a truncated download never looks ready.
+async fn download_speakrs_models<R: Runtime>(app: AppHandle<R>) -> Result<()> {
+    let model_dir = SpeakrsEngine::model_dir()?;
+    tokio::fs::create_dir_all(&model_dir).await?;
+    let total: u64 = SPEAKRS_MODEL_FILES.iter().map(|(_, size)| *size).sum();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(900))
+        .build()?;
+    let mut completed = 0_u64;
+
+    for (name, expected) in SPEAKRS_MODEL_FILES {
+        let destination = model_dir.join(name);
+        if tokio::fs::metadata(&destination)
+            .await
+            .map(|metadata| metadata.is_file() && metadata.len() == expected)
+            .unwrap_or(false)
+        {
+            completed += expected;
+            continue;
+        }
+
+        let temporary_path = model_dir.join(format!(".{name}.downloading"));
+        let _ = tokio::fs::remove_file(&temporary_path).await;
+        let response = client
+            .get(format!(
+                "https://huggingface.co/avencera/speakrs-models/resolve/{SPEAKRS_MODEL_REVISION}/{name}"
+            ))
+            .send()
+            .await?
+            .error_for_status()?;
+        let mut stream = response.bytes_stream();
+        let mut output = tokio::fs::File::create(&temporary_path).await?;
+        let mut downloaded = 0_u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            output.write_all(&chunk).await?;
+            downloaded += chunk.len() as u64;
+            let _ = app.emit(
+                "diarization-download-progress",
+                serde_json::json!({
+                    "progress": (((completed + downloaded.min(expected)) * 100 / total).min(99)) as u8,
+                    "message": format!("Downloading speakrs models… ({name})"),
+                    "engine": SPEAKRS_ENGINE,
+                }),
+            );
+        }
+        output.flush().await?;
+        drop(output);
+
+        if downloaded != expected {
+            let _ = tokio::fs::remove_file(&temporary_path).await;
+            return Err(anyhow!(
+                "speakrs model {name} downloaded {downloaded} bytes, expected {expected}"
+            ));
+        }
+        tokio::fs::rename(&temporary_path, &destination).await?;
+        completed += expected;
+    }
+
     Ok(())
 }
 
@@ -601,12 +926,31 @@ pub async fn run_diarization_task<R: Runtime>(
         "diarization-progress",
         serde_json::json!({"stage":"processing", "message":"Identifying speakers…"}),
     );
-    let result = tokio::task::spawn_blocking(move || -> Result<Vec<SpeakerTurn>> {
-        let decoded = decode_audio_file(&path)?;
-        let audio = decoded.to_whisper_format();
-        engine_for_id(&engine)?.diarize(&audio)
-    })
-    .await;
+
+    // Decode before starting the heartbeat so it can quote the real length.
+    let samples = match tokio::task::spawn_blocking(move || decode_for_diarization(&path)).await {
+        Ok(Ok(samples)) => samples,
+        Ok(Err(error)) => return finish_failed_diarization(&app, error.to_string()),
+        Err(error) => return finish_failed_diarization(&app, error.to_string()),
+    };
+
+    let audio_seconds = samples.len() as f64 / 16_000.0;
+    log::info!("Diarization: starting {engine} on {audio_seconds:.0}s of audio");
+    let started = Instant::now();
+    let heartbeat =
+        spawn_progress_heartbeat(app.clone(), None, engine.clone(), audio_seconds);
+
+    let selected = engine.clone();
+    let result =
+        tokio::task::spawn_blocking(move || engine_for_id(&selected)?.diarize(&samples)).await;
+    drop(heartbeat);
+
+    let elapsed = started.elapsed().as_secs_f64();
+    log::info!(
+        "Diarization: {engine} finished in {elapsed:.1}s ({:.1}x realtime)",
+        audio_seconds / elapsed.max(0.001)
+    );
+
     match result {
         Ok(Ok(turns)) => {
             let labels: Vec<_> = target.apply_speaker_turns(&turns).into_iter().map(|(sequence_id, speaker)| serde_json::json!({"sequenceId": sequence_id, "speaker": speaker})).collect();

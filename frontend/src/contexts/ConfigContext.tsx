@@ -7,6 +7,7 @@ import { configService, ModelConfig } from '@/services/configService';
 import { invoke } from '@tauri-apps/api/core';
 import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
 import { normalizeAudioDevicePreferences } from '@/lib/audioDevicePreferences';
+import { DEFAULT_GIGAAM_MODEL, DEFAULT_TRANSCRIPTION_PROVIDER } from '@/constants/modelDefaults';
 
 export interface OllamaModel {
   name: string;
@@ -213,8 +214,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         if (config) {
           console.log('[ConfigContext] Loaded saved transcript config:', config);
           setTranscriptModelConfig({
-            provider: config.provider || 'parakeet',
-            model: config.model || 'parakeet-tdt-0.6b-v3-int8',
+            provider: config.provider || DEFAULT_TRANSCRIPTION_PROVIDER,
+            model: config.model || DEFAULT_GIGAAM_MODEL,
             apiKey: config.apiKey || null
           });
         }

@@ -1,0 +1,22 @@
+# Published as the name `ndarray-linalg` on purpose: the workspace root patches
+# crates.io with this package so `speakrs` links it instead of the real one.
+# See `[patch.crates-io]` in the root Cargo.toml for why.
+[package]
+name = "ndarray-linalg"
+version = "0.18.1"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Pure-Rust stand-in for the ndarray-linalg surface speakrs uses, backed by nalgebra instead of BLAS/LAPACK"
+
+[dependencies]
+nalgebra = "0.35"
+ndarray = "0.17"
+
+# `speakrs` declares the real crate three times with a BLAS backend selected by
+# target architecture. The backends are meaningless here - nalgebra is pure Rust
+# - but the feature names must exist or those declarations fail to resolve.
+[features]
+intel-mkl-static = []
+openblas-static = []
+openblas-system = []
