@@ -28,6 +28,15 @@ try {
     try { & (Join-Path $repositoryRoot '.github/prepare-vulkan.ps1') }
     catch { $rejected = $true }
     if (-not $rejected) { throw 'Incomplete Vulkan SDK was accepted.' }
+    # Reproduce the CI SDK layout: binaries exist, development package does not.
+    New-Item -ItemType Directory -Path (Join-Path $testRoot 'Bin') | Out-Null
+    New-Item -ItemType File -Path (Join-Path $testRoot 'Bin/glslc.exe') | Out-Null
+    & (Join-Path $repositoryRoot '.github/install-spirv-headers.ps1') -SdkRoot $testRoot
+    & (Join-Path $repositoryRoot '.github/prepare-vulkan.ps1')
+    cmake -S $PSScriptRoot -B (Join-Path $testRoot 'installed-package-check') "-DCMAKE_PREFIX_PATH=$testRoot" "-DEXPECTED_SPIRV_PREFIX=$testRoot"
+    if ($LASTEXITCODE -ne 0) { throw 'CMake could not import explicitly installed SPIRV-Headers.' }
+    # A second invocation must not download or reinstall the package.
+    & (Join-Path $repositoryRoot '.github/install-spirv-headers.ps1') -SdkRoot $testRoot
     if ($originalSdk) {
         $env:VULKAN_SDK = $originalSdk
         & (Join-Path $repositoryRoot '.github/prepare-vulkan.ps1')

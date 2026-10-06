@@ -170,6 +170,7 @@ jobs:
         if: contains(inputs.platform, 'windows')
         shell: pwsh
         run: |
+          ./.github/install-spirv-headers.ps1
           ./.github/tests/native-ci.ps1
           ./.github/prepare-vulkan.ps1
 
