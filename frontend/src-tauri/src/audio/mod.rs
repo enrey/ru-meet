@@ -41,6 +41,9 @@ pub mod system_detector; // NEW: Playback device detection for BT warnings
 // Transcription module (provider abstraction, engine management, worker pool)
 pub mod transcription;
 
+// Offline speech synthesis for reading summaries aloud
+pub mod tts;
+
 // Shared utilities for import and retranscription
 pub(crate) mod common;
 

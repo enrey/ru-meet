@@ -56,6 +56,7 @@ pub struct RecordingSaver {
     metadata: Option<MeetingMetadata>,
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     is_saving: Arc<Mutex<bool>>,
+    accumulation_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 #[derive(Clone)]
@@ -160,6 +161,7 @@ impl RecordingSaver {
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             is_saving: Arc::new(Mutex::new(false)),
+            accumulation_task: None,
         }
     }
 
@@ -294,7 +296,7 @@ impl RecordingSaver {
         let incremental_saver_arc = self.incremental_saver.clone();
         let save_audio = auto_save;
 
-        tokio::spawn(async move {
+        self.accumulation_task = Some(tokio::spawn(async move {
             info!(
                 "Recording saver accumulation task started (save_audio: {})",
                 save_audio
@@ -330,12 +332,44 @@ impl RecordingSaver {
             }
 
             info!("Recording saver accumulation task ended");
-        });
+        }));
 
         // Set saving flag
         if let Ok(mut is_saving) = self.is_saving.lock() {
             *is_saving = true;
         }
+    }
+
+    /// Discard only the uniquely named folder owned by this automatic session.
+    /// Capture and transcription have already stopped before this is called.
+    pub async fn discard(&mut self) -> Result<()> {
+        if let Ok(mut saving) = self.is_saving.lock() {
+            *saving = false;
+        }
+        if let Some(task) = self.accumulation_task.take() {
+            // The receiver can stay open while pipeline senders are owned by
+            // the manager. Abort and join before touching files on disk.
+            task.abort();
+            let _ = task.await;
+        }
+        self.incremental_saver = None;
+        if let Some(folder) = self.meeting_folder.take() {
+            let root =
+                super::recording_preferences::get_default_recordings_folder().canonicalize()?;
+            let target = folder.canonicalize()?;
+            anyhow::ensure!(
+                target.parent() == Some(root.as_path()),
+                "Refusing to discard outside recordings directory"
+            );
+            anyhow::ensure!(
+                self.meeting_name
+                    .as_ref()
+                    .is_some_and(|name| name.starts_with("Auto Meeting ")),
+                "Refusing to discard a manual recording"
+            );
+            tokio::fs::remove_dir_all(target).await?;
+        }
+        Ok(())
     }
 
     /// Initialize meeting folder structure and metadata

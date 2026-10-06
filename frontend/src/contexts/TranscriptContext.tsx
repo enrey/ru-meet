@@ -29,6 +29,29 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [meetingTitle, setMeetingTitle] = useState('+ New Call');
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  const currentMeetingIdRef = useRef<string | null>(null);
+  useEffect(() => { currentMeetingIdRef.current = currentMeetingId; }, [currentMeetingId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    listen('recording-discarded', async () => {
+      const meetingId = currentMeetingIdRef.current;
+      // Flush pending updates before removing this session's recovery copy.
+      finalFlushRef.current?.();
+      setCurrentMeetingId(null);
+      currentMeetingIdRef.current = null;
+      setTranscripts([]);
+      transcriptsRef.current = [];
+      setMeetingTitle('+ New Call');
+      if (meetingId) {
+        try { await indexedDBService.deleteMeeting(meetingId); }
+        catch (error) { console.error('Could not remove discarded meeting draft:', error); }
+      }
+    }).then(fn => { if (cancelled) fn(); else unlisten = fn; })
+      .catch(error => console.error('Could not listen for discarded recordings:', error));
+    return () => { cancelled = true; unlisten?.(); };
+  }, []);
 
   // Recording state context - provides backend-synced state
   const recordingState = useRecordingState();
@@ -95,6 +118,8 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         // Listen for recording-started event
         unlistenRecordingStarted = await recordingService.onRecordingStarted(async () => {
           try {
+            setTranscripts([]);
+            transcriptsRef.current = [];
             // Generate unique meeting ID
             const meetingId = `meeting-${Date.now()}`;
             setCurrentMeetingId(meetingId);

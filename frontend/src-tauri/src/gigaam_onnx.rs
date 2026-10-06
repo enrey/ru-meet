@@ -120,7 +120,7 @@ impl ActiveProvider {
         }
     }
 
-    fn from_assignments(
+    pub(crate) fn from_assignments(
         assignments: Vec<ProviderAssignment>,
         intended_accelerator: Option<AcceleratorKind>,
         registration_error: Option<String>,
@@ -176,7 +176,7 @@ impl ActiveProvider {
     }
 }
 
-fn read_provider_assignments(session: &Session) -> Result<Vec<ProviderAssignment>> {
+pub(crate) fn read_provider_assignments(session: &Session) -> Result<Vec<ProviderAssignment>> {
     let mut subgraphs_ptr: *const *const ort::sys::OrtEpAssignedSubgraph = ptr::null();
     let mut subgraph_count = 0usize;
     ortsys![unsafe Session_GetEpGraphAssignmentInfo(

@@ -1,6 +1,7 @@
 "use client"
 
 import { Switch } from "./ui/switch"
+import { SummarySpeechSettings } from "./SummarySpeechSettings"
 import { FlaskConical, AlertCircle } from "lucide-react"
 import { useConfig } from "@/contexts/ConfigContext"
 import {
@@ -59,6 +60,9 @@ export function BetaSettings() {
           </div>
         </div>
       ))}
+
+      {/* Reading summaries aloud: its own card, since it carries a voice picker */}
+      <SummarySpeechSettings />
 
       {/* Info Box */}
       <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">

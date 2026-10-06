@@ -16,7 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Sparkles, Settings, Loader2, FileText, Check, Square } from 'lucide-react';
+import { Sparkles, Settings, Loader2, FileText, Check, Square, Play, Pause } from 'lucide-react';
 import { useState, useEffect, ReactNode } from 'react';
 
 interface SummaryGeneratorButtonGroupProps {
@@ -35,6 +35,13 @@ interface SummaryGeneratorButtonGroupProps {
   hasSummary?: boolean;
   isModelConfigLoading?: boolean;
   onOpenModelSettings?: (openFn: () => void) => void;
+  /** Read the summary aloud; omitted when there is no summary to read. */
+  onToggleSpeech?: () => void;
+  /** End the reading; the next Play starts from the top. */
+  onStopSpeech?: () => void;
+  isSpeaking?: boolean;
+  isSpeechPaused?: boolean;
+  isSynthesizingSpeech?: boolean;
 }
 
 export function SummaryGeneratorButtonGroup({
@@ -52,7 +59,12 @@ export function SummaryGeneratorButtonGroup({
   hasSummary = false,
   isModelConfigLoading = false,
   onOpenModelSettings,
-  languageSlot
+  languageSlot,
+  onToggleSpeech,
+  onStopSpeech,
+  isSpeaking = false,
+  isSpeechPaused = false,
+  isSynthesizingSpeech = false,
 }: SummaryGeneratorButtonGroupProps) {
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
 
@@ -81,6 +93,50 @@ export function SummaryGeneratorButtonGroup({
 
   return (
     <ButtonGroup>
+      {/* Read the summary aloud: play / pause, with a separate stop */}
+      {onToggleSpeech && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onToggleSpeech}
+          disabled={isGenerating}
+          title={
+            !isSpeaking
+              ? 'Read the summary aloud'
+              : isSpeechPaused
+                ? 'Resume reading'
+                : 'Pause reading'
+          }
+          aria-label={
+            !isSpeaking
+              ? 'Read the summary aloud'
+              : isSpeechPaused
+                ? 'Resume reading'
+                : 'Pause reading'
+          }
+        >
+          {isSynthesizingSpeech && isSpeaking && !isSpeechPaused ? (
+            <Loader2 className="animate-spin" size={18} />
+          ) : isSpeaking && !isSpeechPaused ? (
+            <Pause size={18} />
+          ) : (
+            <Play size={18} />
+          )}
+        </Button>
+      )}
+
+      {onStopSpeech && isSpeaking && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onStopSpeech}
+          title="Stop reading"
+          aria-label="Stop reading"
+        >
+          <Square size={18} fill="currentColor" />
+        </Button>
+      )}
+
       {/* Generate Summary or Stop button */}
       {isGenerating ? (
         <Button

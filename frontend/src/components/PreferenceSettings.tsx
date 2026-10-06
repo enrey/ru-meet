@@ -5,6 +5,14 @@ import { Switch } from "./ui/switch"
 import { FolderOpen } from "lucide-react"
 import { invoke } from "@tauri-apps/api/core"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
+import { toast } from "sonner"
+
+interface AutomationPreferences {
+  autoRecordMeetings: boolean;
+  launchAtLogin: boolean;
+  autoRecordSupported: boolean;
+  excludedApps: string[];
+}
 
 export function PreferenceSettings() {
   const {
@@ -18,6 +26,53 @@ export function PreferenceSettings() {
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [previousNotificationsEnabled, setPreviousNotificationsEnabled] = useState<boolean | null>(null);
+  const [automation, setAutomation] = useState<AutomationPreferences | null>(null);
+  const [automationError, setAutomationError] = useState(false);
+  const [savingAutomation, setSavingAutomation] = useState(false);
+  const [excludedAppInput, setExcludedAppInput] = useState('');
+
+  const saveExcludedApps = async (apps: string[]) => {
+    if (!automation || savingAutomation) return;
+    setSavingAutomation(true);
+    try {
+      const excludedApps = await invoke<string[]>('set_auto_record_excluded_apps', { apps });
+      setAutomation(previous => previous && { ...previous, excludedApps });
+      setExcludedAppInput('');
+    } catch (error) {
+      toast.error('Не удалось сохранить исключения', { description: String(error) });
+    } finally {
+      setSavingAutomation(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<AutomationPreferences>('get_automation_preferences')
+      .then(preferences => { if (!cancelled) setAutomation(preferences); })
+      .catch(error => {
+        console.error('Failed to load automation preferences:', error);
+        if (!cancelled) setAutomationError(true);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const updateAutomation = async (key: 'autoRecordMeetings' | 'launchAtLogin', enabled: boolean) => {
+    if (!automation || savingAutomation) return;
+    setSavingAutomation(true);
+    try {
+      if (key === 'autoRecordMeetings') {
+        await invoke('set_auto_record_meetings', { enabled });
+        setAutomation(previous => previous && { ...previous, autoRecordMeetings: enabled });
+      } else {
+        const actual = await invoke<boolean>('set_launch_at_login', { enabled });
+        setAutomation(previous => previous && { ...previous, launchAtLogin: actual });
+      }
+    } catch (error) {
+      toast.error('Could not save preference', { description: String(error) });
+    } finally {
+      setSavingAutomation(false);
+    }
+  };
 
   // Lazy load preferences on mount (only loads if not already cached)
   useEffect(() => {
@@ -114,11 +169,80 @@ export function PreferenceSettings() {
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Notifications</h3>
+            <h3 id="notifications-label" className="text-lg font-semibold text-gray-900 mb-2">Notifications</h3>
             <p className="text-sm text-gray-600">Enable or disable notifications of start and end of meeting</p>
           </div>
-          <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
+          <Switch aria-labelledby="notifications-label" checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </div>
+      </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm space-y-6">
+        <div className="flex items-center justify-between gap-6">
+          <div>
+            <h3 id="auto-record-label" className="text-lg font-semibold text-gray-900 mb-2">Записывать встречи автоматически</h3>
+            <p id="auto-record-description" className="text-sm text-gray-600">
+              Автоматически начинать запись при появлении звукового потока любого приложения, кроме исключений.
+              Встречи короче 1 минуты игнорируются.
+            </p>
+            {automation && !automation.autoRecordSupported && (
+              <p className="mt-2 text-sm text-gray-600">Обнаружение встреч пока доступно только в Windows.</p>
+            )}
+          </div>
+          <Switch
+            aria-labelledby="auto-record-label"
+            aria-describedby="auto-record-description"
+            checked={automation?.autoRecordMeetings ?? true}
+            disabled={!automation || !automation.autoRecordSupported || savingAutomation}
+            onCheckedChange={enabled => void updateAutomation('autoRecordMeetings', enabled)}
+            className="shrink-0"
+          />
+        </div>
+        <div className="space-y-3">
+          <label htmlFor="auto-record-exclusion" className="block text-sm font-medium text-gray-900">Приложения-исключения</label>
+          <p id="auto-record-exclusion-help" className="text-sm text-gray-600">
+            Звук этих приложений не запускает запись. Укажите имя .exe, например Spotify.exe.
+            Звук Meetily всегда исключён. Исключения не удаляют звук из уже начавшейся записи.
+          </p>
+          <form className="flex gap-2" onSubmit={event => {
+            event.preventDefault();
+            if (automation && excludedAppInput.trim()) void saveExcludedApps([...automation.excludedApps, excludedAppInput]);
+          }}>
+            <input
+              id="auto-record-exclusion"
+              aria-describedby="auto-record-exclusion-help"
+              value={excludedAppInput}
+              onChange={event => setExcludedAppInput(event.target.value)}
+              placeholder="Spotify.exe"
+              disabled={!automation?.autoRecordSupported || savingAutomation}
+              className="min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:opacity-50"
+            />
+            <button type="submit" disabled={!automation?.autoRecordSupported || savingAutomation || !excludedAppInput.trim()} className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-blue-600">Добавить</button>
+          </form>
+          {!!automation?.excludedApps.length && (
+            <ul className="space-y-2">
+              {automation.excludedApps.map(name => (
+                <li key={name} className="flex items-center justify-between gap-3 rounded-md bg-gray-50 px-3 py-2">
+                  <span className="text-sm break-all">{name}</span>
+                  <button type="button" aria-label={`Удалить ${name} из исключений`} disabled={savingAutomation} onClick={() => void saveExcludedApps(automation.excludedApps.filter(app => app !== name))} className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-blue-600">Удалить</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-6 border-t border-gray-200 pt-6">
+          <div>
+            <h3 id="launch-at-login-label" className="text-lg font-semibold text-gray-900 mb-2">Запускать при загрузке ПК</h3>
+            <p className="text-sm text-gray-600">Запускать Meetily автоматически при входе в систему.</p>
+          </div>
+          <Switch
+            aria-labelledby="launch-at-login-label"
+            checked={automation?.launchAtLogin ?? false}
+            disabled={!automation || savingAutomation}
+            onCheckedChange={enabled => void updateAutomation('launchAtLogin', enabled)}
+            className="shrink-0"
+          />
+        </div>
+        {automationError && <p role="alert" className="text-sm text-red-600">Не удалось загрузить настройки автоматизации.</p>}
       </div>
 
       {/* Data Storage Locations Section */}

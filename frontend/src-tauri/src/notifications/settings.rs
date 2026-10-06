@@ -80,8 +80,8 @@ impl Default for NotificationSettings {
 impl Default for NotificationPreferences {
     fn default() -> Self {
         Self {
-            show_recording_started: false,
-            show_recording_stopped: false,
+            show_recording_started: true,
+            show_recording_stopped: true,
             show_recording_paused: true,
             show_recording_resumed: true,
             show_transcription_complete: true,
@@ -272,5 +272,16 @@ pub fn merge_with_defaults(partial: NotificationSettings) -> NotificationSetting
         consent_given: partial.consent_given,
         manual_dnd_mode: partial.manual_dnd_mode,
         notification_preferences: partial.notification_preferences,
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+    #[test]
+    fn fresh_install_enables_start_and_stop_notifications() {
+        let settings = NotificationSettings::default();
+        assert!(settings.notification_preferences.show_recording_started);
+        assert!(settings.notification_preferences.show_recording_stopped);
     }
 }

@@ -32,6 +32,7 @@ macro_rules! perf_trace {
 pub mod anthropic;
 pub mod api;
 pub mod audio;
+pub mod automation;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -374,6 +375,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
@@ -533,6 +535,11 @@ pub fn run() {
             // location.
             audio::vad::set_models_directory(&_app.handle());
 
+            // Reading a summary aloud loads ~1 GB of model files; do it now so
+            // the first Play does not wait for it.
+            audio::tts::load_settings(&_app.handle());
+            audio::tts::preload(&_app.handle());
+
             // Forward built-in-model generation progress to the UI. Registered
             // here because this is where the concrete AppHandle lives; the
             // summary pipeline only knows about the closure.
@@ -579,6 +586,10 @@ pub fn run() {
                     .set_error(error);
             }
 
+            if let Err(error) = automation::initialize(_app.handle()) {
+                log::error!("Could not initialize meeting automation: {error}");
+            }
+
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
             if let Ok(resource_path) = _app.handle().path().resource_dir() {
@@ -607,6 +618,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            automation::get_automation_preferences,
+            automation::set_auto_record_meetings,
+            automation::set_launch_at_login,
+            automation::set_auto_record_excluded_apps,
             stop_recording,
             audio::diarization::set_diarization_settings,
             audio::diarization::get_diarization_settings,
@@ -691,6 +706,11 @@ pub fn run() {
             audio::recording_commands::get_recording_meeting_name,
             // Playback device detection (Bluetooth warning)
             audio::recording_commands::get_active_audio_output,
+            // Reading the summary aloud
+            audio::tts::tts_speak,
+            audio::tts::tts_stop,
+            audio::tts::tts_get_status,
+            audio::tts::tts_set_settings,
             // Audio recovery commands (for transcript recovery feature)
             audio::incremental_saver::recover_audio_from_checkpoints,
             audio::incremental_saver::cleanup_checkpoints,

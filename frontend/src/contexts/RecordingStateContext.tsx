@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { recordingService } from '@/services/recordingService';
 import { toast } from 'sonner';
+import { listen } from '@tauri-apps/api/event';
 
 /**
  * Recording state synchronized with backend
@@ -189,6 +190,43 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
           stopPolling();
         });
         unsubscribers.push(unlistenStopped);
+
+        const unlistenDiscarded = await listen('recording-discarded', () => {
+          setState(previous => ({
+            ...previous,
+            status: RecordingStatus.IDLE,
+            statusMessage: undefined,
+            isRecording: false,
+            isPaused: false,
+            isActive: false,
+            recordingDuration: null,
+            activeDuration: null,
+          }));
+          stopPolling();
+          toast.info('Автоматическая встреча короче 1 минуты — запись не сохранена.');
+        });
+        unsubscribers.push(unlistenDiscarded);
+
+        const unlistenAutomaticError = await listen<string>('automatic-recording-error', async ({ payload }) => {
+          try {
+            const backend = await recordingService.getRecordingState();
+            if (!backend.is_recording) {
+              stopPolling();
+              setState(previous => ({
+                ...previous,
+                status: RecordingStatus.ERROR,
+                statusMessage: payload,
+                isRecording: false,
+                isPaused: false,
+                isActive: false,
+              }));
+            }
+          } catch (error) {
+            console.error('Could not sync after automatic recording error:', error);
+          }
+          toast.error('Не удалось выполнить автоматическую запись', { description: payload });
+        });
+        unsubscribers.push(unlistenAutomaticError);
 
         // Recording paused
         const unlistenPaused = await recordingService.onRecordingPaused(() => {

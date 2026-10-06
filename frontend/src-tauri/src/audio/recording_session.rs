@@ -29,6 +29,7 @@ struct SessionData {
     manager: Option<RecordingManager>,
     transcription_task: Option<JoinHandle<()>>,
     device_recovery_task: Option<JoinHandle<()>>,
+    automatic: bool,
 }
 
 impl Default for SessionData {
@@ -39,6 +40,7 @@ impl Default for SessionData {
             manager: None,
             transcription_task: None,
             device_recovery_task: None,
+            automatic: false,
         }
     }
 }
@@ -54,6 +56,8 @@ pub struct StopResources {
     pub manager: RecordingManager,
     pub transcription_task: Option<JoinHandle<()>>,
     pub device_recovery_task: Option<JoinHandle<()>>,
+    pub automatic: bool,
+    pub duration: f64,
 }
 
 struct StartGuard<'a>(&'a RecordingSession, u64);
@@ -86,12 +90,35 @@ impl RecordingSession {
         system_audio: Option<String>,
         meeting_name: Option<String>,
     ) -> Result<(), String> {
+        self.start_inner(app, microphone, system_audio, meeting_name, false)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn start_automatic<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        meeting_name: String,
+    ) -> Result<u64, String> {
+        self.start_inner(app, None, None, Some(meeting_name), true)
+            .await
+    }
+
+    async fn start_inner<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        microphone: Option<String>,
+        system_audio: Option<String>,
+        meeting_name: Option<String>,
+        automatic: bool,
+    ) -> Result<u64, String> {
         info!(
             "Starting recording with specific devices: mic={:?}, system={:?}, meeting={:?}",
             microphone, system_audio, meeting_name
         );
 
         let generation = self.begin_start()?;
+        self.lock().automatic = automatic;
         let _start_guard = StartGuard(self, generation);
         if let Err(error) = crate::ensure_onnx_runtime_available() {
             return Err(recording_commands::map_recording_start_error(
@@ -199,16 +226,43 @@ impl RecordingSession {
         );
         crate::tray::update_tray_menu(&app);
         info!("Recording started with custom devices using async-first approach");
-        Ok(())
+        Ok(generation)
     }
 
     pub async fn stop<R: Runtime>(
         &self,
         app: AppHandle<R>,
     ) -> Result<Option<FinalizedRecording>, String> {
-        let Some(mut resources) = self.begin_stop()? else {
+        let Some(resources) = self.begin_stop()? else {
             return Ok(None);
         };
+        self.finalize_stop(app, resources, None).await
+    }
+
+    /// Atomically match ownership before stopping: a manual Stop/Start must
+    /// never allow an old detector task to stop the new manual recording.
+    pub async fn stop_automatic<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        generation: u64,
+        detected_duration: f64,
+    ) -> Result<Option<FinalizedRecording>, String> {
+        let resources = self.begin_stop_matching(Some(generation))?;
+        match resources {
+            Some(resources) => {
+                self.finalize_stop(app, resources, Some(detected_duration))
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn finalize_stop<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        mut resources: StopResources,
+        detected_duration: Option<f64>,
+    ) -> Result<Option<FinalizedRecording>, String> {
         let _stop_guard = StopGuard(self, resources.generation);
 
         let _ = app.emit("recording-shutdown-progress", serde_json::json!({"stage":"stopping_audio", "message":"Stopping audio capture...", "progress":20}));
@@ -228,6 +282,23 @@ impl RecordingSession {
                 .map_err(|error| format!("Transcription worker failed: {error}"))?;
         }
         recording_commands::unload_transcription_engine(&app).await;
+
+        if should_ignore_recording(
+            resources.automatic,
+            detected_duration.unwrap_or(resources.duration),
+        ) {
+            resources
+                .manager
+                .discard_recording()
+                .await
+                .map_err(|e| e.to_string())?;
+            let _ = app.emit(
+                "recording-discarded",
+                serde_json::json!({"reason": "short_automatic_meeting"}),
+            );
+            crate::tray::update_tray_menu(&app);
+            return Ok(None);
+        }
 
         let meeting_name = resources
             .manager
@@ -378,7 +449,19 @@ impl RecordingSession {
     }
 
     pub fn begin_stop(&self) -> Result<Option<StopResources>, String> {
+        self.begin_stop_matching(None)
+    }
+
+    fn begin_stop_matching(
+        &self,
+        automatic_generation: Option<u64>,
+    ) -> Result<Option<StopResources>, String> {
         let mut data = self.lock();
+        if automatic_generation
+            .is_some_and(|generation| generation != data.generation || !data.automatic)
+        {
+            return Ok(None);
+        }
         match data.phase {
             SessionPhase::Idle => return Ok(None),
             SessionPhase::Starting => return Err("Recording is still starting".into()),
@@ -390,11 +473,14 @@ impl RecordingSession {
             .manager
             .take()
             .ok_or_else(|| "Active recording has no manager".to_string())?;
+        let duration = manager.get_recording_duration().unwrap_or(0.0);
         Ok(Some(StopResources {
             generation: data.generation,
             manager,
             transcription_task: data.transcription_task.take(),
             device_recovery_task: data.device_recovery_task.take(),
+            automatic: data.automatic,
+            duration,
         }))
     }
 
@@ -410,6 +496,13 @@ impl RecordingSession {
 
     pub fn phase(&self) -> SessionPhase {
         self.lock().phase
+    }
+
+    pub fn is_automatic_generation(&self, generation: u64) -> bool {
+        let data = self.lock();
+        data.generation == generation
+            && data.automatic
+            && matches!(data.phase, SessionPhase::Recording | SessionPhase::Paused)
     }
 
     pub fn is_active(&self) -> bool {
@@ -491,9 +584,36 @@ impl RecordingSession {
 
 pub static RECORDING_SESSION: LazyLock<RecordingSession> = LazyLock::new(RecordingSession::new);
 
+fn should_ignore_recording(automatic: bool, duration: f64) -> bool {
+    automatic && duration < 60.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_minute_threshold_only_applies_to_automatic_recordings() {
+        assert!(should_ignore_recording(true, 59.999));
+        assert!(!should_ignore_recording(true, 60.0));
+        assert!(!should_ignore_recording(true, 61.0));
+        assert!(!should_ignore_recording(false, 0.5));
+    }
+
+    #[test]
+    fn automatic_stop_cannot_take_a_new_manual_session() {
+        let session = RecordingSession::new();
+        let generation = session.begin_start().unwrap();
+        assert!(session
+            .begin_stop_matching(Some(generation))
+            .unwrap()
+            .is_none());
+        assert!(session
+            .begin_stop_matching(Some(generation.wrapping_sub(1)))
+            .unwrap()
+            .is_none());
+        assert_eq!(session.phase(), SessionPhase::Starting);
+    }
 
     #[test]
     fn rejects_concurrent_start_and_stale_abort() {

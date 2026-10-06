@@ -400,6 +400,11 @@ impl RecordingManager {
     }
 
     /// Save recording after transcription is complete
+    pub async fn discard_recording(&mut self) -> Result<()> {
+        self.recording_saver.discard().await
+    }
+
+    /// Save recording after transcription is complete
     pub async fn save_recording_only<R: tauri::Runtime>(
         &mut self,
         app: &tauri::AppHandle<R>,

@@ -6,7 +6,8 @@ import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
 import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
-import { useEffect, useRef, useState, RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, RefObject } from 'react';
+import { useSummarySpeech } from '@/hooks/useSummarySpeech';
 import { useSummaryProgress } from '@/hooks/meeting-details/useSummaryProgress';
 import { toast } from 'sonner';
 import { Languages, ChevronDown } from 'lucide-react';
@@ -216,6 +217,32 @@ export function SummaryPanel({
   const hasSummary = hasVisibleSummaryContent(aiSummary);
   const summaryProgress = useSummaryProgress(isSummaryLoading);
 
+  // Same text the copy action uses: the editor's markdown, falling back to
+  // whatever the stored summary carries.
+  const getSummaryMarkdown = useCallback(async () => {
+    const fromEditor = await summaryRef.current?.getMarkdown?.();
+    if (fromEditor) return fromEditor;
+    if (aiSummary && typeof aiSummary.markdown === 'string') return aiSummary.markdown;
+    return '';
+  }, [summaryRef, aiSummary]);
+
+  const speech = useSummarySpeech(getSummaryMarkdown);
+
+  useEffect(() => {
+    if (speech.error) toast.error(speech.error);
+  }, [speech.error]);
+
+  useEffect(() => {
+    if (speech.notice) toast.info(speech.notice);
+  }, [speech.notice]);
+
+  const handleToggleSpeech = () => {
+    void speech.toggle().catch((error) => {
+      console.error('Summary speech failed:', error);
+      toast.error(error instanceof Error ? error.message : 'Could not read the summary aloud');
+    });
+  };
+
   const languageSlot = (
     <Popover open={langPickerOpen} onOpenChange={setLangPickerOpen}>
       <PopoverTrigger asChild>
@@ -266,6 +293,11 @@ export function SummaryPanel({
               isModelConfigLoading={isModelConfigLoading}
               onOpenModelSettings={onOpenModelSettings}
               languageSlot={transcripts.length > 0 || hasSummary ? languageSlot : undefined}
+              onToggleSpeech={hasSummary && speech.isAvailable ? handleToggleSpeech : undefined}
+              onStopSpeech={speech.stop}
+              isSpeaking={speech.isActive}
+              isSpeechPaused={speech.isPaused}
+              isSynthesizingSpeech={speech.isBuffering}
             />
           </div>
 
