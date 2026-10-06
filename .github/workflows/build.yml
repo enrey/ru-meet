@@ -138,7 +138,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          prefix-key: ${{ runner.os == 'Windows' && 'windows-portable-v1' || 'v0-rust' }}
+          prefix-key: ${{ runner.os == 'Windows' && 'windows-portable-v2-vulkan-1.4.357' || 'v0-rust' }}
           key: ${{ inputs.platform }}-${{ inputs.target }}-vulkan-v2
 
       - name: install dependencies (ubuntu 24.04)
@@ -163,8 +163,15 @@ jobs:
         if: contains(inputs.platform, 'windows')
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
-          version: 1.4.309.0
+          version: 1.4.357.0
           cache: true
+
+      - name: Verify Vulkan development packages
+        if: contains(inputs.platform, 'windows')
+        shell: pwsh
+        run: |
+          ./.github/tests/native-ci.ps1
+          ./.github/prepare-vulkan.ps1
 
       - name: Verify and Configure Vulkan SDK (Windows)
         if: contains(inputs.platform, 'windows')
@@ -231,8 +238,8 @@ jobs:
           $possiblePaths = @(
             "$vulkanSdk\Bin\vulkan-1.dll",
             "$vulkanSdk\runtime\x64\vulkan-1.dll",
-            "C:\VulkanSDK\1.4.309.0\Bin\vulkan-1.dll",
-            "C:\VulkanSDK\1.4.309.0\runtime\x64\vulkan-1.dll",
+            "C:\VulkanSDK\1.4.357.0\Bin\vulkan-1.dll",
+            "C:\VulkanSDK\1.4.357.0\runtime\x64\vulkan-1.dll",
             "$env:ProgramFiles\VulkanSDK\Bin\vulkan-1.dll",
             "$env:SystemRoot\System32\vulkan-1.dll"
           )
@@ -576,17 +583,18 @@ jobs:
           $vulkanOk = $false
           for ($i = 1; $i -le 3; $i++) {
             Write-Host "Vulkan build attempt $i/3..."
-            cargo build --release -p llama-helper --features vulkan
+            ./.github/reset-incomplete-llama-cmake.ps1
+            cargo build --locked --release -p llama-helper --features vulkan
             if ($LASTEXITCODE -eq 0) {
               $vulkanOk = $true
               break
             }
-            Write-Warning "Vulkan build attempt $i failed (likely the known vulkan-shaders-gen race)"
+            Write-Warning "Vulkan build attempt $i failed; see the compiler/CMake error above."
           }
 
           if (-not $vulkanOk) {
             Write-Warning "Vulkan build failed after 3 attempts, falling back to CPU-only llama-helper"
-            cargo build --release -p llama-helper
+            cargo build --locked --release -p llama-helper
 
             if ($LASTEXITCODE -ne 0) {
               Write-Error "Failed to build llama-helper"
@@ -617,7 +625,7 @@ jobs:
           fi
 
           # Build llama-helper from workspace root
-          cargo build --release -p llama-helper $LLAMA_FEATURES
+          cargo build --locked --release -p llama-helper $LLAMA_FEATURES
 
           # Determine target triple and binary extension
           TARGET="${{ inputs.target }}"

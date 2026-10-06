@@ -8,6 +8,8 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 llama-cpp-2 = "=0.1.156"
+# The wrapper's semver range admits incompatible changes in the native API.
+llama-cpp-sys-2 = { version = "=0.1.156", default-features = false }
 encoding_rs = "0.8"
 
 [features]

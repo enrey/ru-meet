@@ -118,7 +118,7 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          prefix-key: ${{ runner.os == 'Windows' && 'windows-portable-v1' || 'v0-rust' }}
+          prefix-key: ${{ runner.os == 'Windows' && 'windows-portable-v2-vulkan-1.4.357' || 'v0-rust' }}
           key: ${{ matrix.platform }}-${{ matrix.target }}
 
       # Platform-specific dependencies
@@ -163,8 +163,15 @@ jobs:
         if: contains(matrix.platform, 'windows')
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
-          version: 1.4.309.0
+          version: 1.4.357.0
           cache: true
+
+      - name: Verify Vulkan development packages
+        if: contains(matrix.platform, 'windows')
+        shell: pwsh
+        run: |
+          ./.github/tests/native-ci.ps1
+          ./.github/prepare-vulkan.ps1
 
       - name: Install frontend dependencies
         run: |
@@ -386,18 +393,19 @@ jobs:
             vulkan_ok=0
             for i in 1 2 3; do
               echo "Vulkan build attempt $i/3..."
-              if cargo build --release -p llama-helper $LLAMA_FEATURES; then
+              pwsh -NoProfile -File .github/reset-incomplete-llama-cmake.ps1
+              if cargo build --locked --release -p llama-helper $LLAMA_FEATURES; then
                 vulkan_ok=1
                 break
               fi
-              echo "::warning::Vulkan build attempt $i failed (likely the known vulkan-shaders-gen race)"
+              echo "::warning::Vulkan build attempt $i failed; see the compiler/CMake error above."
             done
             if [[ "$vulkan_ok" -ne 1 ]]; then
               echo "::warning::Vulkan build failed after 3 attempts, falling back to CPU-only llama-helper"
-              cargo build --release -p llama-helper
+              cargo build --locked --release -p llama-helper
             fi
           else
-            cargo build --release -p llama-helper $LLAMA_FEATURES
+            cargo build --locked --release -p llama-helper $LLAMA_FEATURES
           fi
 
           # Determine binary extension

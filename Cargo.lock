@@ -3533,9 +3533,9 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-2"
-version = "0.1.157"
+version = "0.1.156"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdd0b39fc874267312983364d48379179a7945ad9d4c068c176304ae1cdca1ec"
+checksum = "aaeb4c4a83335b5e3f1ae87aaa3af447a249dac1b1f8b2249e33b1d74da104a3"
 dependencies = [
  "bindgen 0.72.1",
  "cc",
@@ -3552,6 +3552,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "llama-cpp-2",
+ "llama-cpp-sys-2",
  "serde",
  "serde_json",
 ]

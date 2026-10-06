@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.19)
+project(VulkanDevelopmentPackageCheck LANGUAGES NONE)
+find_package(SPIRV-Headers CONFIG REQUIRED)
+if(NOT TARGET SPIRV-Headers::SPIRV-Headers)
+    message(FATAL_ERROR "SPIRV-Headers package does not export its expected target")
+endif()
+get_target_property(header_dirs SPIRV-Headers::SPIRV-Headers INTERFACE_INCLUDE_DIRECTORIES)
+message(STATUS "SPIRV-Headers imported successfully: ${header_dirs}")

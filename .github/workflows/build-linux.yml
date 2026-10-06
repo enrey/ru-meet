@@ -189,7 +189,7 @@ jobs:
       - name: Build llama-helper sidecar
         run: |
           echo "Building llama-helper sidecar (CPU mode)..."
-          cargo build --release -p llama-helper
+          cargo build --locked --release -p llama-helper
           
           # Copy binary to binaries directory
           mkdir -p frontend/src-tauri/binaries

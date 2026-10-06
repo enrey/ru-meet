@@ -30,7 +30,7 @@ args: --target x86_64-pc-windows-msvc --features vulkan
 
 **How it works:**
 
-- CI installs Vulkan SDK `1.4.309.0` and validates its environment before building.
+- CI installs Vulkan SDK `1.4.357.0` and validates its environment and SPIRV-Headers CMake package before building.
 - The Tauri build enables the Vulkan feature for Windows.
 - The packaged artifact remains Vulkan-based; CUDA is a source-build choice.
 
@@ -52,7 +52,7 @@ Rust target flags do not configure Whisper's native C/C++ compilation. Do not re
 
 ### 3. Portable Cache and Pre-Bundle Verification
 
-Windows portable builds use the `windows-portable-v1` Rust-cache prefix, preventing an earlier host-native target cache from being restored through a fallback key.
+Windows portable builds use the `windows-portable-v2-vulkan-1.4.357` Rust-cache prefix, preventing an earlier host-native or old-SDK target cache from being restored through a fallback key.
 
 Before bundling, `verify-portable-ggml.cjs` reads Whisper's generated CMake cache. It fails the build if native-build evidence is missing, `GGML_NATIVE` is enabled, or any of the four AVX-512 options is enabled. This prevents an unverified native library from becoming an installer asset.
 
@@ -81,9 +81,9 @@ Metal is enabled by default for macOS builds. Apple Silicon builds can also use 
 When building Windows, the shared workflow:
 
 - Enables the Vulkan feature.
-- Installs and validates Vulkan SDK `1.4.309.0`.
+- Installs and validates Vulkan SDK `1.4.357.0`, including SPIRV-Headers.
 - Applies the portable CMake hook and `x86-64-v2` Rust target.
-- Uses the `windows-portable-v1` cache prefix.
+- Uses the `windows-portable-v2-vulkan-1.4.357` cache prefix.
 - Runs the pre-bundle Whisper verification.
 
 For Linux builds, it can enable OpenBLAS. macOS uses Metal by default.
@@ -102,7 +102,7 @@ The standalone Windows workflow uses the Vulkan feature and applies the same por
 
 1. **Check the workflow configuration**
    - Windows build arguments include `--features vulkan`.
-   - Vulkan SDK `1.4.309.0` is installed and validated.
+   - Vulkan SDK `1.4.357.0` and its SPIRV-Headers package are installed and validated.
    - `CMAKE_PROJECT_INCLUDE` uses the portable hook.
    - Rust uses `-C target-cpu=x86-64-v2`.
 
@@ -112,7 +112,7 @@ The standalone Windows workflow uses the Vulkan feature and applies the same por
    - The `verify-portable-ggml.cjs` command completes before bundling.
 
 3. **Check cache isolation**
-   - Windows builds use the `windows-portable-v1` cache prefix.
+   - Windows builds use the `windows-portable-v2-vulkan-1.4.357` cache prefix.
    - Do not reuse a native cache whose CPU configuration is unknown.
 
 ### Runtime Verification
@@ -146,8 +146,15 @@ OpenBLAS is appropriate for Linux CI runners without a GPU. For local Linux deve
 ### Build Fails with a Windows Vulkan Error
 
 - Confirm the Vulkan SDK installation and environment-validation steps completed.
-- Confirm the workflow still uses SDK `1.4.309.0`.
+- Confirm the workflow still uses SDK `1.4.357.0` and can import `SPIRV-Headers`.
 - pnpm installation does not install or repair the Vulkan SDK.
+
+### llama-helper Build Fails
+
+- Keep `llama-cpp-2` and `llama-cpp-sys-2` pinned together at `=0.1.156`; the newer sys API is incompatible with this wrapper.
+- Helper builds use `--locked`, including CPU fallback and macOS Metal builds.
+- Before a Windows Vulkan retry, `reset-incomplete-llama-cmake.ps1` removes only an incomplete configuration cache. Valid generated projects and shader compilation artifacts are retained.
+- Run `pwsh -File .github/tests/native-ci.ps1` to check cache handling and SDK package discovery.
 
 ### Portability Verification Fails
 

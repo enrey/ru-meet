@@ -1,0 +1,48 @@
+$ErrorActionPreference = 'Stop'
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$relativeTarget = 'target/agent-validation/ci-script-tests-' + [guid]::NewGuid().ToString('N')
+$testRoot = Join-Path $repositoryRoot $relativeTarget
+$broken = Join-Path $testRoot 'release/build/llama-cpp-sys-2-broken/out/build'
+$valid = Join-Path $testRoot 'release/build/llama-cpp-sys-2-valid/out/build'
+$unrelated = Join-Path $testRoot 'release/build/another-crate/out/build'
+$originalSdk = $env:VULKAN_SDK
+$originalPrefix = $env:CMAKE_PREFIX_PATH
+$originalGithubEnv = $env:GITHUB_ENV
+try {
+    foreach ($directory in @($broken, $valid, $unrelated)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $directory 'CMakeCache.txt') | Out-Null
+    }
+    New-Item -ItemType File -Path (Join-Path $valid 'INSTALL.vcxproj') | Out-Null
+    & (Join-Path $repositoryRoot '.github/reset-incomplete-llama-cmake.ps1') -TargetDirectory $relativeTarget
+    if (Test-Path -LiteralPath (Join-Path $broken 'CMakeCache.txt')) { throw 'Incomplete cache was not reset.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $valid 'CMakeCache.txt'))) { throw 'Valid cache was removed.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $unrelated 'CMakeCache.txt'))) { throw 'Unrelated cache was removed.' }
+    $rejected = $false
+    try { & (Join-Path $repositoryRoot '.github/reset-incomplete-llama-cmake.ps1') -TargetDirectory '..' }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'Target outside repository was accepted.' }
+    $env:GITHUB_ENV = $null
+    $env:VULKAN_SDK = $testRoot
+    $rejected = $false
+    try { & (Join-Path $repositoryRoot '.github/prepare-vulkan.ps1') }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'Incomplete Vulkan SDK was accepted.' }
+    if ($originalSdk) {
+        $env:VULKAN_SDK = $originalSdk
+        & (Join-Path $repositoryRoot '.github/prepare-vulkan.ps1')
+        cmake -S $PSScriptRoot -B (Join-Path $testRoot 'package-check') "-DCMAKE_PREFIX_PATH=$originalSdk"
+        if ($LASTEXITCODE -ne 0) { throw 'CMake could not import SPIRV-Headers.' }
+    }
+    Write-Host 'Native CI script tests passed.'
+} finally {
+    $env:VULKAN_SDK = $originalSdk
+    $env:CMAKE_PREFIX_PATH = $originalPrefix
+    $env:GITHUB_ENV = $originalGithubEnv
+    # Delete only the exact, newly created fixture tree inside agent-validation.
+    $expectedParent = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'target/agent-validation'))
+    if ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($testRoot)) -ne $expectedParent) {
+        throw 'Unsafe test cleanup path.'
+    }
+    if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
+}
