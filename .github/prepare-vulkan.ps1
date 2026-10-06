@@ -5,7 +5,7 @@ $sdkRoot = $env:VULKAN_SDK
 if (-not $sdkRoot -or -not (Test-Path -LiteralPath $sdkRoot -PathType Container)) {
     throw 'VULKAN_SDK must point to an installed SDK.'
 }
-foreach ($relativePath in @('Bin/glslc.exe', 'Lib/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake', 'Include/spirv/unified1/spirv.hpp')) {
+foreach ($relativePath in @('Bin/glslc.exe', 'Lib/vulkan-1.lib', 'Include/vulkan/vulkan.h', 'Include/vulkan/vulkan.hpp', 'Lib/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake', 'Include/spirv/unified1/spirv.hpp')) {
     if (-not (Test-Path -LiteralPath (Join-Path $sdkRoot $relativePath) -PathType Leaf)) {
         throw "Vulkan SDK is missing $relativePath. Install the pinned SDK with its development files."
     }

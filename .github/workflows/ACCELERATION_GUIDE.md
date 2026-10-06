@@ -147,7 +147,7 @@ OpenBLAS is appropriate for Linux CI runners without a GPU. For local Linux deve
 
 - Confirm the Vulkan SDK installation and environment-validation steps completed.
 - Confirm the workflow still uses SDK `1.4.357.0` and can import `SPIRV-Headers`.
-- `install-vulkan-sdk` unpacks the installer with 7z rather than running its optional-component installation. `install-spirv-headers.ps1` explicitly installs the upstream header-only development package, pinned to the SDK's commit, when it is missing.
+- `install-vulkan-sdk.ps1` runs the official, signature-verified LunarG installer in `copy_only=1` mode, providing the real Vulkan headers and import library without changing system registration. Preflight checks locate Vulkan in this exact SDK and compile/link a small C++ program. `install-spirv-headers.ps1` installs the pinned upstream header-only package when it is missing.
 - pnpm installation does not install or repair the Vulkan SDK.
 
 ### llama-helper Build Fails

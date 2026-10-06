@@ -161,10 +161,8 @@ jobs:
 
       - name: Install Vulkan SDK (Windows)
         if: contains(matrix.platform, 'windows')
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.4.357.0
-          cache: true
+        shell: pwsh
+        run: ./.github/install-vulkan-sdk.ps1
 
       - name: Verify Vulkan development packages
         if: contains(matrix.platform, 'windows')

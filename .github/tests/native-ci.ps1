@@ -32,7 +32,11 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $testRoot 'Bin') | Out-Null
     New-Item -ItemType File -Path (Join-Path $testRoot 'Bin/glslc.exe') | Out-Null
     & (Join-Path $repositoryRoot '.github/install-spirv-headers.ps1') -SdkRoot $testRoot
-    & (Join-Path $repositoryRoot '.github/prepare-vulkan.ps1')
+    # Installing SPIRV-Headers must not make a binaries-only SDK pass preflight.
+    $rejected = $false
+    try { & (Join-Path $repositoryRoot '.github/prepare-vulkan.ps1') }
+    catch { $rejected = $true }
+    if (-not $rejected) { throw 'SDK without Vulkan headers/library was accepted.' }
     cmake -S $PSScriptRoot -B (Join-Path $testRoot 'installed-package-check') "-DCMAKE_PREFIX_PATH=$testRoot" "-DEXPECTED_SPIRV_PREFIX=$testRoot"
     if ($LASTEXITCODE -ne 0) { throw 'CMake could not import explicitly installed SPIRV-Headers.' }
     # A second invocation must not download or reinstall the package.
@@ -40,8 +44,10 @@ try {
     if ($originalSdk) {
         $env:VULKAN_SDK = $originalSdk
         & (Join-Path $repositoryRoot '.github/prepare-vulkan.ps1')
-        cmake -S $PSScriptRoot -B (Join-Path $testRoot 'package-check') "-DCMAKE_PREFIX_PATH=$originalSdk"
+        cmake -S $PSScriptRoot -B (Join-Path $testRoot 'package-check') "-DCMAKE_PREFIX_PATH=$originalSdk" "-DEXPECTED_VULKAN_PREFIX=$originalSdk" -DREQUIRE_VULKAN=ON
         if ($LASTEXITCODE -ne 0) { throw 'CMake could not import SPIRV-Headers.' }
+        cmake --build (Join-Path $testRoot 'package-check') --config Release
+        if ($LASTEXITCODE -ne 0) { throw 'Vulkan development headers/library failed the compile/link check.' }
     }
     Write-Host 'Native CI script tests passed.'
 } finally {

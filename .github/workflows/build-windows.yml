@@ -530,10 +530,8 @@ jobs:
           key: windows-x64-vulkan-v2
 
       - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.4.357.0
-          cache: true
+        shell: pwsh
+        run: ./.github/install-vulkan-sdk.ps1
 
       - name: Verify Vulkan development packages
         shell: pwsh
