@@ -19,6 +19,7 @@ import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
+import { useI18n } from '@/lib/i18n';
 
 export default function Home() {
   // Local page state (not moved to contexts)
@@ -58,6 +59,7 @@ export default function Home() {
   } = useTranscriptRecovery();
 
   const router = useRouter();
+  const { t } = useI18n();
 
   // Startup recovery check
   useEffect(() => {
@@ -116,12 +118,12 @@ export default function Home() {
       const result = await recoverMeeting(meetingId);
 
       if (result.success) {
-        toast.success('Meeting recovered successfully!', {
+        toast.success(t('Meeting recovered successfully!'), {
           description: result.audioRecoveryStatus?.status === 'success'
-            ? 'Transcripts and audio recovered'
-            : 'Transcripts recovered (no audio available)',
+            ? t('Transcripts and audio recovered')
+            : t('Transcripts recovered (no audio available)'),
           action: result.meetingId ? {
-            label: 'View Meeting',
+            label: t('View Meeting'),
             onClick: () => {
               router.push(`/meeting-details?id=${result.meetingId}`);
             }
@@ -145,8 +147,8 @@ export default function Home() {
         }
       }
     } catch (error) {
-      toast.error('Failed to recover meeting', {
-        description: error instanceof Error ? error.message : 'Unknown error occurred',
+      toast.error(t('Failed to recover meeting'), {
+        description: error instanceof Error ? error.message : t('Unknown error occurred'),
       });
       throw error;
     }

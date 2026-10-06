@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
 import { Play, Square } from "lucide-react";
 import { usePhrasePlayback } from "@/hooks/usePhrasePlayback";
+import { useI18n } from "@/lib/i18n";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -104,7 +105,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
     isPlaying: boolean;
     onTogglePlay: (id: string, start: number, end?: number) => void;
 }) {
-    const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
+    const { t } = useI18n();
+    const displayText = cleanStopWords(text) || (text.trim() === '' ? `[${t('Silence')}]` : text);
 
     return (
         <div id={`segment-${id}`} className={`${tightBelow ? 'mb-1' : 'mb-3'} rounded-md ${isHighlighted ? 'bg-blue-50 ring-2 ring-blue-400 ring-offset-2' : ''}`}>
@@ -114,8 +116,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
                         type="button"
                         onClick={() => onTogglePlay(id, timestamp, endTime)}
                         className="mt-1 flex-shrink-0 leading-none text-gray-400 transition-colors hover:text-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:ring-offset-1 rounded-sm"
-                        aria-label={isPlaying ? 'Stop playback' : 'Play this phrase'}
-                        title={isPlaying ? 'Stop' : 'Play this phrase'}
+                        aria-label={isPlaying ? t('Stop playback') : t('Play this phrase')}
+                        title={isPlaying ? t('Stop') : t('Play this phrase')}
                     >
                         {isPlaying ? <Square className="h-3 w-3 fill-current" /> : <Play className="h-3 w-3" />}
                     </button>
@@ -169,6 +171,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 }) => {
     // Per-phrase audio playback from the meeting's own recording.
     const playback = usePhrasePlayback(meetingId);
+    const { t } = useI18n();
 
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -292,7 +295,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     disabled={isLoadingPrevious}
                     onClick={onLoadPrevious}
                 >
-                    {isLoadingPrevious ? 'Loading earlier…' : 'Load earlier transcript'}
+                    {isLoadingPrevious ? t('Loading earlier…') : t('Load earlier transcript')}
                 </button>
             )}
             {/* Recording Status Bar - Sticky at top, always visible when recording */}
@@ -319,16 +322,16 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                 <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-blue-500 animate-pulse'}`}></div>
                             </div>
                             <p className="text-sm text-gray-600">
-                                {isPaused ? 'Recording paused' : 'Listening for speech...'}
+                                {isPaused ? t('Recording paused') : t('Listening for speech...')}
                             </p>
                             <p className="text-xs mt-1 text-gray-400">
-                                {isPaused ? 'Click resume to continue recording' : 'Speak to see live transcription'}
+                                {isPaused ? t('Click resume to continue recording') : t('Speak to see live transcription')}
                             </p>
                         </>
                     ) : (
                         <>
-                            <p className="text-lg font-semibold">Welcome to meetily!</p>
-                            <p className="text-xs mt-1">Start recording to see live transcription</p>
+                            <p className="text-lg font-semibold">{t('Welcome to meetily!')}</p>
+                            <p className="text-xs mt-1">{t('Start recording to see live transcription')}</p>
                         </>
                     )}
                 </motion.div>
@@ -391,7 +394,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             {isLoadingMore ? (
                                 <div className="flex items-center gap-2 text-gray-500">
                                     <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
-                                    <span className="text-sm">Loading more...</span>
+                                    <span className="text-sm">{t('Loading more...')}</span>
                                 </div>
                             ) : hasMore && totalCount > 0 ? (
                                 <span className="text-sm text-gray-400">
@@ -410,7 +413,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             className="flex items-center gap-2 mt-4 text-gray-500"
                         >
                             <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                            <span className="text-sm">Listening...</span>
+                            <span className="text-sm">{t('Listening...')}</span>
                         </motion.div>
                     )}
                 </>
@@ -455,7 +458,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             {isLoadingMore ? (
                                 <div className="flex items-center gap-2 text-gray-500">
                                     <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
-                                    <span className="text-sm">Loading more...</span>
+                                    <span className="text-sm">{t('Loading more...')}</span>
                                 </div>
                             ) : hasMore && totalCount > 0 ? (
                                 <span className="text-sm text-gray-400">
@@ -474,7 +477,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             className="flex items-center gap-2 mt-4 text-gray-500"
                         >
                             <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                            <span className="text-sm">Listening...</span>
+                            <span className="text-sm">{t('Listening...')}</span>
                         </motion.div>
                     )}
                 </>

@@ -12,6 +12,7 @@ import { SummaryModelSettings } from '@/components/SummaryModelSettings';
 import { BetaSettings } from '@/components/BetaSettings';
 import { DiarizationSettings } from '@/components/DiarizationSettings';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useI18n } from '@/lib/i18n';
 
 // Tabs configuration (constant)
 const TABS = [
@@ -26,6 +27,7 @@ const TABS = [
 export default function SettingsPage() {
   const router = useRouter();
   const { transcriptModelConfig, setTranscriptModelConfig } = useConfig();
+  const { t } = useI18n();
 
   // Animation state for tabs
   const [activeTab, setActiveTab] = useState('general');
@@ -123,14 +125,14 @@ export default function SettingsPage() {
               className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
-              <span>Back</span>
+              <span>{t('Back')}</span>
             </button>
-            <h1 className="text-3xl font-bold">Settings</h1>
+            <h1 className="text-3xl font-bold">{t('Settings')}</h1>
           </div>
         </div>
       </div>
 
-      <nav aria-label="Settings sections" className="shrink-0 bg-gray-50 px-4 sm:px-8">
+      <nav aria-label={t('Settings sections')} className="shrink-0 bg-gray-50 px-4 sm:px-8">
         <div className="max-w-6xl mx-auto overflow-x-auto">
             <div className="flex relative w-max min-w-full border-b border-gray-200">
               {TABS.map((tab, index) => {
@@ -148,7 +150,7 @@ export default function SettingsPage() {
                     className={`flex items-center gap-2 px-4 sm:px-6 py-4 whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600 relative z-10 ${activeTab === tab.value ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
                   >
                     <Icon className="w-4 h-4" aria-hidden="true" />
-                    {tab.label}
+                    {t(tab.label)}
                   </a>
                 );
               })}
@@ -175,7 +177,7 @@ export default function SettingsPage() {
               className="py-8 first:pt-0 border-b border-gray-200 last:border-b-0"
             >
               <h2 id={`settings-heading-${tab.value}`} className="text-xl font-semibold text-gray-900 mb-6">
-                {tab.label}
+                {t(tab.label)}
               </h2>
               {tab.value === 'general' && <PreferenceSettings />}
               {tab.value === 'recording' && <RecordingSettings />}

@@ -5,6 +5,7 @@ import { MeetingSummary, SummaryProcessResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+import { translate } from '@/lib/i18n';
 import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
 import { SpeakerTimeline } from '@/components/MeetingDetails/SpeakerTimeline';
 import { SummaryPanel } from '@/components/MeetingDetails/SummaryPanel';
@@ -120,10 +121,10 @@ export default function PageContent({
       const { emit } = await import('@tauri-apps/api/event');
       await emit('model-config-updated', config);
 
-      toast.success('Model settings saved successfully');
+      toast.success(translate('Model settings saved successfully'));
     } catch (error) {
       console.error('Failed to save model config:', error);
-      toast.error('Failed to save model settings');
+      toast.error(translate('Failed to save model settings'));
     }
   };
 
@@ -209,10 +210,10 @@ export default function PageContent({
               setActiveTab('transcript');
               setTranscriptJump((current) => ({ id, request: (current?.request ?? 0) + 1 }));
             } else {
-              toast.info('No transcript phrase was found at this time');
+              toast.info(translate('No transcript phrase was found at this time'));
             }
           } catch (error) {
-            toast.error('Could not jump to transcript', { description: String(error) });
+            toast.error(translate('Could not jump to transcript'), { description: String(error) });
           }
         }}
       />

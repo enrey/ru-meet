@@ -6,6 +6,7 @@ import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/shadcn";
 import "@blocknote/shadcn/style.css";
 import "@blocknote/core/fonts/inter.css";
+import { blockNoteDictionary } from "@/lib/i18n/blocknote";
 
 interface EditorProps {
   initialContent?: Block[];
@@ -22,6 +23,7 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
 
   const editor = useCreateBlockNote({
     initialContent: initialContent as PartialBlock[] | undefined,
+    dictionary: blockNoteDictionary(),
   });
 
   console.log('📝 EDITOR: BlockNote editor created successfully');

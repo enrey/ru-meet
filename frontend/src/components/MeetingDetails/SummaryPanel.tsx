@@ -22,6 +22,7 @@ import {
   SummaryLanguageStorage,
 } from '@/lib/summary-language-preferences';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
+import { getIntlLocale, useI18n } from '@/lib/i18n';
 
 interface SummaryPanelProps {
   meeting: {
@@ -106,12 +107,13 @@ export function SummaryPanel({
   } | null>(null);
   activeMeetingIdRef.current = meeting.id;
   const { addRecent } = useRecentLanguages();
+  const { t, locale } = useI18n();
 
-  const effectiveLangLabel = summaryLang ? labelForCode(summaryLang) : 'Auto';
+  const effectiveLangLabel = summaryLang ? labelForCode(summaryLang) : t('Auto');
   const isLocalFallbackLanguage = summaryLangStorage === 'local_fallback';
   const autoSubtitle = isLocalFallbackLanguage
-    ? 'Saved on this device for folderless meetings'
-    : 'Uses dominant transcript language';
+    ? t('Saved on this device for folderless meetings')
+    : t('Uses dominant transcript language');
 
   useEffect(() => {
     let cancelled = false;
@@ -127,8 +129,8 @@ export function SummaryPanel({
         }
       } catch (err) {
         console.error('Failed to load summary language:', err);
-        toast.warning('Could not load saved summary language', {
-          description: 'Using Auto until meeting metadata can be read.',
+        toast.warning(t('Could not load saved summary language'), {
+          description: t('Using Auto until meeting metadata can be read.'),
         });
         if (!cancelled && languageLoadVersionRef.current === loadVersion) setSummaryLang(null);
       }
@@ -160,8 +162,8 @@ export function SummaryPanel({
             setSummaryLang(saved.language);
             setSummaryLangStorage(saved.storage);
             if (saved.storage === 'local_fallback') {
-              toast.info('Summary language saved on this device', {
-                description: 'This meeting has no recording folder, so the preference cannot be written to meeting metadata.',
+              toast.info(t('Summary language saved on this device'), {
+                description: t('This meeting has no recording folder, so the preference cannot be written to meeting metadata.'),
               });
             }
             if (request.language) {
@@ -178,7 +180,7 @@ export function SummaryPanel({
             activeMeetingIdRef.current === request.meetingId
           ) {
             console.error('Failed to persist summary language:', err);
-            toast.error('Failed to save summary language');
+            toast.error(t('Failed to save summary language'));
             setSummaryLang(request.rollback.language);
             setSummaryLangStorage(request.rollback.storage);
             return;
@@ -239,7 +241,7 @@ export function SummaryPanel({
   const handleToggleSpeech = () => {
     void speech.toggle().catch((error) => {
       console.error('Summary speech failed:', error);
-      toast.error(error instanceof Error ? error.message : 'Could not read the summary aloud');
+      toast.error(error instanceof Error ? error.message : t('Could not read the summary aloud'));
     });
   };
 
@@ -249,8 +251,8 @@ export function SummaryPanel({
         <Button
           variant="outline"
           size="sm"
-          title={`Summary language: ${effectiveLangLabel}${isLocalFallbackLanguage ? ' (saved on this device)' : ''}`}
-          aria-label="Set summary language"
+          title={`${t('Summary language: {language}', { language: effectiveLangLabel })}${isLocalFallbackLanguage ? ` (${t('saved on this device')})` : ''}`}
+          aria-label={t('Set summary language')}
         >
           <Languages size={18} />
           <span className="hidden @[40rem]:inline">{effectiveLangLabel}</span>
@@ -318,17 +320,17 @@ export function SummaryPanel({
         <div className="flex items-center justify-center flex-1">
           <div className="text-center">
             <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
-            <p className="text-gray-600">Generating AI Summary...</p>
+            <p className="text-gray-600">{t('Generating AI Summary...')}</p>
             {summaryProgress ? (
               <p className="text-sm text-gray-500 mt-2 tabular-nums">
-                {summaryProgress.generatedTokens.toLocaleString()} tokens generated
+                {t('{count} tokens generated', { count: summaryProgress.generatedTokens.toLocaleString(getIntlLocale(locale)) })}
                 {' · '}
-                {summaryProgress.tokensPerSec.toFixed(1)} tok/s
+                {t('{rate} tok/s', { rate: summaryProgress.tokensPerSec.toFixed(1) })}
                 {' · '}
-                prompt {summaryProgress.promptTokens.toLocaleString()}
+                {t('prompt {count}', { count: summaryProgress.promptTokens.toLocaleString(getIntlLocale(locale)) })}
               </p>
             ) : (
-              <p className="text-sm text-gray-500 mt-2">Reading the transcript…</p>
+              <p className="text-sm text-gray-500 mt-2">{t('Reading the transcript…')}</p>
             )}
           </div>
         </div>

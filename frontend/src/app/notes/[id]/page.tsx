@@ -1,5 +1,6 @@
 import React from 'react';
 import { Clock, Users, Calendar, Tag } from 'lucide-react';
+import { translate } from '@/lib/i18n';
 
 interface PageProps {
   params: Promise<{
@@ -130,7 +131,7 @@ Quarterly product review session with stakeholders.
   const note = sampleData[id as keyof typeof sampleData];
 
   if (!note) {
-    return <div className="p-8">Note not found</div>;
+    return <div className="p-8">{translate('Note not found')}</div>;
   }
 
   return (

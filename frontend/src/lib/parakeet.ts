@@ -1,4 +1,6 @@
 // Types for Parakeet (NVIDIA NeMo) integration
+import { translate } from '@/lib/i18n';
+
 export interface ParakeetModelInfo {
   name: string;
   path: string;
@@ -113,7 +115,7 @@ export function getModelIcon(accuracy: ModelAccuracy): string {
 // Get user-friendly display name for a model
 export function getModelDisplayName(modelName: string): string {
   const displayInfo = MODEL_DISPLAY_CONFIG[modelName];
-  return displayInfo?.friendlyName || modelName;
+  return displayInfo ? translate(displayInfo.friendlyName) : modelName;
 }
 
 // Get model display info (icon, tagline, etc.)
@@ -131,9 +133,9 @@ export function getStatusColor(status: ModelStatus): string {
 
 export function formatFileSize(sizeMb: number): string {
   if (sizeMb >= 1000) {
-    return `${(sizeMb / 1000).toFixed(1)}GB`;
+    return `${(sizeMb / 1000).toFixed(1)} ${translate('GB')}`;
   }
-  return `${sizeMb}MB`;
+  return `${sizeMb} ${translate('MB')}`;
 }
 
 // Helper function to check if model is quantized

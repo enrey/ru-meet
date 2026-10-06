@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::{is_russian, tr};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
     pub id: Option<String>,
@@ -115,16 +117,23 @@ impl Default for NotificationTimeout {
     }
 }
 
+/// Body of the "recording started" notification in the interface language.
+pub fn recording_started_body(meeting_name: Option<String>) -> String {
+    match meeting_name {
+        Some(name) if is_russian() => format!("Запись встречи «{}» начата", name),
+        Some(name) => format!("Recording started for meeting: {}", name),
+        None => tr(
+            "Recording has started. Please inform others in the meeting that you are recording.",
+            "Запись начата. Предупредите участников встречи, что идёт запись.",
+        )
+        .to_string(),
+    }
+}
+
 // Helper functions for creating common notifications
 impl Notification {
     pub fn recording_started(meeting_name: Option<String>) -> Self {
-        let body = match meeting_name {
-            Some(name) => format!("Recording started for meeting: {}", name),
-            None => {
-                "Recording has started. Please inform others in the meeting that you are recording."
-                    .to_string()
-            }
-        };
+        let body = recording_started_body(meeting_name);
 
         Notification::new("Meetily", body, NotificationType::RecordingStarted)
             .with_priority(NotificationPriority::High)
@@ -134,7 +143,7 @@ impl Notification {
     pub fn recording_stopped() -> Self {
         Notification::new(
             "Meetily",
-            "Recording has been stopped and saved",
+            tr("Recording has been stopped and saved", "Запись остановлена и сохранена"),
             NotificationType::RecordingStopped,
         )
         .with_priority(NotificationPriority::Normal)
@@ -144,7 +153,7 @@ impl Notification {
     pub fn recording_paused() -> Self {
         Notification::new(
             "Meetily",
-            "Recording has been paused",
+            tr("Recording has been paused", "Запись приостановлена"),
             NotificationType::RecordingPaused,
         )
         .with_priority(NotificationPriority::Normal)
@@ -154,7 +163,7 @@ impl Notification {
     pub fn recording_resumed() -> Self {
         Notification::new(
             "Meetily",
-            "Recording has been resumed",
+            tr("Recording has been resumed", "Запись возобновлена"),
             NotificationType::RecordingResumed,
         )
         .with_priority(NotificationPriority::Normal)
@@ -163,8 +172,9 @@ impl Notification {
 
     pub fn transcription_complete(file_path: Option<String>) -> Self {
         let body = match file_path {
+            Some(path) if is_russian() => format!("Транскрипция завершена и сохранена: {}", path),
             Some(path) => format!("Transcription completed and saved to: {}", path),
-            None => "Transcription has been completed".to_string(),
+            None => tr("Transcription has been completed", "Транскрипция завершена").to_string(),
         };
 
         Notification::new("Meetily", body, NotificationType::TranscriptionComplete)
@@ -174,7 +184,11 @@ impl Notification {
 
     pub fn meeting_reminder(minutes_until: u64, meeting_title: Option<String>) -> Self {
         let body = match meeting_title {
+            Some(title) if is_russian() => {
+                format!("Встреча «{}» начнётся через {} мин", title, minutes_until)
+            }
             Some(title) => format!("Meeting '{}' starts in {} minutes", title, minutes_until),
+            None if is_russian() => format!("Встреча начнётся через {} мин", minutes_until),
             None => format!("Meeting starts in {} minutes", minutes_until),
         };
 
@@ -190,7 +204,7 @@ impl Notification {
     pub fn system_error(error: impl Into<String>) -> Self {
         let error_string = error.into();
         Notification::new(
-            "Meetily Error",
+            tr("Meetily Error", "Ошибка Meetily"),
             error_string.clone(),
             NotificationType::SystemError(error_string),
         )
@@ -201,7 +215,10 @@ impl Notification {
     pub fn test_notification() -> Self {
         Notification::new(
             "Meetily",
-            "This is a test notification to verify the system is working correctly",
+            tr(
+                "This is a test notification to verify the system is working correctly",
+                "Это тестовое уведомление для проверки работы системы",
+            ),
             NotificationType::Test,
         )
         .with_priority(NotificationPriority::Normal)

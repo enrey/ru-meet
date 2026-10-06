@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import type { SummaryProcessResponse } from '@/types';
+import { translate } from '@/lib/i18n';
 
 
 
@@ -223,7 +224,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
             start: processId,
             end: null,
             data: null,
-            error: 'Summary generation timed out after 15 minutes. Please try again or check your model configuration.',
+            error: translate('Summary generation timed out after 15 minutes. Please try again or check your model configuration.'),
           });
           if (summaryPollsRef.current.get(meetingId) === entry) {
             stopSummaryPolling(meetingId, processId);
@@ -260,7 +261,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
             start: processId,
             end: null,
             data: null,
-            error: error instanceof Error ? error.message : 'Unknown error',
+            error: error instanceof Error ? error.message : translate('Unknown error'),
           });
         } catch (callbackError) {
           console.error('Failed to handle summary polling error:', callbackError);

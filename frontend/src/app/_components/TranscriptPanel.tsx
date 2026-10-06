@@ -11,6 +11,7 @@ import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { ModalType } from '@/hooks/useModalState';
 import { useIsLinux } from '@/hooks/usePlatform';
 import { useMemo } from 'react';
+import { useI18n } from '@/lib/i18n';
 
 /**
  * TranscriptPanel Component
@@ -37,16 +38,17 @@ export function TranscriptPanel({
   const { isRecording, isPaused } = useRecordingState();
   const { checkPermissions, isChecking, hasSystemAudio, hasMicrophone } = usePermissionCheck();
   const isLinux = useIsLinux();
+  const { t } = useI18n();
 
   // Convert transcripts to segments for virtualized view
   const segments = useMemo(() =>
-    transcripts.map(t => ({
-      id: t.id,
-      timestamp: t.audio_start_time ?? 0,
-      endTime: t.audio_end_time,
-      text: t.text,
-      confidence: t.confidence,
-      speaker: t.speaker,
+    transcripts.map(transcript => ({
+      id: transcript.id,
+      timestamp: transcript.audio_start_time ?? 0,
+      endTime: transcript.audio_end_time,
+      text: transcript.text,
+      confidence: transcript.confidence,
+      speaker: transcript.speaker,
     })),
     [transcripts]
   );
@@ -64,11 +66,11 @@ export function TranscriptPanel({
                     variant="outline"
                     size="sm"
                     onClick={copyTranscript}
-                    title="Copy Transcript"
+                    title={t('Copy Transcript')}
                   >
                     <Copy />
                     <span className='hidden md:inline'>
-                      Copy
+                      {t('Copy')}
                     </span>
                   </Button>
                 )}
@@ -76,19 +78,19 @@ export function TranscriptPanel({
                   variant="outline"
                   size="sm"
                   onClick={() => showModal('modelSelector')}
-                  title="Transcription model"
+                  title={t('Transcription model')}
                 >
                   <Cpu />
-                  <span className="hidden md:inline">Model</span>
+                  <span className="hidden md:inline">{t('Model')}</span>
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => showModal('deviceSettings')}
-                  title="Audio devices"
+                  title={t('Audio devices')}
                 >
                   <AudioLines />
-                  <span className="hidden md:inline">Devices</span>
+                  <span className="hidden md:inline">{t('Devices')}</span>
                 </Button>
                 {(transcriptModelConfig.provider === 'localWhisper' ||
                   transcriptModelConfig.provider === 'gigaam') && (
@@ -96,10 +98,10 @@ export function TranscriptPanel({
                     variant="outline"
                     size="sm"
                     onClick={() => showModal('languageSettings')}
-                    title="Language"
+                    title={t('Language')}
                   >
                     <GlobeIcon />
-                    <span className="hidden md:inline">Language</span>
+                    <span className="hidden md:inline">{t('Language')}</span>
                   </Button>
                 )}
                 {transcriptModelConfig.provider === 'parakeet' && (
@@ -110,16 +112,16 @@ export function TranscriptPanel({
                           variant="outline"
                           size="sm"
                           disabled
-                          aria-label="Language selection is unavailable for Parakeet"
+                          aria-label={t('Language selection is unavailable for Parakeet')}
                           className="rounded-l-none border-l-0"
                         >
                           <GlobeIcon />
-                          <span className="hidden md:inline">Language</span>
+                          <span className="hidden md:inline">{t('Language')}</span>
                         </Button>
                       </span>
                     </TooltipTrigger>
                     <TooltipContent>
-                      Parakeet detects the spoken language automatically and does not support manual language selection.
+                      {t('Parakeet detects the spoken language automatically and does not support manual language selection.')}
                     </TooltipContent>
                   </Tooltip>
                 )}

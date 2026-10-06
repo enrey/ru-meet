@@ -1,3 +1,5 @@
+import { translate } from '@/lib/i18n';
+
 export interface LanguageOption {
   code: string;
   label: string;
@@ -61,5 +63,6 @@ export function normaliseLanguageCode(raw: string | null | undefined): string | 
 }
 
 export function labelForCode(code: string): string {
-  return LANGUAGE_OPTIONS.find((l) => l.code === code)?.label ?? code;
+  const label = LANGUAGE_OPTIONS.find((l) => l.code === code)?.label;
+  return label ? translate(label) : code;
 }

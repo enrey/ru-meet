@@ -1,4 +1,6 @@
 // Types for whisper-rs integration
+import { translate } from '@/lib/i18n';
+
 export interface ModelInfo {
   name: string;
   path: string;
@@ -151,9 +153,9 @@ export function getStatusColor(status: ModelStatus): string {
 
 export function formatFileSize(sizeMb: number): string {
   if (sizeMb >= 1000) {
-    return `${(sizeMb / 1000).toFixed(1)}GB`;
+    return `${(sizeMb / 1000).toFixed(1)} ${translate('GB')}`;
   }
-  return `${sizeMb}MB`;
+  return `${sizeMb} ${translate('MB')}`;
 }
 
 // Helper function to get model type (f16, q5_1, q5_0, q4_0)
@@ -229,17 +231,19 @@ export function getModelTagline(modelName: string, speed: ProcessingSpeed, accur
     featureText = 'Fastest option';
   }
 
+  featureText = translate(featureText);
+
   // Add quantization note if applicable
   if (isQuantized) {
     const quantType = getModelType(modelName);
     if (quantType === 'q5_0') {
-      featureText += ', optimized';
+      featureText += `, ${translate('optimized')}`;
     } else if (quantType === 'q4_0') {
-      featureText += ', ultra fast';
+      featureText += `, ${translate('ultra fast')}`;
     }
   }
 
-  return `${speedText} • ${featureText}`;
+  return `${translate(speedText)} • ${featureText}`;
 }
 
 // Group models by their base name for better UI organization

@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { useI18n } from '@/lib/i18n';
 import { DEFAULT_DIARIZATION_ENGINE, DIARIZATION_MODELS, type DiarizationEngineId } from '@/lib/diarization-models';
 
 const ENGINE_ICONS: Record<DiarizationEngineId, typeof UsersRound> = {
@@ -27,6 +28,7 @@ interface DiarizationModelStatus {
 }
 
 export function DiarizationSettings() {
+  const { t } = useI18n();
   const [settings, setSettings] = useState<DiarizationSettingsState>({
     enabled: false,
     engine: DEFAULT_DIARIZATION_ENGINE,
@@ -75,7 +77,7 @@ export function DiarizationSettings() {
     setSettings(next);
     void invoke('set_diarization_settings', { settings: next }).catch((error) => {
       console.error('Failed to save diarization settings:', error);
-      toast.error('Could not save speaker diarization settings');
+      toast.error(t('Could not save speaker diarization settings'));
     });
   };
 
@@ -86,10 +88,10 @@ export function DiarizationSettings() {
     try {
       await invoke('download_diarization_models', { engine });
       await refreshModelStatuses();
-      toast.success('Speaker diarization models are ready');
+      toast.success(t('Speaker diarization models are ready'));
     } catch (error) {
       console.error('Failed to download diarization models:', error);
-      toast.error('Could not download speaker diarization models');
+      toast.error(t('Could not download speaker diarization models'));
     } finally {
       setIsDownloading(false);
       setDownloadingEngine(null);
@@ -101,38 +103,36 @@ export function DiarizationSettings() {
     <section className="mt-6 w-full rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
       <div className="flex items-start justify-between gap-6">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Speaker diarization</h2>
+          <h2 className="text-lg font-semibold text-gray-900">{t('Speaker diarization')}</h2>
           <p className="mt-1 text-sm text-gray-600">
-            Identify and label speakers after a recording has been saved.
+            {t('Identify and label speakers after a recording has been saved.')}
           </p>
         </div>
         <Switch
           checked={settings.enabled}
           onCheckedChange={(enabled) => save({ ...settings, enabled })}
-          aria-label="Enable speaker diarization"
+          aria-label={t('Enable speaker diarization')}
         />
       </div>
 
       <div className="mt-6 flex items-start justify-between gap-6 border-t border-gray-100 pt-6">
         <div>
-          <h3 className="text-sm font-medium text-gray-900">Merge barely-heard speakers</h3>
+          <h3 className="text-sm font-medium text-gray-900">{t('Merge barely-heard speakers')}</h3>
           <p className="mt-1 text-sm text-gray-500">
-            Speakers with under 1% of the talking — and less than 30 seconds of it — are labelled
-            &ldquo;Others&rdquo; instead of getting their own entry. Re-run diarization with this off to
-            get them back.
+            {t('Speakers with under 1% of the talking — and less than 30 seconds of it — are labelled “Others” instead of getting their own entry. Re-run diarization with this off to get them back.')}
           </p>
         </div>
         <Switch
           checked={settings.collapseMinorSpeakers}
           onCheckedChange={(collapseMinorSpeakers) => save({ ...settings, collapseMinorSpeakers })}
-          aria-label="Merge barely-heard speakers into Others"
+          aria-label={t('Merge barely-heard speakers into Others')}
         />
       </div>
 
       <div className="mt-6 border-t border-gray-100 pt-6">
         <div className="mb-4">
-          <h3 className="text-sm font-medium text-gray-900">Diarization model</h3>
-          <p className="mt-1 text-sm text-gray-500">Choose which local model identifies speakers after recording.</p>
+          <h3 className="text-sm font-medium text-gray-900">{t('Diarization model')}</h3>
+          <p className="mt-1 text-sm text-gray-500">{t('Choose which local model identifies speakers after recording.')}</p>
         </div>
 
         {isLoading ? (
@@ -177,13 +177,13 @@ export function DiarizationSettings() {
                         <span className="text-sm font-semibold text-gray-900">{model.name}</span>
                         <span className="text-xs font-medium text-gray-500">{model.size}</span>
                       </div>
-                      <p className="truncate text-xs leading-4 text-gray-600" title={model.description}>
-                        {model.description}
+                      <p className="truncate text-xs leading-4 text-gray-600" title={t(model.description)}>
+                        {t(model.description)}
                       </p>
                     </div>
                     {ready ? (
                       <span className="flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-                        <CheckCircle2 className="h-3.5 w-3.5" /> Ready
+                        <CheckCircle2 className="h-3.5 w-3.5" /> {t('Ready')}
                       </span>
                     ) : downloading ? (
                       <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-blue-600">
@@ -199,7 +199,7 @@ export function DiarizationSettings() {
                           void downloadModels(id);
                         }}
                       >
-                        <Download className="mr-1.5 h-3.5 w-3.5" /> Download
+                        <Download className="mr-1.5 h-3.5 w-3.5" /> {t('Download')}
                       </Button>
                     )}
                   </div>

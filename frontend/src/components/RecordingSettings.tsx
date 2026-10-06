@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { normalizeAudioDevicePreferences, stripAudioDeviceSuffix } from '@/lib/audioDevicePreferences';
+import { useI18n } from '@/lib/i18n';
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -33,6 +34,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const [showRecordingNotification, setShowRecordingNotification] = useState(true);
   const { isRecording } = useRecordingState();
   const { setSelectedDevices } = useConfig();
+  const { t } = useI18n();
 
   // Load recording preferences on component mount
   useEffect(() => {
@@ -110,16 +112,16 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
             micDeviceName: devices.micDevice,
             systemDeviceName: devices.systemDevice,
           });
-          toast.success('Microphone and system audio switched');
+          toast.success(t('Microphone and system audio switched'));
         } else if (microphoneChanged) {
           await invoke('switch_recording_microphone', { micDeviceName: stripAudioDeviceSuffix(devices.micDevice) });
-          toast.success('Microphone switched');
+          toast.success(t('Microphone switched'));
         } else if (systemAudioChanged) {
           await invoke('switch_recording_system_audio', { systemDeviceName: stripAudioDeviceSuffix(devices.systemDevice) });
-          toast.success('System audio switched');
+          toast.success(t('System audio switched'));
         }
       } catch (error) {
-        toast.error('Could not switch recording devices', { description: String(error) });
+        toast.error(t('Could not switch recording devices'), { description: String(error) });
       }
     }
   };
@@ -139,10 +141,10 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       const store = await Store.load('preferences.json');
       await store.set('show_recording_notification', enabled);
       await store.save();
-      toast.success('Preference saved');
+      toast.success(t('Preference saved'));
     } catch (error) {
       console.error('Failed to save notification preference:', error);
-      toast.error('Failed to save preference');
+      toast.error(t('Failed to save preference'));
     }
   };
 
@@ -153,7 +155,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       onSave?.(prefs);
     } catch (error) {
       console.error('Failed to save recording preferences:', error);
-      toast.error("Failed to save device preferences", {
+      toast.error(t('Failed to save device preferences'), {
         description: error instanceof Error ? error.message : String(error)
       });
     } finally {
@@ -173,18 +175,18 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-semibold mb-4">Recording Settings</h3>
+        <h3 className="text-lg font-semibold mb-4">{t('Recording Settings')}</h3>
         <p className="text-sm text-gray-600 mb-6">
-          Configure how your audio recordings are saved during meetings.
+          {t('Configure how your audio recordings are saved during meetings.')}
         </p>
       </div>
 
       {/* Auto Save Toggle */}
       <div className="flex items-center justify-between p-4 border rounded-lg">
         <div className="flex-1">
-          <div className="font-medium">Save Audio Recordings</div>
+          <div className="font-medium">{t('Save Audio Recordings')}</div>
           <div className="text-sm text-gray-600">
-            Automatically save audio files when recording stops
+            {t('Automatically save audio files when recording stops')}
           </div>
         </div>
         <Switch
@@ -198,25 +200,25 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       {preferences.auto_save && (
         <div className="space-y-4">
           <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Save Location</div>
+            <div className="font-medium mb-2">{t('Save Location')}</div>
             <div className="text-sm text-gray-600 mb-3 break-all">
-              {preferences.save_folder || 'Default folder'}
+              {preferences.save_folder || t('Default folder')}
             </div>
             <button
               onClick={handleOpenFolder}
               className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
-              Open Folder
+              {t('Open Folder')}
             </button>
           </div>
 
           <div className="p-4 border rounded-lg bg-blue-50">
             <div className="text-sm text-blue-800">
-              <strong>File Format:</strong> {preferences.file_format.toUpperCase()} files
+              <strong>{t('File Format:')}</strong> {t('{format} files', { format: preferences.file_format.toUpperCase() })}
             </div>
             <div className="text-xs text-blue-600 mt-1">
-              Recordings are saved with timestamp: recording_YYYYMMDD_HHMMSS.{preferences.file_format}
+              {t('Recordings are saved with timestamp: {pattern}', { pattern: `recording_YYYYMMDD_HHMMSS.${preferences.file_format}` })}
             </div>
           </div>
         </div>
@@ -226,7 +228,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       {!preferences.auto_save && (
         <div className="p-4 border rounded-lg bg-yellow-50">
           <div className="text-sm text-yellow-800">
-            Audio recording is disabled. Enable "Save Audio Recordings" to automatically save your meeting audio.
+            {t('Audio recording is disabled. Enable "Save Audio Recordings" to automatically save your meeting audio.')}
           </div>
         </div>
       )}
@@ -234,9 +236,9 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       {/* Recording Notification Toggle */}
       <div className="flex items-center justify-between p-4 border rounded-lg">
         <div className="flex-1">
-          <div className="font-medium">Recording Start Notification</div>
+          <div className="font-medium">{t('Recording Start Notification')}</div>
           <div className="text-sm text-gray-600">
-            Show reminder to inform participants when recording starts
+            {t('Show reminder to inform participants when recording starts')}
           </div>
         </div>
         <Switch
@@ -248,12 +250,12 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       {/* Device Preferences */}
       <div className="space-y-4">
         <div className="border-t pt-6">
-          <h4 className="text-base font-medium text-gray-900 mb-4">Default Audio Devices</h4>
+          <h4 className="text-base font-medium text-gray-900 mb-4">{t('Default Audio Devices')}</h4>
           <p className="text-sm text-gray-600 mb-4">
-            Set your preferred microphone and system audio devices for recording. These will be automatically selected when starting new recordings.
+            {t('Set your preferred microphone and system audio devices for recording. These will be automatically selected when starting new recordings.')}
           </p>
 
-          {isRecording && <p role="status" aria-live="polite" className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-md p-2 mb-4">Changes are applied to the active recording without stopping it.</p>}
+          {isRecording && <p role="status" aria-live="polite" className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-md p-2 mb-4">{t('Changes are applied to the active recording without stopping it.')}</p>}
 
           <div className="border rounded-lg p-4 bg-gray-50">
             <DeviceSelection

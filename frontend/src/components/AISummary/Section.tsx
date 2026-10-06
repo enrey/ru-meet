@@ -1,5 +1,6 @@
 'use client';
 
+import { useI18n } from '@/lib/i18n';
 import { Section as SectionType, Block } from '@/types';
 import { BlockComponent } from './Block';
 import { EditableTitle } from '../EditableTitle';
@@ -41,6 +42,7 @@ export const Section: React.FC<SectionProps> = ({
   onBlockNavigate,
   onCreateNewBlock,
 }) => {
+  const { t } = useI18n();
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,7 +79,7 @@ export const Section: React.FC<SectionProps> = ({
             onClick={() => onSectionDelete(sectionKey)}
             className="text-gray-400 hover:text-gray-600"
           >
-            Delete
+            {t('Delete')}
           </button>
         )}
       </div>

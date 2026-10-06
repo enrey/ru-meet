@@ -3,6 +3,7 @@
 import { createContext, useContext, useCallback, ReactNode } from 'react';
 import { useConfig } from './ConfigContext';
 import { toast } from 'sonner';
+import { translate } from '@/lib/i18n';
 
 interface ImportDialogContextType {
   openImportDialog: (filePath?: string | null) => void;
@@ -27,8 +28,8 @@ export function ImportDialogProvider({ children, onOpen }: ImportDialogProviderP
   const openImportDialog = useCallback((filePath?: string | null) => {
     // Gate: Check beta feature flag before opening dialog
     if (!betaFeatures.importAndRetranscribe) {
-      toast.error('Beta feature disabled', {
-        description: 'Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.'
+      toast.error(translate('Beta feature disabled'), {
+        description: translate('Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.')
       });
       return;
     }

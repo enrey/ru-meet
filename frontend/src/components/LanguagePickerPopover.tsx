@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LANGUAGE_OPTIONS } from "@/lib/summary-languages";
 import { useRecentLanguages } from "@/hooks/useRecentLanguages";
+import { useI18n } from "@/lib/i18n";
 
 interface LanguagePickerPopoverProps {
   value: string | null;
@@ -20,6 +21,7 @@ export function LanguagePickerPopover({
   autoSubtitle,
 }: LanguagePickerPopoverProps) {
   const { recents } = useRecentLanguages();
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -55,9 +57,10 @@ export function LanguagePickerPopover({
     return options.filter(
       (l) =>
         l.code.toLowerCase().includes(filter) ||
-        l.label.toLowerCase().includes(filter),
+        l.label.toLowerCase().includes(filter) ||
+        t(l.label).toLowerCase().includes(filter),
     );
-  }, [filter, mode, recentCodes]);
+  }, [filter, mode, recentCodes, t]);
 
   const recentsResolved = useMemo(
     () =>
@@ -68,9 +71,10 @@ export function LanguagePickerPopover({
           (l) =>
             !filter ||
             l.code.toLowerCase().includes(filter) ||
-            l.label.toLowerCase().includes(filter),
+            l.label.toLowerCase().includes(filter) ||
+            t(l.label).toLowerCase().includes(filter),
         ),
-    [recents, filter],
+    [recents, filter, t],
   );
 
   const showAuto = mode === "meeting" && (!filter || "auto".includes(filter));
@@ -83,7 +87,7 @@ export function LanguagePickerPopover({
       ref={containerRef}
       className="w-72 rounded-lg bg-white border border-gray-200 shadow-lg overflow-hidden"
       role="dialog"
-      aria-label="Pick summary language"
+      aria-label={t("Pick summary language")}
     >
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-100">
         <span className="text-gray-400 text-sm">🔍</span>
@@ -92,7 +96,7 @@ export function LanguagePickerPopover({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search language..."
+          placeholder={t("Search language...")}
           className="flex-1 text-sm text-gray-900 bg-transparent border-none outline-none placeholder-gray-400"
         />
       </div>
@@ -101,7 +105,7 @@ export function LanguagePickerPopover({
         {showRecents && (
           <>
             <div className="px-3 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-              Recently Used
+              {t("Recently Used")}
             </div>
             {recentsResolved.map((opt) => (
               <button
@@ -114,7 +118,7 @@ export function LanguagePickerPopover({
                 }`}
               >
                 <span>
-                  {opt.label}{" "}
+                  {t(opt.label)}{" "}
                   <span className="text-xs text-gray-400">({opt.code})</span>
                 </span>
                 {value === opt.code && <span className="text-blue-600" aria-hidden="true">✓</span>}
@@ -134,7 +138,7 @@ export function LanguagePickerPopover({
             }`}
           >
             <span className="flex flex-col">
-              <span>Auto</span>
+              <span>{t("Auto")}</span>
               {autoSubtitle && (
                 <span className="text-xs font-normal text-gray-400">{autoSubtitle}</span>
               )}
@@ -145,7 +149,7 @@ export function LanguagePickerPopover({
 
         {filteredAll.length > 0 && (
           <div className="px-3 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
-            {mode === "meeting" ? "Other Languages" : "All Languages"}
+            {mode === "meeting" ? t("Other Languages") : t("All Languages")}
           </div>
         )}
 
@@ -168,7 +172,7 @@ export function LanguagePickerPopover({
         ))}
 
         {hasNoResults && (
-          <div className="px-3 py-2 text-sm text-gray-400">No matches</div>
+          <div className="px-3 py-2 text-sm text-gray-400">{t("No matches")}</div>
         )}
       </div>
     </div>

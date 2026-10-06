@@ -9,6 +9,7 @@ import type { AudioDevice, AudioLevelData, AudioLevelUpdate } from './DeviceSele
 import { useConfig } from '@/contexts/ConfigContext';
 import { configService } from '@/services/configService';
 import { normalizeAudioDevicePreferences, stripAudioDeviceSuffix } from '@/lib/audioDevicePreferences';
+import { useI18n } from '@/lib/i18n';
 
 type Devices = { micDevice: string | null; systemDevice: string | null };
 type ActiveDevices = { microphone: string | null; system: string | null };
@@ -23,6 +24,7 @@ type ActiveProviderStatus = {
 /** Shows capture health, not browser volume: both values come from active WASAPI/CPAL inputs. */
 export function LiveAudioStatus({ recording, devices }: { recording: boolean; devices?: Devices }) {
   const { setSelectedDevices, transcriptModelConfig } = useConfig();
+  const { t } = useI18n();
   const [levels, setLevels] = useState<Map<string, AudioLevelData>>(new Map());
   const [activeDevices, setActiveDevices] = useState<ActiveDevices | null>(null);
   const [availableDevices, setAvailableDevices] = useState<AudioDevice[]>([]);
@@ -91,7 +93,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
     if (!recording || !expandedDevice || availableDevices.length) return;
     invoke<AudioDevice[]>('get_audio_devices')
       .then(setAvailableDevices)
-      .catch((error) => setSwitchError(`Could not load devices: ${String(error)}`));
+      .catch((error) => setSwitchError(t('Could not load devices: {error}', { error: String(error) })));
   }, [recording, expandedDevice, availableDevices.length]);
 
   const restartMeter = async (next: ActiveDevices) => {
@@ -123,7 +125,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
       await configService.saveRecordingDevicePreferences(selected);
       await restartMeter(next);
     } catch (error) {
-      setSwitchError(`Could not switch ${kind === 'microphone' ? 'microphone' : 'system audio'}: ${String(error)}`);
+      setSwitchError(t(kind === 'microphone' ? 'Could not switch microphone: {error}' : 'Could not switch system audio: {error}', { error: String(error) }));
     } finally {
       setSwitching(null);
     }
@@ -140,7 +142,12 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
       });
       setSourceMutes(mutes);
     } catch (error) {
-      setSwitchError(`Could not ${sourceMutes[kind] ? 'enable' : 'mute'} ${kind === 'microphone' ? 'microphone' : 'system audio'}: ${String(error)}`);
+      setSwitchError(t(
+        kind === 'microphone'
+          ? (sourceMutes[kind] ? 'Could not enable microphone: {error}' : 'Could not mute microphone: {error}')
+          : (sourceMutes[kind] ? 'Could not enable system audio: {error}' : 'Could not mute system audio: {error}'),
+        { error: String(error) },
+      ));
     } finally {
       setTogglingSource(null);
     }
@@ -159,7 +166,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
         disabled={togglingSource !== null}
         className={`flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${isMuted ? 'text-gray-400' : 'text-gray-800 hover:text-gray-600'}`}
         aria-pressed={isMuted}
-        title={isMuted ? `Enable ${label}` : `Mute ${label}`}
+        title={isMuted ? t('Enable {source}', { source: label }) : t('Mute {source}', { source: label })}
       >
         <span className="relative inline-flex">
           <SourceIcon className="h-3.5 w-3.5" aria-hidden="true" />
@@ -174,7 +181,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
         className="flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left text-xs text-gray-600 hover:bg-gray-200"
         aria-expanded={isExpanded}
       >
-        <span className="truncate">{name || 'Default device'}</span>
+        <span className="truncate">{name || t('Default device')}</span>
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
       </button>
       {isExpanded && <div className="border-t border-gray-200 pt-2">
@@ -187,7 +194,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
             className={`block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-gray-100 disabled:opacity-50 ${device.name === name ? 'bg-gray-100 font-medium text-gray-900' : 'text-gray-700'}`}
           >{device.name}</button>)}
         </div>
-        {switching === kind && <p className="mt-1 flex items-center gap-1 text-xs text-gray-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Switching…</p>}
+        {switching === kind && <p className="mt-1 flex items-center gap-1 text-xs text-gray-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('Switching…')}</p>}
         {switchError && <p className="mt-1 text-xs text-red-600">{switchError}</p>}
       </div>}
       <AudioLevelMeter
@@ -206,7 +213,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
   // while GigaAM is still starting up.
   const providerLabel = providerStatus?.is_live ? providerStatus.label : null;
   const providerAssignments = providerStatus?.provider_assignments
-    .map(({ provider, node_count }) => `${provider}: ${node_count} operations`)
+    .map(({ provider, node_count }) => t('{provider}: {count} operations', { provider, count: node_count }))
     .join('\n');
   const isAccelerated = providerLabel?.startsWith('GPU') || providerLabel?.startsWith('CoreML');
   return <div className="mt-3 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3" aria-live="polite">
@@ -217,8 +224,8 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
         className="text-left text-xs font-medium text-gray-700 hover:text-gray-900"
         aria-expanded="false"
       >
-        Live capture signal
-      </button> : <p className="text-xs font-medium text-gray-700">Live capture signal</p>}
+        {t('Live capture signal')}
+      </button> : <p className="text-xs font-medium text-gray-700">{t('Live capture signal')}</p>}
       {!collapsed && <div className="flex items-center gap-2">
         {transcriptModelConfig.provider === 'gigaam' && <span
           className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -230,13 +237,13 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
           }`}
           title={
             !providerLabel
-              ? 'Detecting the active GigaAM execution mode…'
+              ? t('Detecting the active GigaAM execution mode…')
               : [
                   providerLabel.includes('+ CPU')
-                    ? `ONNX Runtime split the graph between ${providerLabel.replace(' + CPU', '')} and CPU`
+                    ? t('ONNX Runtime split the graph between {provider} and CPU', { provider: providerLabel.replace(' + CPU', '') })
                     : isAccelerated
-                    ? `All reported graph operations are assigned to ${providerLabel}`
-                    : providerStatus?.fallback_reason || 'All reported graph operations are assigned to CPU',
+                    ? t('All reported graph operations are assigned to {provider}', { provider: providerLabel })
+                    : providerStatus?.fallback_reason || t('All reported graph operations are assigned to {provider}', { provider: 'CPU' }),
                   providerAssignments,
                 ].filter(Boolean).join('\n')
           }
@@ -244,7 +251,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
           {isAccelerated
             ? <Zap className="h-3 w-3" aria-hidden="true" />
             : <Cpu className="h-3 w-3" aria-hidden="true" />}
-          {providerLabel ?? 'Detecting…'}
+          {providerLabel ?? t('Detecting…')}
         </span>}
         <button
           type="button"
@@ -253,16 +260,16 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
             setCollapsed(true);
           }}
           className="rounded p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-800"
-          aria-label="Collapse live capture signal"
-          title="Collapse"
+          aria-label={t('Collapse live capture signal')}
+          title={t('Collapse')}
         >
           <X className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>}
     </div>
     {!collapsed && <>
-      {row('microphone', 'Microphone', mic, inputs)}
-      {row('system', 'System audio', system, outputs)}
+      {row('microphone', t('Microphone'), mic, inputs)}
+      {row('system', t('System audio'), system, outputs)}
     </>}
   </div>;
 }

@@ -3,33 +3,51 @@ import { Lock, Sparkles, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { Locale, UI_LOCALES, useI18n } from '@/lib/i18n';
 
 export function WelcomeStep() {
   const { goNext } = useOnboarding();
+  const { t, locale, setLocale } = useI18n();
 
   const features = [
     {
       icon: Lock,
-      title: 'Your data never leaves your device',
+      title: t('Your data never leaves your device'),
     },
     {
       icon: Sparkles,
-      title: 'Intelligent summaries & insights',
+      title: t('Intelligent summaries & insights'),
     },
     {
       icon: Cpu,
-      title: 'Works offline, no cloud required',
+      title: t('Works offline, no cloud required'),
     },
   ];
 
   return (
     <OnboardingContainer
-      title="Welcome to Meetily"
-      description="Record. Transcribe. Summarize. All on your device."
+      title={t('Welcome to Meetily')}
+      description={t('Record. Transcribe. Summarize. All on your device.')}
       step={1}
       hideProgress={true}
     >
       <div className="flex flex-col items-center space-y-10">
+        {/* Interface language: a clean install starts in Russian */}
+        <div role="radiogroup" aria-label={t('Interface language')} className="flex gap-1 rounded-full border border-gray-200 bg-white p-1 text-sm">
+          {UI_LOCALES.map(option => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={locale === option.value}
+              onClick={() => setLocale(option.value as Locale)}
+              className={`rounded-full px-3 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900 ${locale === option.value ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900'}`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
         {/* Divider */}
         <div className="w-16 h-px bg-gray-300" />
 
@@ -56,9 +74,9 @@ export function WelcomeStep() {
             onClick={goNext}
             className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
           >
-            Get Started
+            {t('Get Started')}
           </Button>
-          <p className="text-xs text-center text-gray-500">Takes less than 3 minutes</p>
+          <p className="text-xs text-center text-gray-500">{t('Takes less than 3 minutes')}</p>
         </div>
       </div>
     </OnboardingContainer>

@@ -39,6 +39,7 @@ pub mod database;
 pub mod gigaam_engine;
 pub mod gigaam_onnx;
 pub mod groq;
+pub mod i18n;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -618,6 +619,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            i18n::set_ui_language,
             automation::get_automation_preferences,
             automation::set_auto_record_meetings,
             automation::set_launch_at_login,

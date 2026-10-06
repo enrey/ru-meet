@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { RetranscribeDialog } from './RetranscribeDialog';
 import { DiarizationProgress } from './DiarizationProgress';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useI18n } from '@/lib/i18n';
 
 
 interface TranscriptButtonGroupProps {
@@ -30,6 +31,7 @@ export function TranscriptButtonGroup({
   onRefetchTranscripts,
 }: TranscriptButtonGroupProps) {
   const { betaFeatures } = useConfig();
+  const { t } = useI18n();
   const [showRetranscribeDialog, setShowRetranscribeDialog] = useState(false);
   const [isStartingDiarization, setIsStartingDiarization] = useState(false);
   const [isDiarizing, setIsDiarizing] = useState(false);
@@ -47,9 +49,9 @@ export function TranscriptButtonGroup({
     setIsStartingDiarization(true);
     try {
       await invoke('rerun_diarization', { meetingId, meetingFolderPath });
-      toast.info('Speaker diarization started');
+      toast.info(t('Speaker diarization started'));
     } catch (error) {
-      toast.error('Could not start speaker diarization', { description: String(error) });
+      toast.error(t('Could not start speaker diarization'), { description: String(error) });
     } finally {
       setIsStartingDiarization(false);
     }
@@ -61,7 +63,7 @@ export function TranscriptButtonGroup({
     try {
       await invoke('cancel_diarization', { meetingId });
     } catch (error) {
-      toast.error('Could not stop speaker diarization', { description: String(error) });
+      toast.error(t('Could not stop speaker diarization'), { description: String(error) });
       setIsCancellingDiarization(false);
     }
   }, [meetingId]);
@@ -75,10 +77,10 @@ export function TranscriptButtonGroup({
           className="px-2 @[22rem]:px-3"
           onClick={onCopyTranscript}
           disabled={transcriptCount === 0}
-          title={transcriptCount === 0 ? 'No transcript available' : 'Copy Transcript'}
+          title={transcriptCount === 0 ? t('No transcript available') : t('Copy Transcript')}
         >
           <Copy />
-          <span className="hidden @[22rem]:inline">Copy</span>
+          <span className="hidden @[22rem]:inline">{t('Copy')}</span>
         </Button>
 
         <Button
@@ -86,10 +88,10 @@ export function TranscriptButtonGroup({
           variant="outline"
           className="px-2 @[22rem]:px-4"
           onClick={onOpenMeetingFolder}
-          title="Open Recording Folder"
+          title={t('Open Recording Folder')}
         >
           <FolderOpen className="@[22rem]:mr-2" size={18} />
-          <span className="hidden @[22rem]:inline">Recording</span>
+          <span className="hidden @[22rem]:inline">{t('Recording')}</span>
         </Button>
 
         {meetingId && meetingFolderPath && (
@@ -99,10 +101,10 @@ export function TranscriptButtonGroup({
             className="px-2 @[22rem]:px-4"
             onClick={isDiarizing ? handleStopDiarization : handleDiarize}
             disabled={isStartingDiarization || isCancellingDiarization}
-            title={isDiarizing ? 'Stop speaker diarization' : 'Identify speakers in this recording'}
+            title={isDiarizing ? t('Stop speaker diarization') : t('Identify speakers in this recording')}
           >
             {isDiarizing ? <Square className="@[22rem]:mr-2" size={18} /> : <UsersRound className="@[22rem]:mr-2" size={18} />}
-            <span className="hidden @[22rem]:inline">{isDiarizing ? (isCancellingDiarization ? 'Stopping…' : 'Stop') : 'Diarize'}</span>
+            <span className="hidden @[22rem]:inline">{isDiarizing ? (isCancellingDiarization ? t('Stopping…') : t('Stop')) : t('Diarize')}</span>
           </Button>
         )}
 
@@ -112,10 +114,10 @@ export function TranscriptButtonGroup({
             variant="outline"
             className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-blue-200 px-2 @[22rem]:px-4"
             onClick={() => setShowRetranscribeDialog(true)}
-            title="Retranscribe to enhance your recorded audio"
+            title={t('Retranscribe to enhance your recorded audio')}
           >
             <RefreshCw className="@[22rem]:mr-2" size={18} />
-            <span className="hidden @[22rem]:inline">Enhance</span>
+            <span className="hidden @[22rem]:inline">{t('Enhance')}</span>
           </Button>
         )}
       </ButtonGroup>

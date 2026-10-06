@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { translate } from '@/lib/i18n';
 import { normaliseLanguageCode } from '@/lib/summary-languages';
 
 export const SUMMARY_LANGUAGE_RECENTS_KEY = 'summaryLanguageRecents';
@@ -130,7 +131,7 @@ export async function saveMeetingSummaryLanguage(
 
   if (response.storage === 'local_fallback') {
     if (!writeLanguageFallback(SUMMARY_LANGUAGE_FALLBACK_PREFIX, meetingId, normalised)) {
-      throw new Error('Failed to save summary language on this device');
+      throw new Error(translate('Failed to save summary language on this device'));
     }
     return {
       language: normalised,

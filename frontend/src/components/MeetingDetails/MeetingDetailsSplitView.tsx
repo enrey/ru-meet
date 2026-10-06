@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { FileText, Sparkles } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useI18n } from '@/lib/i18n';
 const STORAGE_KEY = 'meetily.meetingDetails.transcriptPaneRatio';
 const DEFAULT_RATIO = 0.3;
 const MIN_RATIO = 0.3;
@@ -47,6 +48,7 @@ export function MeetingDetailsSplitView({
   activeTab,
   onTabChange,
 }: MeetingDetailsSplitViewProps) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const [ratio, setRatio] = useState(DEFAULT_RATIO);
   const [isDesktop, setIsDesktop] = useState(true);
@@ -101,10 +103,10 @@ export function MeetingDetailsSplitView({
   }, [ratio]);
 
   const transcriptPanelProps = isDesktop
-    ? { role: 'region' as const, 'aria-label': 'Transcript', tabIndex: -1 }
+    ? { role: 'region' as const, 'aria-label': t('Transcript'), tabIndex: -1 }
     : {};
   const summaryPanelProps = isDesktop
-    ? { role: 'region' as const, 'aria-label': 'Summary', tabIndex: -1 }
+    ? { role: 'region' as const, 'aria-label': t('Summary'), tabIndex: -1 }
     : {};
 
   return (
@@ -124,7 +126,7 @@ export function MeetingDetailsSplitView({
                 className="relative z-10 flex items-center gap-2 rounded-none border-0 bg-transparent px-6 py-4 text-gray-600 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none hover:text-gray-900"
               >
                 <Icon className="h-4 w-4" />
-                {tab.label}
+                {t(tab.label)}
               </TabsTrigger>
             );
           })}
@@ -152,8 +154,8 @@ export function MeetingDetailsSplitView({
           aria-valuenow={Math.round(ratio * 100)}
           aria-valuemin={Math.round(MIN_RATIO * 100)}
           aria-valuemax={Math.round(MAX_RATIO * 100)}
-          aria-valuetext={`Transcript panel ${Math.round(ratio * 100)} percent tall`}
-          aria-label="Resize transcript and summary vertically"
+          aria-valuetext={t('Transcript panel {percent} percent tall', { percent: Math.round(ratio * 100) })}
+          aria-label={t('Resize transcript and summary vertically')}
           tabIndex={0}
           className="group relative z-10 hidden h-2 w-full flex-shrink-0 cursor-row-resize items-center justify-stretch focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset md:flex"
           onPointerDown={onPointerDown}

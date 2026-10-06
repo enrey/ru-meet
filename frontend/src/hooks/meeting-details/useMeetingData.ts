@@ -4,6 +4,7 @@ import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummary
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
+import { translate } from '@/lib/i18n';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
 
 interface UseMeetingDataProps {
@@ -41,7 +42,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
 
   const handleSaveSummary = useCallback(async (summary: MeetingSummary) => {
     if (!hasVisibleSummaryContent(summary)) {
-      throw new Error('Summary contains no visible content to save.');
+      throw new Error(translate('Summary contains no visible content to save.'));
     }
 
     const formattedSummary = 'markdown' in summary || 'summary_json' in summary
@@ -64,10 +65,10 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
         await handleSaveSummary(aiSummary);
       }
 
-      toast.success("Changes saved successfully");
+      toast.success(translate('Changes saved successfully'));
     } catch (error) {
       console.error('Failed to save changes:', error);
-      toast.error("Failed to save changes", { description: String(error) });
+      toast.error(translate('Failed to save changes'), { description: String(error) });
     } finally {
       setIsSaving(false);
     }

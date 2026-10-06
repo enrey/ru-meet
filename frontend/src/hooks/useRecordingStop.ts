@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
+import { translate } from '@/lib/i18n';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
@@ -47,7 +48,7 @@ export function useRecordingStop(
     handledMeetingIds.add(result.meetingId);
 
     try {
-      setStatus(RecordingStatus.SAVING, 'Recording finalized');
+      setStatus(RecordingStatus.SAVING, translate('Recording finalized'));
       let shouldDetectSummaryLanguage = false;
       try {
         shouldDetectSummaryLanguage = !(await applyPinnedSummaryLanguageToMeeting(result.meetingId));
@@ -75,10 +76,10 @@ export function useRecordingStop(
       }
 
       setStatus(RecordingStatus.COMPLETED);
-      toast.success('Recording saved successfully!', {
-        description: `${result.transcriptCount} transcript segments saved.`,
+      toast.success(translate('Recording saved successfully!'), {
+        description: translate('{count} transcript segments saved.', { count: result.transcriptCount }),
         action: {
-          label: 'View Meeting',
+          label: translate('View Meeting'),
           onClick: () => router.push(`/meeting-details?id=${result.meetingId}`),
         },
         duration: 10000,
@@ -88,7 +89,7 @@ export function useRecordingStop(
       handledMeetingIds.delete(result.meetingId);
       const message = error instanceof Error ? error.message : String(error);
       setStatus(RecordingStatus.ERROR, message);
-      toast.error('Recording was saved, but the UI could not refresh', { description: message });
+      toast.error(translate('Recording was saved, but the UI could not refresh'), { description: message });
     } finally {
       setIsRecordingDisabled(false);
     }

@@ -6,6 +6,7 @@ import {
   DownloadProgressStep,
   SetupOverviewStep,
 } from './steps';
+import { useI18n } from '@/lib/i18n';
 
 interface OnboardingFlowProps {
   onComplete: () => void;
@@ -13,6 +14,7 @@ interface OnboardingFlowProps {
 
 export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const { currentStep, databaseReady } = useOnboarding();
+  const { t } = useI18n();
   const [isMac, setIsMac] = React.useState(false);
 
   useEffect(() => {
@@ -38,7 +40,7 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   // Step 4: Permissions - Request mic + system audio (macOS only)
 
   if (!databaseReady) {
-    return <div className="flex h-screen items-center justify-center text-sm text-gray-500">Preparing local storage…</div>;
+    return <div className="flex h-screen items-center justify-center text-sm text-gray-500">{t('Preparing local storage…')}</div>;
   }
 
   return (

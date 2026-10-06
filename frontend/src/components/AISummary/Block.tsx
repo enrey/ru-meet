@@ -2,6 +2,7 @@
 
 import { Block } from '@/types';
 import { useRef, useState, useEffect } from 'react';
+import { useI18n } from '@/lib/i18n';
 
 interface BlockProps {
   block: Block;
@@ -71,6 +72,7 @@ export const BlockComponent: React.FC<BlockProps> = ({
   onNavigate,
   onCreateNewBlock,
 }) => {
+  const { t } = useI18n();
   const [showCommands, setShowCommands] = useState(false);
   const [commandFilter, setCommandFilter] = useState('');
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
@@ -250,7 +252,7 @@ export const BlockComponent: React.FC<BlockProps> = ({
             ${block.type === 'heading1' ? 'text-xl font-bold' : ''}
             ${block.type === 'heading2' ? 'text-lg font-semibold' : ''}
           `}
-          placeholder="Type '/' for commands..."
+          placeholder={t("Type '/' for commands...")}
         />
 
         {showCommands && (

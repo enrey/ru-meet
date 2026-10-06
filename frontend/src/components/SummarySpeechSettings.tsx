@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "./ui/select"
 import { Switch } from "./ui/switch"
+import { translate, useI18n } from "@/lib/i18n"
 
 interface TtsModel {
   id: string
@@ -32,6 +33,7 @@ interface TtsStatus {
  * on disk is shown but cannot be selected.
  */
 export function SummarySpeechSettings() {
+  const { t } = useI18n()
   const [status, setStatus] = useState<TtsStatus | null>(null)
   const [isSaving, setIsSaving] = useState(false)
 
@@ -49,7 +51,7 @@ export function SummarySpeechSettings() {
         setStatus((current) => (current ? { ...current, ...next } : current))
       } catch (error) {
         console.error("Could not save TTS settings:", error)
-        toast.error("Could not save the speech settings")
+        toast.error(translate("Could not save the speech settings"))
       } finally {
         setIsSaving(false)
       }
@@ -69,20 +71,19 @@ export function SummarySpeechSettings() {
           <div className="flex items-center gap-2 mb-2">
             <Volume2 className="h-5 w-5 text-gray-600" />
             <h3 className="text-lg font-semibold text-gray-900">
-              Read summaries aloud
+              {t("Read summaries aloud")}
             </h3>
             <span className="px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
-              BETA
+              {t("BETA")}
             </span>
           </div>
           <p className="text-sm text-gray-600">
-            Adds a play button next to the summary. Speech is synthesized on this
-            machine, offline.
+            {t("Adds a play button next to the summary. Speech is synthesized on this machine, offline.")}
           </p>
           <p className="mt-2 text-xs text-gray-500">
             {isInstalled
-              ? "Runs on the GPU through llama.cpp."
-              : status.problem ?? "No speech model is installed."}
+              ? t("Runs on the GPU through llama.cpp.")
+              : status.problem ?? t("No speech model is installed.")}
           </p>
         </div>
 
@@ -100,9 +101,9 @@ export function SummarySpeechSettings() {
       {status.models.length > 0 && (
         <div className="mt-4 flex items-center justify-between gap-4 border-t border-gray-100 pt-4">
           <div>
-            <p className="text-sm font-medium text-gray-900">Model</p>
+            <p className="text-sm font-medium text-gray-900">{t("Model")}</p>
             <p className="text-xs text-gray-500">
-              Applies to the next summary you play.
+              {t("Applies to the next summary you play.")}
             </p>
           </div>
           <Select
@@ -113,7 +114,7 @@ export function SummarySpeechSettings() {
             }
           >
             <SelectTrigger className="w-60">
-              <SelectValue placeholder="Select a model" />
+              <SelectValue placeholder={t("Select a model")} />
             </SelectTrigger>
             <SelectContent>
               {status.models.map((model) => (
@@ -123,7 +124,7 @@ export function SummarySpeechSettings() {
                   disabled={!model.installed}
                 >
                   {model.label}
-                  {model.installed ? "" : " — not installed"}
+                  {model.installed ? "" : ` — ${t("not installed")}`}
                 </SelectItem>
               ))}
             </SelectContent>

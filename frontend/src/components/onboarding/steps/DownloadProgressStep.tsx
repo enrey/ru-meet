@@ -9,9 +9,16 @@ import { useOnboarding } from '@/contexts/OnboardingContext';
 import { DEFAULT_GIGAAM_MODEL, DEFAULT_PARAKEET_MODEL } from '@/constants/modelDefaults';
 import { getSummaryModelSizeLabel } from '@/lib/onboarding-summary-model';
 import { getDiarizationModelInfo } from '@/lib/diarization-models';
+import { useI18n } from '@/lib/i18n';
 
 type Download = { status: 'waiting' | 'downloading' | 'completed' | 'error'; progress: number; error?: string };
 const waiting: Download = { status: 'waiting', progress: 0 };
+const DOWNLOAD_STATUS_LABELS: Record<Download['status'], string> = {
+  waiting: 'Waiting',
+  downloading: 'Downloading',
+  completed: 'Completed',
+  error: 'Error',
+};
 
 export function DownloadProgressStep() {
   const {
@@ -20,6 +27,7 @@ export function DownloadProgressStep() {
     selectedSummaryModel, recommendedSummaryModel, summaryModelDownloaded,
     startBackgroundDownloads, completeOnboarding,
   } = useOnboarding();
+  const { t } = useI18n();
   const [transcription, setTranscription] = useState<Download>(waiting);
   const [summary, setSummary] = useState<Download>(waiting);
   const [diarization, setDiarization] = useState<Download>(waiting);
@@ -144,30 +152,30 @@ export function DownloadProgressStep() {
 
   const continueSetup = async () => {
     if (downloadTranscription && transcription.status !== 'completed') {
-      toast.info('The transcription model is still downloading. You can continue and add it later.');
+      toast.info(t('The transcription model is still downloading. You can continue and add it later.'));
     }
     if (isMac) { goNext(); return; }
     setIsCompleting(true);
     try { await completeOnboarding(); window.location.reload(); }
-    catch (error) { toast.error('Failed to complete setup', { description: String(error) }); setIsCompleting(false); }
+    catch (error) { toast.error(t('Failed to complete setup'), { description: String(error) }); setIsCompleting(false); }
   };
 
   const card = (title: string, detail: string, state: Download, retry: () => void) => (
     <div className="rounded-xl border border-gray-200 bg-white p-5">
-      <div className="flex items-center justify-between gap-3"><div><h3 className="font-medium text-gray-900">{title}</h3><p className="text-sm text-gray-500">{detail}</p></div><span className="text-sm capitalize text-gray-600">{state.status}</span></div>
+      <div className="flex items-center justify-between gap-3"><div><h3 className="font-medium text-gray-900">{title}</h3><p className="text-sm text-gray-500">{detail}</p></div><span className="text-sm text-gray-600">{t(DOWNLOAD_STATUS_LABELS[state.status])}</span></div>
       {(state.status === 'downloading' || state.status === 'completed') && <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-200"><div className="h-full bg-gray-900" style={{ width: `${state.progress}%` }} /></div>}
-      {state.status === 'error' && <div className="mt-3 text-sm text-red-600"><p>{state.error}</p><Button className="mt-2" variant="outline" onClick={retry}>Try again</Button></div>}
+      {state.status === 'error' && <div className="mt-3 text-sm text-red-600"><p>{state.error}</p><Button className="mt-2" variant="outline" onClick={retry}>{t('Try again')}</Button></div>}
     </div>
   );
 
   return (
-    <OnboardingContainer title="Getting things ready" description="Downloads may continue in the background. You can add models later in Settings." step={3} totalSteps={isMac ? 4 : 3}>
+    <OnboardingContainer title={t('Getting things ready')} description={t('Downloads may continue in the background. You can add models later in Settings.')} step={3} totalSteps={isMac ? 4 : 3}>
       <div className="mx-auto w-full max-w-lg space-y-4">
         {downloadTranscription && card(label, transcriptionProvider === 'gigaam' ? '~186 MB' : '~670 MB', transcription, () => { void retryTranscription(); })}
-        {downloadSummary && card('Local summarization model', getSummaryModelSizeLabel(selectedSummaryModel || recommendedSummaryModel), summary, () => { void retrySummary(); })}
-        {downloadDiarization && card('Speaker diarization', `${getDiarizationModelInfo(diarizationEngine).name} · ${getDiarizationModelInfo(diarizationEngine).size}`, diarization, () => { void retryDiarization(); })}
-        {!downloadTranscription && !downloadSummary && !downloadDiarization && <p className="rounded-lg bg-gray-100 p-4 text-sm text-gray-700">No models selected for download. Recording will need a transcription model later.</p>}
-        <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>Back</Button><Button className="flex-1 bg-gray-900 text-white hover:bg-gray-800" disabled={isCompleting} onClick={() => { void continueSetup(); }}>{isCompleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Continue</Button></div>
+        {downloadSummary && card(t('Local summarization model'), getSummaryModelSizeLabel(selectedSummaryModel || recommendedSummaryModel), summary, () => { void retrySummary(); })}
+        {downloadDiarization && card(t('Speaker diarization'), `${getDiarizationModelInfo(diarizationEngine).name} · ${getDiarizationModelInfo(diarizationEngine).size}`, diarization, () => { void retryDiarization(); })}
+        {!downloadTranscription && !downloadSummary && !downloadDiarization && <p className="rounded-lg bg-gray-100 p-4 text-sm text-gray-700">{t('No models selected for download. Recording will need a transcription model later.')}</p>}
+        <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>{t('Back')}</Button><Button className="flex-1 bg-gray-900 text-white hover:bg-gray-800" disabled={isCompleting} onClick={() => { void continueSetup(); }}>{isCompleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t('Continue')}</Button></div>
       </div>
     </OnboardingContainer>
   );

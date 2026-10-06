@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Pencil, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SpeakerTurn } from '@/services/storageService';
+import { useI18n } from '@/lib/i18n';
 
 const COLORS = ['#6366f1', '#06b6d4', '#f59e0b', '#ec4899', '#10b981', '#8b5cf6'];
 
@@ -60,6 +61,7 @@ export function SpeakerTimeline({
   onSelectTurn?: (speaker: string, time: number) => void;
   onSpeakerRenamed?: (oldName: string, newName: string) => void;
 }) {
+  const { t } = useI18n();
   const [turns, setTurns] = useState<SpeakerTurn[]>([]);
   const [inProgress, setInProgress] = useState(false);
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
@@ -138,12 +140,12 @@ export function SpeakerTimeline({
       });
       setTurns((current) => current.map((turn) => turn.speaker === from ? { ...turn, speaker: to } : turn));
       onSpeakerRenamed?.(from, to);
-      if (merged) toast.success(`Merged "${from}" into "${to}"`);
+      if (merged) toast.success(t('Merged “{from}” into “{to}”', { from, to }));
       setEditingSpeaker(null);
       setDraftName('');
       setPendingMerge(null);
     } catch (error) {
-      toast.error('Could not rename speaker', { description: String(error) });
+      toast.error(t('Could not rename speaker'), { description: String(error) });
     } finally {
       setIsSaving(false);
     }
@@ -153,7 +155,7 @@ export function SpeakerTimeline({
     if (!editingSpeaker || isSaving) return;
     const name = draftName.trim();
     if (!name || name.length > 80) {
-      toast.error('Speaker name must be between 1 and 80 characters');
+      toast.error(t('Speaker name must be between 1 and 80 characters'));
       return;
     }
     if (name === editingSpeaker) {
@@ -218,12 +220,12 @@ export function SpeakerTimeline({
     <>
     <section
       ref={sectionRef}
-      aria-label="Speaker timeline"
+      aria-label={t('Speaker timeline')}
       className="flex shrink-0 flex-col overflow-hidden bg-white px-4 pt-3"
       style={height === null ? undefined : { height }}
     >
       <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-gray-900">Speaker timeline</h3>
+        <h3 className="text-sm font-semibold text-gray-900">{t('Speaker timeline')}</h3>
         <span className="text-xs text-gray-500">{formatTime(timeline.duration)}</span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto pb-3">
@@ -242,8 +244,7 @@ export function SpeakerTimeline({
                 pendingMerge ? (
                 <div className="flex min-w-0 flex-col gap-1">
                   <p className="text-[11px] leading-tight text-gray-700">
-                    Merge into <span className="font-medium">&ldquo;{pendingMerge}&rdquo;</span>? Their
-                    lines become one speaker. Only re-running diarization undoes this.
+                    {t('Merge into “{name}”? Their lines become one speaker. Only re-running diarization undoes this.', { name: pendingMerge })}
                   </p>
                   <div className="flex items-center gap-2">
                     <button
@@ -252,7 +253,7 @@ export function SpeakerTimeline({
                       className="rounded bg-blue-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                       onClick={() => void commitRename(speaker, pendingMerge)}
                     >
-                      Merge
+                      {t('Merge')}
                     </button>
                     <button
                       type="button"
@@ -260,7 +261,7 @@ export function SpeakerTimeline({
                       className="text-[11px] text-gray-600 hover:text-gray-900 disabled:opacity-50"
                       onClick={() => setPendingMerge(null)}
                     >
-                      Cancel
+                      {t('Cancel')}
                     </button>
                   </div>
                 </div>
@@ -271,7 +272,7 @@ export function SpeakerTimeline({
                     type="text"
                     value={draftName}
                     maxLength={80}
-                    aria-label={`Rename ${speaker}`}
+                    aria-label={t('Rename {speaker}', { speaker })}
                     className="min-w-0 flex-1 rounded border border-blue-400 px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-blue-500"
                     onChange={(event) => setDraftName(event.target.value)}
                     onFocus={(event) => event.currentTarget.select()}
@@ -281,20 +282,20 @@ export function SpeakerTimeline({
                     }}
                     disabled={isSaving}
                   />
-                  <button type="button" aria-label="Save speaker name" title="Save" disabled={isSaving}
+                  <button type="button" aria-label={t('Save speaker name')} title={t('Save')} disabled={isSaving}
                     className="text-green-700 disabled:opacity-50" onClick={() => void saveEdit()}><Check size={16} /></button>
-                  <button type="button" aria-label="Cancel speaker rename" title="Cancel" disabled={isSaving}
+                  <button type="button" aria-label={t('Cancel speaker rename')} title={t('Cancel')} disabled={isSaving}
                     className="text-gray-500 disabled:opacity-50" onClick={cancelEdit}><X size={16} /></button>
                 </div>
                 )
               ) : (
-                <button type="button" title={`Rename ${speaker}`} aria-label={`Rename ${speaker}`}
+                <button type="button" title={t('Rename {speaker}', { speaker })} aria-label={t('Rename {speaker}', { speaker })}
                   className="group flex min-w-0 items-center gap-1 text-left text-xs font-medium text-gray-700 hover:text-blue-700"
                   onClick={() => { setEditingSpeaker(speaker); setDraftName(speaker); }}>
                   <span className="truncate">{speaker}</span><Pencil size={12} className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
                 </button>
               )}
-              <div className="relative h-6 overflow-hidden rounded-md bg-gray-100" aria-label={`${speaker} speech intervals`}>
+              <div className="relative h-6 overflow-hidden rounded-md bg-gray-100" aria-label={t('{speaker} speech intervals', { speaker })}>
                 {timeline.valid.filter((turn) => turn.speaker === speaker).map((turn, turnIndex) => (
                   <button
                     key={`${turn.start}-${turn.end}-${turnIndex}`}
@@ -306,7 +307,7 @@ export function SpeakerTimeline({
                       backgroundColor: COLORS[index % COLORS.length],
                     }}
                     title={`${speaker}: ${formatTime(turn.start)}–${formatTime(turn.end)}`}
-                    aria-label={`Show ${speaker} transcript at ${formatTime(turn.start)} to ${formatTime(turn.end)}`}
+                    aria-label={t('Show {speaker} transcript at {start} to {end}', { speaker, start: formatTime(turn.start), end: formatTime(turn.end) })}
                     onClick={(event) => {
                       const rect = event.currentTarget.getBoundingClientRect();
                       const fraction = event.detail === 0 || rect.width === 0
@@ -325,7 +326,7 @@ export function SpeakerTimeline({
     <div
       role="separator"
       aria-orientation="horizontal"
-      aria-label="Resize speaker timeline"
+      aria-label={t('Resize speaker timeline')}
       aria-valuenow={Math.round(measuredHeight())}
       aria-valuemin={MIN_HEIGHT}
       aria-valuemax={maxHeight()}

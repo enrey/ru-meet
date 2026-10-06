@@ -8,6 +8,7 @@ import { transcriptService } from '@/services/transcriptService';
 import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
 import { listen } from '@tauri-apps/api/event';
+import { translate } from '@/lib/i18n';
 
 interface TranscriptContextType {
   transcripts: Transcript[];
@@ -128,7 +129,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             const meetingName = await recordingService.getRecordingMeetingName();
 
             // Use a better fallback that matches the backend's naming pattern
-            const effectiveTitle = meetingName || `Meeting ${new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-')}`;
+            const effectiveTitle = meetingName || `${translate('Meeting')} ${new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-')}`;
 
             // Initialize meeting metadata in IndexedDB
             await indexedDBService.saveMeetingMetadata({
@@ -360,7 +361,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         console.log('✅ MAIN transcript listener setup complete');
       } catch (error) {
         console.error('❌ Failed to setup MAIN transcript listener:', error);
-        alert('Failed to setup transcript listener. Check console for details.');
+        alert(translate('Failed to setup transcript listener. Check console for details.'));
       }
     };
 
@@ -485,7 +486,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         ...transcript,
         speaker: transcript.sequence_id === undefined ? transcript.speaker : speakers.get(transcript.sequence_id) ?? transcript.speaker,
       })));
-      toast.success('Speaker labels added to the transcript');
+      toast.success(translate('Speaker labels added to the transcript'));
     }).then((handler) => { unlisten = handler; });
     return () => unlisten?.();
   }, []);
@@ -494,7 +495,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     let unlisten: (() => void) | undefined;
     listen<string>('diarization-error', ({ payload }) => {
       console.error('Speaker diarization failed:', payload);
-      toast.error('Speaker diarization failed', {
+      toast.error(translate('Speaker diarization failed'), {
         description: payload,
       });
     }).then((handler) => { unlisten = handler; });
@@ -517,7 +518,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       .join('\n');
     navigator.clipboard.writeText(fullTranscript);
 
-    toast.success("Transcript copied to clipboard");
+    toast.success(translate('Transcript copied to clipboard'));
   }, [transcripts]);
 
   // Force flush buffer (for final transcript processing)

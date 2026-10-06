@@ -11,6 +11,7 @@ import { useRecordingState } from '@/contexts/RecordingStateContext';
 import type { TranscriptionErrorPayload } from '@/services/transcriptService';
 import { LiveAudioStatus } from './LiveAudioStatus';
 import { recordingService, type FinalizedRecording } from '@/services/recordingService';
+import { translate, useI18n } from '@/lib/i18n';
 
 interface RecordingControlsProps {
   isRecording: boolean;
@@ -42,6 +43,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 }) => {
   // Use global recording state context for pause state (syncs with tray operations)
   const recordingState = useRecordingState();
+  const { t } = useI18n();
   const isPaused = recordingState.isPaused;
   const isStartingRecording = recordingState.isStartingRecording;
 
@@ -76,7 +78,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         console.log('Tauri is initialized and ready, is_recording result:', result);
       } catch (error) {
         console.error('Tauri initialization error:', error);
-        alert('Failed to initialize recording. Please check the console for details.');
+        alert(translate('Failed to initialize recording. Please check the console for details.'));
       }
     };
     checkTauri();
@@ -200,7 +202,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       console.log('Recording paused successfully');
     } catch (error) {
       console.error('Failed to pause recording:', error);
-      alert('Failed to pause recording. Please check the console for details.');
+      alert(translate('Failed to pause recording. Please check the console for details.'));
     } finally {
       setIsPausing(false);
     }
@@ -218,7 +220,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       console.log('Recording resumed successfully');
     } catch (error) {
       console.error('Failed to resume recording:', error);
-      alert('Failed to resume recording. Please check the console for details.');
+      alert(translate('Failed to resume recording. Please check the console for details.'));
     } finally {
       setIsResuming(false);
     }
@@ -313,7 +315,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           {isProcessing && !isParentProcessing ? (
             <div className="flex items-center space-x-2">
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-900"></div>
-              <span className="text-sm text-gray-600">Processing recording...</span>
+              <span className="text-sm text-gray-600">{t('Processing recording...')}</span>
             </div>
           ) : (
             <>
@@ -372,7 +374,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>Start recording</p>
+                        <p>{t('Start recording')}</p>
                       </TooltipContent>
                     </Tooltip>
                   ) : (
@@ -397,13 +399,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             {isPaused ? <Play size={16} /> : <Pause size={16} />}
                             {(isPausing || isResuming) && (
                               <div className="absolute -top-8 text-gray-600 font-medium text-xs">
-                                {isPausing ? 'Pausing...' : 'Resuming...'}
+                                {isPausing ? t('Pausing...') : t('Resuming...')}
                               </div>
                             )}
                           </button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>{isPaused ? 'Resume recording' : 'Pause recording'}</p>
+                          <p>{isPaused ? t('Resume recording') : t('Pause recording')}</p>
                         </TooltipContent>
                       </Tooltip>
 
@@ -418,13 +420,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             <Square size={16} />
                             {isStopping && (
                               <div className="absolute -top-8 text-gray-600 font-medium text-xs">
-                                Stopping...
+                                {t('Stopping...')}
                               </div>
                             )}
                           </button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>Stop recording</p>
+                          <p>{t('Stop recording')}</p>
                         </TooltipContent>
                       </Tooltip>
                     </>
@@ -439,7 +441,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         {/* Show validation status only */}
         {isValidatingModel && (
           <div className="text-xs text-gray-600 text-center mt-2">
-            Validating speech recognition...
+            {t('Validating speech recognition...')}
           </div>
         )}
 
@@ -452,15 +454,15 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             <button
               onClick={() => setDeviceError(null)}
               className="absolute right-3 top-3 text-red-600 hover:text-red-800 transition-colors"
-              aria-label="Close alert"
+              aria-label={t('Close alert')}
             >
               <X className="h-4 w-4" />
             </button>
             <AlertTitle className="text-red-800 font-semibold mb-2">
-              {deviceError.title}
+              {t(deviceError.title)}
             </AlertTitle>
             <AlertDescription className="text-red-700">
-              {deviceError.message.split('\n').map((line, i) => (
+              {t(deviceError.message).split('\n').map((line, i) => (
                 <div key={i} className={i > 0 ? 'ml-2' : ''}>
                   {line}
                 </div>

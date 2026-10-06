@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Sparkles, Settings, Loader2, FileText, Check, Square, Play, Pause } from 'lucide-react';
 import { useState, useEffect, ReactNode } from 'react';
+import { useI18n } from '@/lib/i18n';
 
 interface SummaryGeneratorButtonGroupProps {
   languageSlot?: ReactNode;
@@ -66,6 +67,7 @@ export function SummaryGeneratorButtonGroup({
   isSpeechPaused = false,
   isSynthesizingSpeech = false,
 }: SummaryGeneratorButtonGroupProps) {
+  const { t } = useI18n();
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
 
   // Expose the function to open the modal via callback registration
@@ -102,17 +104,17 @@ export function SummaryGeneratorButtonGroup({
           disabled={isGenerating}
           title={
             !isSpeaking
-              ? 'Read the summary aloud'
+              ? t('Read the summary aloud')
               : isSpeechPaused
-                ? 'Resume reading'
-                : 'Pause reading'
+                ? t('Resume reading')
+                : t('Pause reading')
           }
           aria-label={
             !isSpeaking
-              ? 'Read the summary aloud'
+              ? t('Read the summary aloud')
               : isSpeechPaused
-                ? 'Resume reading'
-                : 'Pause reading'
+                ? t('Resume reading')
+                : t('Pause reading')
           }
         >
           {isSynthesizingSpeech && isSpeaking && !isSpeechPaused ? (
@@ -130,8 +132,8 @@ export function SummaryGeneratorButtonGroup({
           variant="outline"
           size="sm"
           onClick={onStopSpeech}
-          title="Stop reading"
-          aria-label="Stop reading"
+          title={t('Stop reading')}
+          aria-label={t('Stop reading')}
         >
           <Square size={18} fill="currentColor" />
         </Button>
@@ -144,10 +146,10 @@ export function SummaryGeneratorButtonGroup({
           size="sm"
           className="bg-gradient-to-r from-red-50 to-orange-50 hover:from-red-100 hover:to-orange-100 border-red-200 px-3 gap-2"
           onClick={onStopGeneration}
-          title="Stop summary generation"
+          title={t('Stop summary generation')}
         >
           <Square size={18} fill="currentColor" />
-          <span className="hidden @[24rem]:inline">Stop</span>
+          <span className="hidden @[24rem]:inline">{t('Stop')}</span>
         </Button>
       ) : (
         <Button
@@ -158,19 +160,19 @@ export function SummaryGeneratorButtonGroup({
           disabled={isModelConfigLoading}
           title={
             isModelConfigLoading
-              ? 'Loading model configuration...'
-              : hasSummary ? 'Regenerate AI Summary' : 'Generate AI Summary'
+              ? t('Loading model configuration...')
+              : hasSummary ? t('Regenerate AI Summary') : t('Generate AI Summary')
           }
         >
           {isModelConfigLoading ? (
             <>
               <Loader2 className="animate-spin" size={18} />
-              <span className="hidden @[24rem]:inline">Processing...</span>
+              <span className="hidden @[24rem]:inline">{t('Processing...')}</span>
             </>
           ) : (
             <>
               <Sparkles size={18} />
-              <span className="hidden @[24rem]:inline">{hasSummary ? 'Regenerate Summary' : 'Generate Summary'}</span>
+              <span className="hidden @[24rem]:inline">{hasSummary ? t('Regenerate Summary') : t('Generate Summary')}</span>
             </>
           )}
         </Button>
@@ -184,17 +186,17 @@ export function SummaryGeneratorButtonGroup({
           <Button
             variant="outline"
             size="sm"
-            title="Summary Settings"
+            title={t('Summary Settings')}
           >
             <Settings />
-            <span className="hidden @[40rem]:inline">AI Model</span>
+            <span className="hidden @[40rem]:inline">{t('AI Model')}</span>
           </Button>
         </DialogTrigger>
         <DialogContent
           aria-describedby={undefined}
         >
           <VisuallyHidden>
-            <DialogTitle>Model Settings</DialogTitle>
+            <DialogTitle>{t('Model Settings')}</DialogTitle>
           </VisuallyHidden>
           <ModelSettingsModal
             onSave={async (config) => {
@@ -216,10 +218,10 @@ export function SummaryGeneratorButtonGroup({
             <Button
               variant="outline"
               size="sm"
-              title="Select summary template"
+              title={t('Select summary template')}
             >
               <FileText />
-              <span className="hidden @[40rem]:inline">Template</span>
+              <span className="hidden @[40rem]:inline">{t('Template')}</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -227,10 +229,10 @@ export function SummaryGeneratorButtonGroup({
               <DropdownMenuItem
                 key={template.id}
                 onClick={() => onTemplateSelect(template.id, template.name)}
-                title={template.description}
+                title={t(template.description)}
                 className="flex items-center justify-between gap-2"
               >
-                <span>{template.name}</span>
+                <span>{t(template.name)}</span>
                 {selectedTemplate === template.id && (
                   <Check className="h-4 w-4 text-green-600" />
                 )}

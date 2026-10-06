@@ -5,6 +5,7 @@ import { Cpu, Download, Loader2, PlayCircle, Trash2, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from './ui/button';
 import type { RawModelInfo } from '@/hooks/useTranscriptionModels';
+import { translate, useI18n } from '@/lib/i18n';
 
 const MODEL = 'gigaam-v3-e2e-ctc';
 
@@ -22,6 +23,7 @@ interface ActiveProviderStatus {
 }
 
 export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = false }: Props) {
+  const { t } = useI18n();
   const [model, setModel] = useState<RawModelInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState<number | null>(null);
@@ -61,19 +63,19 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
         if (disposed || payload.modelName !== MODEL) return;
         setProgress(null);
         await refresh();
-        toast.success('GigaAM v3 is ready');
+        toast.success(translate('GigaAM v3 is ready'));
         onModelSelect?.(MODEL);
       }),
       listen<{ modelName: string; error: string }>('gigaam-model-download-error', ({ payload }) => {
         if (disposed || payload.modelName !== MODEL) return;
         setProgress(null);
-        toast.error('GigaAM v3 download failed', { description: payload.error });
+        toast.error(translate('GigaAM v3 download failed'), { description: payload.error });
       }),
     ]).then((items) => unlisteners.push(...items));
 
     invoke('gigaam_init')
       .then(refresh)
-      .catch((error) => toast.error('Failed to initialize GigaAM', { description: String(error) }))
+      .catch((error) => toast.error(translate('Failed to initialize GigaAM'), { description: String(error) }))
       .finally(() => { if (!disposed) setLoading(false); });
 
     return () => {
@@ -94,7 +96,7 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
 
   const available = model?.status === 'Available';
   const assignmentDetails = providerStatus?.provider_assignments
-    .map(({ provider, node_count }) => `${provider}: ${node_count} operations`)
+    .map(({ provider, node_count }) => t('{provider}: {count} operations', { provider, count: node_count }))
     .join('\n');
   const isAccelerated = providerStatus?.label?.startsWith('GPU') || providerStatus?.label?.startsWith('CoreML');
 
@@ -110,7 +112,7 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
       await invoke('gigaam_load_model', { modelName: MODEL });
       await fetchProviderStatus();
     } catch (error) {
-      toast.error('Failed to load GigaAM v3', { description: String(error) });
+      toast.error(t('Failed to load GigaAM v3'), { description: String(error) });
     } finally {
       try {
         await invoke('gigaam_unload_model');
@@ -140,7 +142,7 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
   const remove = async () => {
     await invoke('gigaam_delete_model', { modelName: MODEL });
     await refresh();
-    toast.success('GigaAM v3 deleted');
+    toast.success(t('GigaAM v3 deleted'));
   };
 
   if (loading) {
@@ -171,18 +173,18 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
               }`}
               title={
                 !providerStatus?.label
-                  ? 'Not known yet - nothing has loaded GigaAM this session. Run an import or a recording with GigaAM selected, then check back here.'
+                  ? t('Not known yet - nothing has loaded GigaAM this session. Run an import or a recording with GigaAM selected, then check back here.')
                   : ([
                       providerStatus.label.includes('+ CPU')
-                        ? `ONNX Runtime split the graph between ${providerStatus.label.replace(' + CPU', '')} and CPU`
+                        ? t('ONNX Runtime split the graph between {provider} and CPU', { provider: providerStatus.label.replace(' + CPU', '') })
                         : isAccelerated
-                        ? `All reported graph operations were assigned to ${providerStatus.label}`
-                        : providerStatus.fallback_reason || 'All reported graph operations were assigned to CPU',
+                        ? t('All reported graph operations were assigned to {provider}', { provider: providerStatus.label })
+                        : providerStatus.fallback_reason || t('All reported graph operations were assigned to {provider}', { provider: 'CPU' }),
                       assignmentDetails,
                     ].filter(Boolean).join('\n')) +
                     (providerStatus.is_live
-                      ? '\nCurrently loaded'
-                      : '\nFrom the last transcription; the model is not loaded now')
+                      ? `\n${t('Currently loaded')}`
+                      : `\n${t('From the last transcription; the model is not loaded now')}`)
               }
             >
               {isAccelerated ? (
@@ -190,9 +192,9 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
               ) : (
                 <Cpu className="h-3 w-3" />
               )}
-              {providerStatus?.label ?? 'Unknown'}
+              {providerStatus?.label ?? t('Unknown')}
               {providerStatus?.label && !providerStatus.is_live && (
-                <span className="opacity-60">(last run)</span>
+                <span className="opacity-60">({t('last run')})</span>
               )}
             </span>
             {available && (
@@ -200,7 +202,7 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
                 variant="ghost"
                 size="icon"
                 className="h-5 w-5"
-                title="Load the model, check which provider it actually uses, then unload it again"
+                title={t('Load the model, check which provider it actually uses, then unload it again')}
                 disabled={testing}
                 onClick={(event) => { event.stopPropagation(); void testProvider(); }}
               >
@@ -212,12 +214,12 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
               </Button>
             )}
           </div>
-          <p className="mt-1 text-sm text-gray-600">Fast and accurate Russian speech recognition · 186 MB</p>
+          <p className="mt-1 text-sm text-gray-600">{t('Fast and accurate Russian speech recognition')} · 186 {t('MB')}</p>
         </div>
         {available ? (
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-green-600">Ready</span>
-            <Button variant="ghost" size="icon" title="Delete model" onClick={(event) => { event.stopPropagation(); void remove(); }}>
+            <span className="text-xs font-medium text-green-600">{t('Ready')}</span>
+            <Button variant="ghost" size="icon" title={t('Delete model')} onClick={(event) => { event.stopPropagation(); void remove(); }}>
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>
@@ -227,7 +229,7 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
           </div>
         ) : (
           <Button size="sm" onClick={(event) => { event.stopPropagation(); void download(); }}>
-            <Download className="mr-2 h-4 w-4" /> Download
+            <Download className="mr-2 h-4 w-4" /> {t('Download')}
           </Button>
         )}
       </div>

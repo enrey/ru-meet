@@ -6,6 +6,7 @@ import { Summary, SummaryDataResponse, SummaryFormat, BlockNoteBlock } from '@/t
 import { AISummary } from './index';
 import { Block } from '@blocknote/core';
 import { useCreateBlockNote } from '@blocknote/react';
+import { blockNoteDictionary } from '@/lib/i18n/blocknote';
 import { BlockNoteView } from '@blocknote/shadcn';
 import { blocksToMarkdownSafely } from '@/lib/blocknote-markdown';
 import "@blocknote/shadcn/style.css";
@@ -83,7 +84,8 @@ export const BlockNoteSummaryView = forwardRef<BlockNoteSummaryViewRef, BlockNot
 
   // Create BlockNote editor for markdown parsing
   const editor = useCreateBlockNote({
-    initialContent: undefined
+    initialContent: undefined,
+    dictionary: blockNoteDictionary(),
   });
 
   // Parse markdown to blocks when format is markdown

@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { I18nProvider, getLocale, translate as t } from '@/lib/i18n'
 
 
 const sourceSans3 = Source_Sans_3({
@@ -118,14 +119,14 @@ export default function RootLayout({
     setIsReinitializingDatabase(true)
     try {
       const backups = await invoke<string[]>('backup_and_reinitialize_database')
-      toast.success('A new database was created', {
+      toast.success(t('A new database was created'), {
         description: backups.length
-          ? 'The previous database was preserved in the database folder.'
-          : 'No database files needed to be preserved.',
+          ? t('The previous database was preserved in the database folder.')
+          : t('No database files needed to be preserved.'),
       })
       window.location.reload()
     } catch (error) {
-      toast.error('Could not reinitialize the database', { description: String(error) })
+      toast.error(t('Could not reinitialize the database'), { description: String(error) })
       setIsReinitializingDatabase(false)
     }
   }
@@ -134,7 +135,7 @@ export default function RootLayout({
     try {
       await invoke('open_database_folder')
     } catch (error) {
-      toast.error('Could not open the database folder', { description: String(error) })
+      toast.error(t('Could not open the database folder'), { description: String(error) })
     }
   }
 
@@ -152,8 +153,8 @@ export default function RootLayout({
       console.log('[Layout] Received request-recording-toggle from tray');
 
       if (showOnboarding) {
-        toast.error("Please complete setup first", {
-          description: "You need to finish onboarding before you can start recording."
+        toast.error(t('Please complete setup first'), {
+          description: t('You need to finish onboarding before you can start recording.')
         });
       } else {
         // If in main app, forward to useRecordingStart via window event
@@ -173,8 +174,8 @@ export default function RootLayout({
     const betaFeatures = loadBetaFeatures();
 
     if (!betaFeatures.importAndRetranscribe) {
-      toast.error('Beta feature disabled', {
-        description: 'Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.'
+      toast.error(t('Beta feature disabled'), {
+        description: t('Enable "Import Audio & Retranscribe" in Settings > Beta to use this feature.')
       });
       return;
     }
@@ -190,8 +191,8 @@ export default function RootLayout({
       setImportFilePath(audioFile);
       setShowImportDialog(true);
     } else if (paths.length > 0) {
-      toast.error('Please drop an audio file', {
-        description: `Supported formats: ${getAudioFormatsDisplayList()}`
+      toast.error(t('Please drop an audio file'), {
+        description: t('Supported formats: {formats}', { formats: getAudioFormatsDisplayList() })
       });
     }
   }, []);
@@ -271,8 +272,9 @@ export default function RootLayout({
   }
 
   return (
-    <html lang="en">
+    <html lang={getLocale()}>
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
+        <I18nProvider>
         <RecordingStateProvider>
             <TranscriptProvider>
               <ConfigProvider>
@@ -316,23 +318,23 @@ export default function RootLayout({
                                   onPointerDownOutside={(event) => event.preventDefault()}
                                 >
                                   <DialogHeader>
-                                    <DialogTitle>Database could not be opened</DialogTitle>
+                                    <DialogTitle>{t('Database could not be opened')}</DialogTitle>
                                     <DialogDescription>
-                                      Meetily started without access to your local data. You can create a new database after preserving the existing files as a backup.
+                                      {t('Meetily started without access to your local data. You can create a new database after preserving the existing files as a backup.')}
                                     </DialogDescription>
                                   </DialogHeader>
                                   <p className="text-sm text-muted-foreground">
-                                    Reinitializing removes meetings, transcripts, notes, summaries, local settings, API keys, and license data from the active database. It does not delete audio recordings or downloaded models.
+                                    {t('Reinitializing removes meetings, transcripts, notes, summaries, local settings, API keys, and license data from the active database. It does not delete audio recordings or downloaded models.')}
                                   </p>
                                   <p className="rounded-md bg-muted p-3 text-xs text-muted-foreground break-words">
                                     {databaseStartupError}
                                   </p>
                                   <DialogFooter>
                                     <Button variant="outline" onClick={openDatabaseFolder} disabled={isReinitializingDatabase}>
-                                      Open backup folder
+                                      {t('Open backup folder')}
                                     </Button>
                                     <Button variant="destructive" onClick={handleReinitializeDatabase} disabled={isReinitializingDatabase}>
-                                      {isReinitializingDatabase ? 'Creating backup…' : 'Back up and reinitialize'}
+                                      {isReinitializingDatabase ? t('Creating backup…') : t('Back up and reinitialize')}
                                     </Button>
                                   </DialogFooter>
                                 </DialogContent>
@@ -348,6 +350,7 @@ export default function RootLayout({
               </ConfigProvider>
             </TranscriptProvider>
           </RecordingStateProvider>
+        </I18nProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
       </body>

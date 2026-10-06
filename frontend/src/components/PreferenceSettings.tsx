@@ -6,6 +6,9 @@ import { FolderOpen } from "lucide-react"
 import { invoke } from "@tauri-apps/api/core"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
 import { toast } from "sonner"
+import { Languages } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select"
+import { Locale, UI_LOCALES, useI18n } from "@/lib/i18n"
 
 interface AutomationPreferences {
   autoRecordMeetings: boolean;
@@ -22,6 +25,7 @@ export function PreferenceSettings() {
     loadPreferences,
     updateNotificationSettings
   } = useConfig();
+  const { locale, setLocale, t } = useI18n();
 
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -39,7 +43,7 @@ export function PreferenceSettings() {
       setAutomation(previous => previous && { ...previous, excludedApps });
       setExcludedAppInput('');
     } catch (error) {
-      toast.error('Не удалось сохранить исключения', { description: String(error) });
+      toast.error(t('Could not save exclusions'), { description: String(error) });
     } finally {
       setSavingAutomation(false);
     }
@@ -68,7 +72,7 @@ export function PreferenceSettings() {
         setAutomation(previous => previous && { ...previous, launchAtLogin: actual });
       }
     } catch (error) {
-      toast.error('Could not save preference', { description: String(error) });
+      toast.error(t('Could not save preference'), { description: String(error) });
     } finally {
       setSavingAutomation(false);
     }
@@ -152,12 +156,12 @@ export function PreferenceSettings() {
 
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">{t('Loading preferences...')}</div>
   }
 
   // Show loading if notificationsEnabled hasn't been determined yet
   if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">{t('Loading preferences...')}</div>
   }
 
   // Ensure we have a boolean value for the Switch component
@@ -165,12 +169,35 @@ export function PreferenceSettings() {
 
   return (
     <div className="space-y-6">
+      {/* Interface Language Section */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+        <div className="flex items-center justify-between gap-6">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Languages size={18} className="text-gray-500" aria-hidden="true" />
+              <h3 id="ui-language-label" className="text-lg font-semibold text-gray-900">{t('Interface language')}</h3>
+            </div>
+            <p className="text-sm text-gray-600">{t('Language of menus, buttons and messages in the app')}</p>
+          </div>
+          <Select value={locale} onValueChange={value => setLocale(value as Locale)}>
+            <SelectTrigger aria-labelledby="ui-language-label" className="w-44 shrink-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {UI_LOCALES.map(option => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       {/* Notifications Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 id="notifications-label" className="text-lg font-semibold text-gray-900 mb-2">Notifications</h3>
-            <p className="text-sm text-gray-600">Enable or disable notifications of start and end of meeting</p>
+            <h3 id="notifications-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Notifications')}</h3>
+            <p className="text-sm text-gray-600">{t('Enable or disable notifications of start and end of meeting')}</p>
           </div>
           <Switch aria-labelledby="notifications-label" checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </div>
@@ -179,13 +206,12 @@ export function PreferenceSettings() {
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm space-y-6">
         <div className="flex items-center justify-between gap-6">
           <div>
-            <h3 id="auto-record-label" className="text-lg font-semibold text-gray-900 mb-2">Записывать встречи автоматически</h3>
+            <h3 id="auto-record-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Record meetings automatically')}</h3>
             <p id="auto-record-description" className="text-sm text-gray-600">
-              Автоматически начинать запись при появлении звукового потока любого приложения, кроме исключений.
-              Встречи короче 1 минуты игнорируются.
+              {t('Start recording automatically when any app other than the exclusions begins playing audio. Meetings shorter than 1 minute are ignored.')}
             </p>
             {automation && !automation.autoRecordSupported && (
-              <p className="mt-2 text-sm text-gray-600">Обнаружение встреч пока доступно только в Windows.</p>
+              <p className="mt-2 text-sm text-gray-600">{t('Meeting detection is currently available only on Windows.')}</p>
             )}
           </div>
           <Switch
@@ -198,10 +224,9 @@ export function PreferenceSettings() {
           />
         </div>
         <div className="space-y-3">
-          <label htmlFor="auto-record-exclusion" className="block text-sm font-medium text-gray-900">Приложения-исключения</label>
+          <label htmlFor="auto-record-exclusion" className="block text-sm font-medium text-gray-900">{t('Excluded apps')}</label>
           <p id="auto-record-exclusion-help" className="text-sm text-gray-600">
-            Звук этих приложений не запускает запись. Укажите имя .exe, например Spotify.exe.
-            Звук Meetily всегда исключён. Исключения не удаляют звук из уже начавшейся записи.
+            {t('Audio from these apps never starts a recording. Enter the .exe name, for example Spotify.exe. Meetily audio is always excluded. Exclusions do not remove audio from a recording already in progress.')}
           </p>
           <form className="flex gap-2" onSubmit={event => {
             event.preventDefault();
@@ -216,14 +241,14 @@ export function PreferenceSettings() {
               disabled={!automation?.autoRecordSupported || savingAutomation}
               className="min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:opacity-50"
             />
-            <button type="submit" disabled={!automation?.autoRecordSupported || savingAutomation || !excludedAppInput.trim()} className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-blue-600">Добавить</button>
+            <button type="submit" disabled={!automation?.autoRecordSupported || savingAutomation || !excludedAppInput.trim()} className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-blue-600">{t('Add')}</button>
           </form>
           {!!automation?.excludedApps.length && (
             <ul className="space-y-2">
               {automation.excludedApps.map(name => (
                 <li key={name} className="flex items-center justify-between gap-3 rounded-md bg-gray-50 px-3 py-2">
                   <span className="text-sm break-all">{name}</span>
-                  <button type="button" aria-label={`Удалить ${name} из исключений`} disabled={savingAutomation} onClick={() => void saveExcludedApps(automation.excludedApps.filter(app => app !== name))} className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-blue-600">Удалить</button>
+                  <button type="button" aria-label={t('Remove {name} from exclusions', { name })} disabled={savingAutomation} onClick={() => void saveExcludedApps(automation.excludedApps.filter(app => app !== name))} className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-blue-600">{t('Remove')}</button>
                 </li>
               ))}
             </ul>
@@ -231,8 +256,8 @@ export function PreferenceSettings() {
         </div>
         <div className="flex items-center justify-between gap-6 border-t border-gray-200 pt-6">
           <div>
-            <h3 id="launch-at-login-label" className="text-lg font-semibold text-gray-900 mb-2">Запускать при загрузке ПК</h3>
-            <p className="text-sm text-gray-600">Запускать Meetily автоматически при входе в систему.</p>
+            <h3 id="launch-at-login-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Launch at startup')}</h3>
+            <p className="text-sm text-gray-600">{t('Start Meetily automatically when you sign in.')}</p>
           </div>
           <Switch
             aria-labelledby="launch-at-login-label"
@@ -242,14 +267,14 @@ export function PreferenceSettings() {
             className="shrink-0"
           />
         </div>
-        {automationError && <p role="alert" className="text-sm text-red-600">Не удалось загрузить настройки автоматизации.</p>}
+        {automationError && <p role="alert" className="text-sm text-red-600">{t('Could not load automation settings.')}</p>}
       </div>
 
       {/* Data Storage Locations Section */}
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Data Storage Locations</h3>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('Data Storage Locations')}</h3>
         <p className="text-sm text-gray-600 mb-6">
-          View and access where Meetily stores your data
+          {t('View and access where Meetily stores your data')}
         </p>
 
         <div className="space-y-4">
@@ -285,23 +310,23 @@ export function PreferenceSettings() {
 
           {/* Recordings Location */}
           <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Meeting Recordings</div>
+            <div className="font-medium mb-2">{t('Meeting Recordings')}</div>
             <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.recordings || 'Loading...'}
+              {storageLocations?.recordings || t('Loading...')}
             </div>
             <button
               onClick={() => handleOpenFolder('recordings')}
               className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
-              Open Folder
+              {t('Open Folder')}
             </button>
           </div>
         </div>
 
         <div className="mt-4 p-3 bg-blue-50 rounded-md">
           <p className="text-xs text-blue-800">
-            <strong>Note:</strong> Database and models are stored together in your application data directory for unified management.
+            <strong>{t('Note:')}</strong> {t('Database and models are stored together in your application data directory for unified management.')}
           </p>
         </div>
       </div>

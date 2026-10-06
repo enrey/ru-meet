@@ -3,6 +3,7 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { translate } from '@/lib/i18n';
 
 interface ChunkEvent {
   job: number;
@@ -122,7 +123,7 @@ export function useSummarySpeech(getMarkdown: () => Promise<string>) {
       }),
       listen<JobEvent>('tts-error', (event) => {
         if (jobRef.current !== null && event.payload.job !== jobRef.current) return;
-        setError(event.payload.message ?? 'Speech synthesis failed');
+        setError(event.payload.message ?? translate('Speech synthesis failed'));
         reset();
       }),
       listen<JobEvent>('tts-waiting', (event) => {
@@ -188,7 +189,7 @@ export function useSummarySpeech(getMarkdown: () => Promise<string>) {
     setNotice(null);
     const markdown = await getMarkdown();
     if (!markdown.trim()) {
-      throw new Error('Summary is empty');
+      throw new Error(translate('Summary is empty'));
     }
 
     queueRef.current = [];

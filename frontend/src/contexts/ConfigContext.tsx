@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { BetaFeatures, BetaFeatureKey, loadBetaFeatures, saveBetaFeatures } from '@/types/betaFeatures';
 import { normalizeAudioDevicePreferences } from '@/lib/audioDevicePreferences';
 import { DEFAULT_GIGAAM_MODEL, DEFAULT_TRANSCRIPTION_PROVIDER } from '@/constants/modelDefaults';
+import { translate } from '@/lib/i18n';
 
 export interface OllamaModel {
   name: string;
@@ -199,7 +200,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
         setModels(modelList);
         setError('');
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load Ollama models');
+        setError(err instanceof Error ? err.message : translate('Failed to load Ollama models'));
         console.error('Error loading models:', err);
       }
     };

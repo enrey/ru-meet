@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { LoaderCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useI18n } from '@/lib/i18n';
 
 interface DiarizationStatus {
   inProgress: boolean;
@@ -18,6 +19,7 @@ interface DiarizationProgressProps {
 }
 
 export function DiarizationProgress({ meetingId, onLabelsSaved, onStatusChange }: DiarizationProgressProps) {
+  const { t } = useI18n();
   const [status, setStatus] = useState<DiarizationStatus>({ inProgress: false, message: '' });
 
   useEffect(() => {
@@ -97,13 +99,13 @@ export function DiarizationProgress({ meetingId, onLabelsSaved, onStatusChange }
   return (
     <div
       className="flex items-center gap-2 rounded-md bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700"
-      title={status.message}
+      title={t(status.message)}
       role="status"
       aria-live="polite"
     >
       <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-      <span className="hidden @[28rem]:inline">{status.message}</span>
-      <span className="sr-only">{status.message}</span>
+      <span className="hidden @[28rem]:inline">{t(status.message)}</span>
+      <span className="sr-only">{t(status.message)}</span>
     </div>
   );
 }
