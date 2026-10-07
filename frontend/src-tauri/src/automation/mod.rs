@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_store::StoreExt;
 
 mod monitor;
+pub(crate) mod microphone_activity;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -91,6 +92,8 @@ pub fn set_auto_record_meetings<R: Runtime>(
     );
     store.save().map_err(|e| e.to_string())?;
     *settings = next;
+    drop(settings);
+    let _ = app.emit("auto-record-meetings-changed", enabled);
     Ok(())
 }
 

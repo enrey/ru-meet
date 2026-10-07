@@ -580,6 +580,30 @@ pub async fn get_meeting_folder_path() -> Result<Option<String>, String> {
         .unwrap_or(None))
 }
 
+/// Open the active recording's folder before the meeting is persisted.
+#[tauri::command]
+pub async fn open_active_recording_folder() -> Result<(), String> {
+    let folder_path = get_meeting_folder_path()
+        .await?
+        .ok_or_else(|| "Recording folder is not available".to_string())?;
+    if !std::path::Path::new(&folder_path).is_dir() {
+        return Err(format!("Recording folder not found: {folder_path}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let opener = "xdg-open";
+
+    std::process::Command::new(opener)
+        .arg(&folder_path)
+        .spawn()
+        .map_err(|error| format!("Failed to open folder: {error}"))?;
+    Ok(())
+}
+
 /// Resolve a saved meeting's audio file so the transcript can play a phrase
 /// from it, and make sure the webview is allowed to read that file.
 ///

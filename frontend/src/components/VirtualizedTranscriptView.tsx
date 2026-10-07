@@ -6,8 +6,7 @@ import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useTranscriptStreaming } from "@/hooks/useTranscriptStreaming";
 import { ConfidenceIndicator } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { RecordingStatusBar } from "./RecordingStatusBar";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
 import { Play, Square } from "lucide-react";
 import { usePhrasePlayback } from "@/hooks/usePhrasePlayback";
@@ -175,6 +174,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
     const lastAppliedJumpRef = useRef<string | null>(null);
     // Ref for infinite scroll trigger element
     const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
@@ -198,6 +198,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Custom hook for auto-scrolling (supports both virtualized and non-virtualized)
     useAutoScroll({
         scrollRef,
+        contentRef,
         segments,
         isRecording,
         isPaused,
@@ -287,7 +288,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     const useVirtualization = segments.length >= VIRTUALIZATION_THRESHOLD;
 
     return (
-        <div ref={scrollRef} className="flex flex-col h-full overflow-y-auto px-4 py-2">
+        <div ref={scrollRef} className="h-full overflow-y-auto px-4 py-2">
             {hasPrevious && !isRecording && (
                 <button
                     type="button"
@@ -298,17 +299,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     {isLoadingPrevious ? t('Loading earlier…') : t('Load earlier transcript')}
                 </button>
             )}
-            {/* Recording Status Bar - Sticky at top, always visible when recording */}
-            <AnimatePresence>
-                {isRecording && (
-                    <div className="sticky top-0 z-10 bg-white pb-2">
-                        <RecordingStatusBar isPaused={isPaused} />
-                    </div>
-                )}
-            </AnimatePresence>
-
             {/* Content - add padding when recording to prevent overlap */}
-            <div className={isRecording ? 'pt-2' : ''}>
+            <div ref={contentRef} className={`shrink-0 ${isRecording ? 'pt-2' : ''}`}>
             {segments.length === 0 ? (
                 // Empty state
                 <motion.div

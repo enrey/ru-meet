@@ -58,15 +58,17 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                     detection.suppressed = true;
                 }
             }
+            let microphone_active =
+                settings.auto_record_meetings && super::microphone_activity::is_active();
             let active = if settings.auto_record_meetings {
                 match tokio::task::spawn_blocking(move || {
-                    super::windows::has_active_playback(&settings.excluded_apps)
+                    super::windows::has_active_audio(&settings.excluded_apps)
                 })
                 .await
                 {
                     Ok(Ok(active)) => {
                         last_error = None;
-                        active
+                        active || microphone_active
                     }
                     result => {
                         let error = format!("Audio stream detection failed: {result:?}");
@@ -75,7 +77,11 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                             last_error = Some(error);
                         }
                         // An enumeration failure is not evidence that a meeting ended.
-                        continue;
+                        if microphone_active {
+                            true
+                        } else {
+                            continue;
+                        }
                     }
                 }
             } else {

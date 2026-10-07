@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Switch } from "./ui/switch"
 import { FolderOpen } from "lucide-react"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
 import { toast } from "sonner"
 import { Languages } from "lucide-react"
@@ -51,13 +52,22 @@ export function PreferenceSettings() {
 
   useEffect(() => {
     let cancelled = false;
-    invoke<AutomationPreferences>('get_automation_preferences')
-      .then(preferences => { if (!cancelled) setAutomation(preferences); })
-      .catch(error => {
+    let unlisten: (() => void) | undefined;
+    let revision = 0;
+    const load = async () => {
+      const current = ++revision;
+      try {
+        const preferences = await invoke<AutomationPreferences>('get_automation_preferences');
+        if (!cancelled && current === revision) { setAutomation(preferences); setAutomationError(false); }
+      } catch (error) {
         console.error('Failed to load automation preferences:', error);
-        if (!cancelled) setAutomationError(true);
-      });
-    return () => { cancelled = true; };
+        if (!cancelled && current === revision) setAutomationError(true);
+      }
+    };
+    listen<boolean>('auto-record-meetings-changed', () => { void load(); })
+      .then(fn => { if (cancelled) fn(); else { unlisten = fn; void load(); } })
+      .catch(() => { void load(); });
+    return () => { cancelled = true; unlisten?.(); };
   }, []);
 
   const updateAutomation = async (key: 'autoRecordMeetings' | 'launchAtLogin', enabled: boolean) => {
@@ -208,7 +218,7 @@ export function PreferenceSettings() {
           <div>
             <h3 id="auto-record-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Record meetings automatically')}</h3>
             <p id="auto-record-description" className="text-sm text-gray-600">
-              {t('Start recording automatically when any app other than the exclusions begins playing audio. Meetings shorter than 1 minute are ignored.')}
+              {t('Start recording automatically when an app other than the exclusions plays audio or uses a microphone, or when sound is detected on the selected microphone. Meetings shorter than 1 minute are ignored.')}
             </p>
             {automation && !automation.autoRecordSupported && (
               <p className="mt-2 text-sm text-gray-600">{t('Meeting detection is currently available only on Windows.')}</p>

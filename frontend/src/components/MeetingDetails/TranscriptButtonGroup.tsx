@@ -89,9 +89,10 @@ export function TranscriptButtonGroup({
           className="px-2 @[22rem]:px-4"
           onClick={onOpenMeetingFolder}
           title={t('Open Recording Folder')}
+          aria-label={t('Open Folder')}
         >
           <FolderOpen className="@[22rem]:mr-2" size={18} />
-          <span className="hidden @[22rem]:inline">{t('Recording')}</span>
+          <span className="hidden @[22rem]:inline">{t('Open Folder')}</span>
         </Button>
 
         {meetingId && meetingFolderPath && (

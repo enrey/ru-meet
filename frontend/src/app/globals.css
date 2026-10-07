@@ -212,3 +212,13 @@
     overflow: visible !important;
   }
 }
+@keyframes auto-record-echo {
+  0%, 100% { opacity: 0.25; }
+  45% { opacity: 1; }
+}
+
+.auto-record-echo { animation: auto-record-echo 2.4s ease-in-out infinite; }
+.auto-record-echo-outer { animation-delay: 0.45s; }
+@media (prefers-reduced-motion: reduce) {
+  .auto-record-echo { animation: none; }
+}

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { RecordingControls } from '@/components/RecordingControls';
+import { DraggableAudioStatus } from '@/components/DraggableAudioStatus';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { usePermissionCheck } from '@/hooks/usePermissionCheck';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
@@ -168,7 +169,7 @@ export default function Home() {
   const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className="flex flex-col h-full bg-gray-50">
       {/* All Modals supported*/}
       <SettingsModals
         modals={modals}
@@ -185,15 +186,22 @@ export default function Home() {
         onDelete={deleteRecoverableMeeting}
         onLoadPreview={loadMeetingTranscripts}
       />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 min-h-0 overflow-hidden">
         <TranscriptPanel
           isProcessingStop={isProcessingStop}
           isStopping={isStopping}
           showModal={showModal}
         />
 
-        {/* Recording controls - only show when permissions are granted or already recording and not showing status messages */}
-        {(hasMicrophone || isRecording) &&
+        <DraggableAudioStatus
+          devices={selectedDevices}
+          recording={recordingState.isRecording && !isStopping && !isProcessingStop && !isSaving}
+          disabled={recordingState.isStartingRecording || isStopping || isProcessingStop || isSaving}
+        />
+
+        {/* Keep live devices available while transport controls are in the top bar. */}
+        {hasMicrophone && !recordingState.isRecording &&
+          status !== RecordingStatus.STOPPING &&
           status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
           status !== RecordingStatus.SAVING && (
             <div className="fixed bottom-12 left-0 right-0 z-10">

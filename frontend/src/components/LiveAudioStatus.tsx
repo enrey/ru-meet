@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type HTMLAttributes } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { ChevronDown, Cpu, Headphones, Loader2, Mic, X, Zap } from 'lucide-react';
+import { ChevronDown, ChevronUp, Cpu, GripHorizontal, Headphones, Loader2, Mic, Zap } from 'lucide-react';
 import { AudioLevelMeter } from './AudioLevelMeter';
 import type { AudioDevice, AudioLevelData, AudioLevelUpdate } from './DeviceSelection';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -22,7 +22,13 @@ type ActiveProviderStatus = {
 };
 
 /** Shows capture health, not browser volume: both values come from active WASAPI/CPAL inputs. */
-export function LiveAudioStatus({ recording, devices }: { recording: boolean; devices?: Devices }) {
+export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVisible = false, disabled = false }: {
+  recording: boolean;
+  devices?: Devices;
+  dragHandleProps?: HTMLAttributes<HTMLDivElement>;
+  alwaysVisible?: boolean;
+  disabled?: boolean;
+}) {
   const { setSelectedDevices, transcriptModelConfig } = useConfig();
   const { t } = useI18n();
   const [levels, setLevels] = useState<Map<string, AudioLevelData>>(new Map());
@@ -35,35 +41,61 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
   const [sourceMutes, setSourceMutes] = useState<SourceMutes>({ microphone: false, system: false });
   const [togglingSource, setTogglingSource] = useState<'microphone' | 'system' | null>(null);
   const [providerStatus, setProviderStatus] = useState<ActiveProviderStatus | null>(null);
+  const monitoringQueue = useRef<Promise<void>>(Promise.resolve());
   const mic = activeDevices?.microphone || stripAudioDeviceSuffix(devices?.micDevice);
   const system = activeDevices?.system || stripAudioDeviceSuffix(devices?.systemDevice);
 
   useEffect(() => {
+    setLevels(new Map());
     if (!recording) {
-      setLevels(new Map());
-      setCollapsed(false);
+      setActiveDevices(null);
       setSourceMutes({ microphone: false, system: false });
-      return;
     }
+    if (disabled || (!recording && !alwaysVisible)) return;
+    let cancelled = false;
+    let started = false;
     let unlisten: (() => void) | undefined;
-    (async () => {
-      const [active, mutes] = await Promise.all([
-        invoke<ActiveDevices>('get_active_recording_devices'),
-        invoke<SourceMutes>('get_recording_source_mutes'),
-      ]);
+    // Serialize cleanup and setup so a late preview cannot stop the live meter.
+    monitoringQueue.current = monitoringQueue.current.then(async () => {
+      if (cancelled) return;
+      let active: ActiveDevices;
+      let mutes: SourceMutes = { microphone: false, system: false };
+      if (recording) {
+        [active, mutes] = await Promise.all([
+          invoke<ActiveDevices>('get_active_recording_devices'),
+          invoke<SourceMutes>('get_recording_source_mutes'),
+        ]);
+      } else {
+        const available = await invoke<AudioDevice[]>('get_audio_devices');
+        if (cancelled) return;
+        setAvailableDevices(available);
+        active = {
+          microphone: stripAudioDeviceSuffix(devices?.micDevice) || available.find(device => device.device_type === 'Input')?.name || null,
+          system: stripAudioDeviceSuffix(devices?.systemDevice) || available.find(device => device.device_type === 'Output')?.name || null,
+        };
+      }
+      if (cancelled) return;
       setActiveDevices(active);
       setSourceMutes(mutes);
       const names = [active.microphone, active.system].filter((item): item is string => Boolean(item));
       unlisten = await listen<AudioLevelUpdate>('audio-levels', ({ payload }) => {
-        setLevels(new Map(payload.levels.map(level => [level.device_name, level])));
+        if (!cancelled) setLevels(new Map(payload.levels.map(level => [level.device_name, level])));
       });
-      if (names.length) await invoke('start_audio_level_monitoring', { deviceNames: names });
-    })().catch(console.error);
+      if (cancelled) { unlisten(); unlisten = undefined; return; }
+      if (names.length) {
+        await invoke('start_audio_level_monitoring', { deviceNames: names });
+        started = true;
+      }
+    }).catch(console.error);
     return () => {
+      cancelled = true;
       unlisten?.();
-      invoke('stop_audio_level_monitoring').catch(console.error);
+      monitoringQueue.current = monitoringQueue.current.then(async () => {
+        unlisten?.();
+        if (started) await invoke('stop_audio_level_monitoring');
+      }).catch(console.error);
     };
-  }, [recording]);
+  }, [recording, alwaysVisible, disabled, devices?.micDevice, devices?.systemDevice]);
 
   useEffect(() => {
     if (!recording || transcriptModelConfig.provider !== 'gigaam') {
@@ -90,23 +122,26 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
   }, [recording, transcriptModelConfig.provider]);
 
   useEffect(() => {
-    if (!recording || !expandedDevice || availableDevices.length) return;
+    if (!expandedDevice || availableDevices.length) return;
     invoke<AudioDevice[]>('get_audio_devices')
       .then(setAvailableDevices)
       .catch((error) => setSwitchError(t('Could not load devices: {error}', { error: String(error) })));
   }, [recording, expandedDevice, availableDevices.length]);
-
-  const restartMeter = async (next: ActiveDevices) => {
-    const names = [next.microphone, next.system].filter((item): item is string => Boolean(item));
-    await invoke('stop_audio_level_monitoring');
-    if (names.length) await invoke('start_audio_level_monitoring', { deviceNames: names });
-  };
 
   const switchDevice = async (kind: 'microphone' | 'system', nextName: string) => {
     setExpandedDevice(null);
     setSwitching(kind);
     setSwitchError(null);
     try {
+      if (!recording) {
+        const selected = normalizeAudioDevicePreferences({
+          micDevice: kind === 'microphone' ? nextName : devices?.micDevice ?? null,
+          systemDevice: kind === 'system' ? nextName : devices?.systemDevice ?? null,
+        });
+        await configService.saveRecordingDevicePreferences(selected);
+        setSelectedDevices(selected);
+        return;
+      }
       if (kind === 'microphone') {
         await invoke('switch_recording_microphone', { micDeviceName: nextName });
       } else {
@@ -123,7 +158,6 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
       });
       setSelectedDevices(selected);
       await configService.saveRecordingDevicePreferences(selected);
-      await restartMeter(next);
     } catch (error) {
       setSwitchError(t(kind === 'microphone' ? 'Could not switch microphone: {error}' : 'Could not switch system audio: {error}', { error: String(error) }));
     } finally {
@@ -153,7 +187,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
     }
   };
 
-  if (!recording) return null;
+  if (!recording && !alwaysVisible) return null;
   const row = (kind: 'microphone' | 'system', label: string, name: string | null, options: AudioDevice[]) => {
     const level = name ? levels.get(name) : undefined;
     const isExpanded = expandedDevice === kind;
@@ -163,7 +197,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
       <button
         type="button"
         onClick={() => toggleSource(kind)}
-        disabled={togglingSource !== null}
+        disabled={!recording || disabled || togglingSource !== null}
         className={`flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${isMuted ? 'text-gray-400' : 'text-gray-800 hover:text-gray-600'}`}
         aria-pressed={isMuted}
         title={isMuted ? t('Enable {source}', { source: label }) : t('Mute {source}', { source: label })}
@@ -178,6 +212,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
       <button
         type="button"
         onClick={() => setExpandedDevice(isExpanded ? null : kind)}
+        disabled={disabled || switching !== null}
         className="flex w-full items-center justify-between gap-2 rounded px-1 py-0.5 text-left text-xs text-gray-600 hover:bg-gray-200"
         aria-expanded={isExpanded}
       >
@@ -189,7 +224,7 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
           {options.map((device) => <button
             key={device.name}
             type="button"
-            disabled={switching !== null}
+            disabled={disabled || switching !== null}
             onClick={() => switchDevice(kind, device.name)}
             className={`block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-gray-100 disabled:opacity-50 ${device.name === name ? 'bg-gray-100 font-medium text-gray-900' : 'text-gray-700'}`}
           >{device.name}</button>)}
@@ -216,8 +251,9 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
     .map(({ provider, node_count }) => t('{provider}: {count} operations', { provider, count: node_count }))
     .join('\n');
   const isAccelerated = providerLabel?.startsWith('GPU') || providerLabel?.startsWith('CoreML');
-  return <div className="mt-3 space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3" aria-live="polite">
-    <div className="flex items-center justify-between gap-2">
+  return <div className={`${dragHandleProps ? '' : 'mt-3'} space-y-2 rounded-md border border-gray-200 bg-gray-50 p-3`} aria-live="polite">
+    <div {...dragHandleProps} className={`flex items-center justify-between gap-2 ${dragHandleProps?.className ?? ''}`}>
+      {dragHandleProps && <GripHorizontal className="h-4 w-4 shrink-0 text-gray-400" aria-hidden="true" />}
       {collapsed ? <button
         type="button"
         onClick={() => setCollapsed(false)}
@@ -226,8 +262,8 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
       >
         {t('Live capture signal')}
       </button> : <p className="text-xs font-medium text-gray-700">{t('Live capture signal')}</p>}
-      {!collapsed && <div className="flex items-center gap-2">
-        {transcriptModelConfig.provider === 'gigaam' && <span
+      <div className="flex items-center gap-2">
+        {!collapsed && recording && transcriptModelConfig.provider === 'gigaam' && <span
           className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
             isAccelerated
               ? 'bg-purple-100 text-purple-700'
@@ -257,15 +293,16 @@ export function LiveAudioStatus({ recording, devices }: { recording: boolean; de
           type="button"
           onClick={() => {
             setExpandedDevice(null);
-            setCollapsed(true);
+            setCollapsed(previous => !previous);
           }}
           className="rounded p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-800"
-          aria-label={t('Collapse live capture signal')}
-          title={t('Collapse')}
+          aria-label={collapsed ? t('Expand live capture signal') : t('Collapse live capture signal')}
+          aria-expanded={!collapsed}
+          title={collapsed ? t('Expand') : t('Collapse')}
         >
-          <X className="h-3.5 w-3.5" aria-hidden="true" />
+          {collapsed ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
         </button>
-      </div>}
+      </div>
     </div>
     {!collapsed && <>
       {row('microphone', t('Microphone'), mic, inputs)}

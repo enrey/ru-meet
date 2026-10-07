@@ -8,6 +8,19 @@ const plural = (param: string, one: string, few: string, many: string): Translat
 
 /** Russian UI strings keyed by their English source text. */
 export const ru: Record<string, Translation> = {
+  "Expand live capture signal": "Развернуть панель уровней звука",
+  "Expand": "Развернуть",
+  "Move audio panel. Drag the header or use arrow keys.": "Перемещение панели звука. Перетащите заголовок или используйте клавиши со стрелками.",
+  "Drag to move": "Перетащите для перемещения",
+  "Automatic recording": "Автозапись",
+  "Recording in progress": "Идёт запись",
+  "On": "Вкл",
+  "Off": "Выкл",
+  "Waiting for sound": "Ожидание звука",
+  "Could not load automatic recording status": "Не удалось загрузить состояние автозаписи",
+  "Automatic recording is unavailable on this platform": "Автозапись недоступна на этой платформе",
+  "Could not change recording state": "Не удалось изменить состояние записи",
+  "Failed to stop recording": "Не удалось остановить запись",
   // Settings › General
   "Could not save exclusions": "Не удалось сохранить исключения",
   "Could not save preference": "Не удалось сохранить настройку",
@@ -17,7 +30,7 @@ export const ru: Record<string, Translation> = {
   "Notifications": "Уведомления",
   "Enable or disable notifications of start and end of meeting": "Включить или отключить уведомления о начале и окончании встречи",
   "Record meetings automatically": "Записывать встречи автоматически",
-  "Start recording automatically when any app other than the exclusions begins playing audio. Meetings shorter than 1 minute are ignored.": "Автоматически начинать запись при появлении звукового потока любого приложения, кроме исключений. Встречи короче 1 минуты игнорируются.",
+  "Start recording automatically when an app other than the exclusions plays audio or uses a microphone, or when sound is detected on the selected microphone. Meetings shorter than 1 minute are ignored.": "Автоматически начинать запись, когда приложение, кроме исключений, воспроизводит звук или использует микрофон, либо когда на выбранном микрофоне появляется звуковой сигнал. Встречи короче 1 минуты игнорируются.",
   "Meeting detection is currently available only on Windows.": "Обнаружение встреч пока доступно только в Windows.",
   "Excluded apps": "Приложения-исключения",
   "Audio from these apps never starts a recording. Enter the .exe name, for example Spotify.exe. Meetily audio is always excluded. Exclusions do not remove audio from a recording already in progress.": "Звук этих приложений не запускает запись. Укажите имя .exe, например Spotify.exe. Звук Meetily всегда исключён. Исключения не удаляют звук из уже начавшейся записи.",

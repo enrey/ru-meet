@@ -95,6 +95,15 @@ impl AudioLevelMonitor {
                 };
 
                 if !levels.is_empty() {
+                    // Only the current meter generation may feed microphone
+                    // detection; an old preview can finish after a device switch.
+                    if AUDIO_LEVEL_STATE.generation.load(Ordering::SeqCst) == generation {
+                        for level in &levels {
+                            if level.device_type == "input" {
+                                crate::automation::microphone_activity::observe(level.rms_level, generation);
+                            }
+                        }
+                    }
                     let update = AudioLevelUpdate {
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -363,7 +372,8 @@ pub fn stop_monitoring() -> Result<()> {
     AUDIO_LEVEL_STATE
         .is_monitoring
         .store(false, Ordering::SeqCst);
-    AUDIO_LEVEL_STATE.generation.fetch_add(1, Ordering::SeqCst);
+    let generation = AUDIO_LEVEL_STATE.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::automation::microphone_activity::reset(generation);
     info!("Audio level monitoring stopped globally");
     Ok(())
 }
@@ -375,6 +385,7 @@ pub fn start_monitoring_thread<R: Runtime>(
     device_names: Vec<String>,
 ) -> Result<()> {
     let generation = AUDIO_LEVEL_STATE.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::automation::microphone_activity::reset(generation);
     AUDIO_LEVEL_STATE
         .is_monitoring
         .store(true, Ordering::SeqCst);

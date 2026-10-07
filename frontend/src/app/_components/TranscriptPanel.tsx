@@ -3,7 +3,9 @@ import { PermissionWarning } from '@/components/PermissionWarning';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { AudioLines, Cpu, Copy, GlobeIcon } from 'lucide-react';
+import { AudioLines, Cpu, Copy, FolderOpen, GlobeIcon } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
@@ -33,12 +35,20 @@ export function TranscriptPanel({
   showModal
 }: TranscriptPanelProps) {
   // Contexts
-  const { transcripts, transcriptContainerRef, copyTranscript } = useTranscripts();
+  const { transcripts, copyTranscript } = useTranscripts();
   const { transcriptModelConfig } = useConfig();
   const { isRecording, isPaused } = useRecordingState();
   const { checkPermissions, isChecking, hasSystemAudio, hasMicrophone } = usePermissionCheck();
   const isLinux = useIsLinux();
   const { t } = useI18n();
+
+  const openRecordingFolder = async () => {
+    try {
+      await invoke('open_active_recording_folder');
+    } catch (error) {
+      toast.error(t('Failed to open recording folder'), { description: String(error) });
+    }
+  };
 
   // Convert transcripts to segments for virtualized view
   const segments = useMemo(() =>
@@ -54,13 +64,25 @@ export function TranscriptPanel({
   );
 
   return (
-    <div ref={transcriptContainerRef} className="w-full border-r border-gray-200 bg-white flex flex-col overflow-y-auto">
+    <div className="w-full min-h-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
       {/* Title area - Sticky header */}
-      <div className="sticky top-0 z-10 bg-white p-4 border-gray-200">
+      <div className="shrink-0 z-10 bg-white p-4 border-gray-200">
         <div className="flex flex-col space-y-3">
           <div className="flex  flex-col space-y-2">
             <div className="flex justify-center  items-center space-x-2">
               <ButtonGroup>
+                {isRecording && !isStopping && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={openRecordingFolder}
+                    title={t('Open Recording Folder')}
+                    aria-label={t('Open Folder')}
+                  >
+                    <FolderOpen />
+                    <span className="hidden md:inline">{t('Open Folder')}</span>
+                  </Button>
+                )}
                 {transcripts?.length > 0 && (
                   <Button
                     variant="outline"
@@ -144,9 +166,9 @@ export function TranscriptPanel({
       )}
 
       {/* Transcript content */}
-      <div className="pb-20">
-        <div className="flex justify-center">
-          <div className="w-2/3 max-w-[750px]">
+      <div className="flex-1 min-h-0 pb-20">
+        <div className="flex justify-center h-full">
+          <div className="w-2/3 max-w-[750px] h-full">
             <VirtualizedTranscriptView
               segments={segments}
               isRecording={isRecording}
