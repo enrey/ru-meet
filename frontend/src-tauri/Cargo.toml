@@ -113,7 +113,7 @@ thiserror = "2.0.16"                # Error handling for Parakeet
 rustfft = "6.4"                      # Mel spectrogram FFT for gigaam_onnx.rs
 # Offline speaker diarization. All engines share the application's ORT
 # runtime; do not enable parakeet-rs defaults, which would load another runtime.
-polyvoice = { version = "0.21.0", default-features = false, features = ["pipeline-native", "vbx"] }
+polyvoice = { version = "1.0.0", default-features = false, features = ["pipeline-native", "vbx"] }
 parakeet-rs = { version = "=0.3.6", default-features = false, features = ["sortformer"] }
 # speakrs runs the full pyannote community-1 pipeline (segmentation, PLDA, VBx)
 # on `ort`. `online` stays off so models come from download_speakrs_models,

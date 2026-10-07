@@ -28,21 +28,6 @@ cpal = { git = "https://github.com/RustAudio/cpal", rev = "51c3b43" }
 # ndarray-linalg-nalgebra` implements those three operations on nalgebra
 # instead, keeping the build pure Rust on both release targets.
 ndarray-linalg = { path = "crates/ndarray-linalg-nalgebra" }
-# Released `polyvoice` refuses any recording over one hour - a hard-coded
-# `MAX_AUDIO_SAMPLES` its own comment describes as a guard against untrusted
-# buffers reaching the C FFI and Python bindings, which is not how Meetily calls
-# it. The constant is read directly at the check site and the pipeline's stages
-# are private, so it cannot be overridden from outside the crate.
-#
-# This points at our fork's branch for
-# https://github.com/ekhodzitsky/polyvoice/pull/94, which turns the cap into
-# `PipelineConfig::max_audio_samples` (default unchanged). `diarization.rs`
-# raises it through the builder. Pinned by `rev` so the build is reproducible
-# even if the branch moves.
-#
-# When the PR is merged and released, delete this entry and bump the version in
-# `frontend/src-tauri/Cargo.toml`; the builder call stays as it is.
-polyvoice = { git = "https://github.com/enrey/polyvoice", rev = "c098fd31e28e0e2a8b093c21fcade7902d3a3cbd" }
 
 # Keep development builds compact and fast while retaining line information
 # for useful backtraces.
