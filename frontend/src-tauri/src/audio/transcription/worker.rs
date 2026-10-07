@@ -48,6 +48,10 @@ pub struct TranscriptUpdate {
 }
 
 /// Optimized parallel transcription task ensuring ZERO chunk loss
+/// `{ loading: bool, error?: string }` — whether the live recording is still
+/// waiting for its speech recognition model.
+pub const MODEL_LOADING_EVENT: &str = "transcription-model-loading";
+
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
     transcription_receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
@@ -56,15 +60,29 @@ pub fn start_transcription_task<R: Runtime>(
     tokio::spawn(async move {
         info!("🚀 Starting optimized parallel transcription task - guaranteeing zero chunk loss");
 
-        // Initialize transcription engine (Whisper or Parakeet based on config)
+        // Capture is already running: the model loads here, in the background,
+        // while VAD segments queue in `transcription_receiver`.
+        let _ = app.emit(MODEL_LOADING_EVENT, serde_json::json!({ "loading": true }));
+        let load_started = std::time::Instant::now();
         let transcription_engine = match super::engine::get_or_init_transcription_engine(&app).await
         {
-            Ok(engine) => engine,
+            Ok(engine) => {
+                info!(
+                    "Transcription model ready {:.2}s after recording start",
+                    load_started.elapsed().as_secs_f64()
+                );
+                let _ = app.emit(MODEL_LOADING_EVENT, serde_json::json!({ "loading": false }));
+                engine
+            }
             Err(e) => {
                 error!("Failed to initialize transcription engine: {}", e);
+                let _ = app.emit(
+                    MODEL_LOADING_EVENT,
+                    serde_json::json!({ "loading": false, "error": e }),
+                );
                 let _ = app.emit("transcription-error", serde_json::json!({
                     "error": e,
-                    "userMessage": "Recording failed: Unable to initialize speech recognition. Please check your model settings.",
+                    "userMessage": "Speech recognition could not load. Audio is still being recorded; you can retranscribe the meeting later. Please check your model settings.",
                     "actionable": true,
                     "phase": "active"
                 }));

@@ -28,6 +28,7 @@ interface UsePaginatedTranscriptsReturn {
     loadMore: () => Promise<void>;
     loadPrevious: () => Promise<void>;
     jumpToSpeakerTime: (speaker: string, time: number) => Promise<string | null>;
+    jumpToTranscript: (id: string, offset: number) => Promise<string | null>;
     renameSpeakerLocally: (oldName: string, newName: string) => void;
     reset: () => void;
     refetch: () => Promise<void>;
@@ -206,6 +207,34 @@ export function usePaginatedTranscripts({
         }
     }, [meetingId, baseOffset, isLoadingPrevious, isCurrentRequest]);
 
+    /**
+     * Make sure the line `id` at pagination `offset` is loaded, loading its
+     * page in place of the current window if needed. Returns the id once it
+     * can be scrolled to, or null when a newer jump or meeting superseded it.
+     */
+    const jumpToTranscript = useCallback(async (id: string, offset: number): Promise<string | null> => {
+        if (!meetingId || activeMeetingIdRef.current !== meetingId) return null;
+        const jumpRequest = ++jumpRequestRef.current;
+        if (transcripts.some((item) => item.id === id)) return id;
+        // A jump replaces the loaded window, so invalidate any in-flight
+        // infinite-scroll request before it can append an unrelated page.
+        const requestId = ++requestIdRef.current;
+        isLoadingRef.current = false;
+        setIsLoadingMore(false);
+        const pageOffset = Math.floor(offset / DEFAULT_PAGE_SIZE) * DEFAULT_PAGE_SIZE;
+        const response = await invoke<PaginatedTranscriptsResponse>('api_get_meeting_transcripts', {
+            meetingId, limit: DEFAULT_PAGE_SIZE, offset: pageOffset,
+        });
+        if (!isCurrentRequest(requestId) || jumpRequest !== jumpRequestRef.current) return null;
+        if (!response.transcripts.some((item) => item.id === id)) return null;
+        setTranscripts(response.transcripts);
+        setHasMore(response.has_more);
+        setTotalCount(response.total_count);
+        offsetRef.current = pageOffset + response.transcripts.length;
+        setBaseOffset(pageOffset);
+        return id;
+    }, [meetingId, transcripts, isCurrentRequest]);
+
     const jumpToSpeakerTime = useCallback(async (speaker: string, time: number): Promise<string | null> => {
         if (!meetingId || !Number.isFinite(time) || activeMeetingIdRef.current !== meetingId) return null;
         const jumpRequest = ++jumpRequestRef.current;
@@ -213,25 +242,8 @@ export function usePaginatedTranscripts({
             meetingId, speaker, time,
         });
         if (!match || jumpRequest !== jumpRequestRef.current || activeMeetingIdRef.current !== meetingId) return null;
-        if (transcripts.some((item) => item.id === match.id)) return match.id;
-        // A jump replaces the loaded window, so invalidate any in-flight
-        // infinite-scroll request before it can append an unrelated page.
-        const requestId = ++requestIdRef.current;
-        isLoadingRef.current = false;
-        setIsLoadingMore(false);
-        const offset = Math.floor(match.offset / DEFAULT_PAGE_SIZE) * DEFAULT_PAGE_SIZE;
-        const response = await invoke<PaginatedTranscriptsResponse>('api_get_meeting_transcripts', {
-            meetingId, limit: DEFAULT_PAGE_SIZE, offset,
-        });
-        if (!isCurrentRequest(requestId) || jumpRequest !== jumpRequestRef.current) return null;
-        if (!response.transcripts.some((item) => item.id === match.id)) return null;
-        setTranscripts(response.transcripts);
-        setHasMore(response.has_more);
-        setTotalCount(response.total_count);
-        offsetRef.current = offset + response.transcripts.length;
-        setBaseOffset(offset);
-        return match.id;
-    }, [meetingId, transcripts, isCurrentRequest]);
+        return jumpToTranscript(match.id, match.offset);
+    }, [meetingId, jumpToTranscript]);
 
     const renameSpeakerLocally = useCallback((oldName: string, newName: string) => {
         setTranscripts((current) => current.map((item) =>
@@ -308,6 +320,7 @@ export function usePaginatedTranscripts({
         loadMore,
         loadPrevious,
         jumpToSpeakerTime,
+        jumpToTranscript,
         renameSpeakerLocally,
         reset,
         refetch,

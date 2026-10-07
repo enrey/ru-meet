@@ -85,6 +85,7 @@ export function useRecordingStop(
         duration: 10000,
       });
       setStatus(RecordingStatus.IDLE);
+      router.push(`/meeting-details?id=${result.meetingId}`);
     } catch (error) {
       handledMeetingIds.delete(result.meetingId);
       const message = error instanceof Error ? error.message : String(error);

@@ -6,6 +6,8 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::mpsc::SyncSender;
+use crate::automation::preview_vad::PreviewAudio;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use super::audio_processing::audio_to_mono;
@@ -60,12 +62,13 @@ impl AudioLevelMonitor {
 
         let host = cpal::default_host();
         let level_data = Arc::new(Mutex::new(Vec::<AudioLevelData>::new()));
+        let vad_sender = crate::automation::preview_vad::start(generation)?;
 
         // Create audio streams for each device
         for device_name in &device_names {
             if let Ok(device) = self.find_device_by_name(&host, device_name) {
                 if let Ok(stream) =
-                    self.create_level_stream(&device, device_name, level_data.clone())
+                    self.create_level_stream(&device, device_name, level_data.clone(), vad_sender.clone())
                 {
                     let mut streams = self.streams.lock().unwrap();
                     streams.push(stream);
@@ -95,15 +98,6 @@ impl AudioLevelMonitor {
                 };
 
                 if !levels.is_empty() {
-                    // Only the current meter generation may feed microphone
-                    // detection; an old preview can finish after a device switch.
-                    if AUDIO_LEVEL_STATE.generation.load(Ordering::SeqCst) == generation {
-                        for level in &levels {
-                            if level.device_type == "input" {
-                                crate::automation::microphone_activity::observe(level.rms_level, generation);
-                            }
-                        }
-                    }
                     let update = AudioLevelUpdate {
                         timestamp: std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -175,6 +169,7 @@ impl AudioLevelMonitor {
         device: &cpal::Device,
         device_name: &str,
         level_data: Arc<Mutex<Vec<AudioLevelData>>>,
+        vad_sender: SyncSender<PreviewAudio>,
     ) -> Result<cpal::Stream> {
         let device_name = device_name.to_string();
 
@@ -227,6 +222,8 @@ impl AudioLevelMonitor {
                                 &device_name_clone,
                                 &device_type_clone,
                                 level_data_clone.clone(),
+                                &vad_sender,
+                                sample_rate,
                             );
                         },
                         |err| error!("Audio stream error: {}", err),
@@ -242,6 +239,8 @@ impl AudioLevelMonitor {
                                 &device_name_clone,
                                 &device_type_clone,
                                 level_data_clone.clone(),
+                                &vad_sender,
+                                sample_rate,
                             );
                         },
                         |err| error!("System-audio level stream error: {}", err),
@@ -263,6 +262,8 @@ impl AudioLevelMonitor {
                             &device_name_clone,
                             &device_type_clone,
                             level_data_clone.clone(),
+                            &vad_sender,
+                            sample_rate,
                         );
                     },
                     |err| error!("Audio stream error: {}", err),
@@ -283,6 +284,8 @@ impl AudioLevelMonitor {
                             &device_name_clone,
                             &device_type_clone,
                             level_data_clone.clone(),
+                            &vad_sender,
+                            sample_rate,
                         );
                     },
                     |err| error!("Audio stream error: {}", err),
@@ -307,6 +310,8 @@ fn process_audio_levels(
     device_name: &str,
     device_type: &str,
     level_data: Arc<Mutex<Vec<AudioLevelData>>>,
+    vad_sender: &SyncSender<PreviewAudio>,
+    sample_rate: u32,
 ) {
     if data.is_empty() {
         return;
@@ -328,6 +333,15 @@ fn process_audio_levels(
 
     // Calculate peak level
     let peak = mono_data.iter().map(|&x| x.abs()).fold(0.0, f32::max);
+
+    // Bounded, nonblocking submission. A slow VAD must never stall capture.
+    let _ = vad_sender.try_send(PreviewAudio {
+        device: device_name.to_string(),
+        microphone: device_type == "input",
+        sample_rate,
+        samples: mono_data,
+        captured_at: std::time::Instant::now(),
+    });
 
     // Determine if audio is active (threshold for noise floor)
     let is_active = rms > 0.001; // Adjust threshold as needed
@@ -367,6 +381,11 @@ pub fn is_monitoring() -> bool {
     AUDIO_LEVEL_STATE.is_monitoring.load(Ordering::SeqCst)
 }
 
+pub(crate) fn is_current_generation(generation: u64) -> bool {
+    AUDIO_LEVEL_STATE.is_monitoring.load(Ordering::SeqCst)
+        && AUDIO_LEVEL_STATE.generation.load(Ordering::SeqCst) == generation
+}
+
 /// Global function to stop monitoring
 pub fn stop_monitoring() -> Result<()> {
     AUDIO_LEVEL_STATE
@@ -380,10 +399,11 @@ pub fn stop_monitoring() -> Result<()> {
 
 /// CPAL streams are deliberately !Send. Keep them owned by one dedicated OS
 /// thread rather than placing them in Tauri's global async state.
+/// Returns the generation of the new preview (see `is_current_generation`).
 pub fn start_monitoring_thread<R: Runtime>(
     app_handle: AppHandle<R>,
     device_names: Vec<String>,
-) -> Result<()> {
+) -> Result<u64> {
     let generation = AUDIO_LEVEL_STATE.generation.fetch_add(1, Ordering::SeqCst) + 1;
     crate::automation::microphone_activity::reset(generation);
     AUDIO_LEVEL_STATE
@@ -405,5 +425,5 @@ pub fn start_monitoring_thread<R: Runtime>(
         }
         let _ = monitor.stop_monitoring();
     });
-    Ok(())
+    Ok(generation)
 }

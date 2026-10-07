@@ -430,65 +430,119 @@ impl TranscriptsRepository {
         Ok(merged)
     }
 
-    /// Searches for a query string within the transcripts.
-    /// It returns a list of matching transcripts with context.
+    /// Searches every meeting's transcript lines for `query`.
+    ///
+    /// Matching is done in Rust: SQLite's `LOWER`/`LIKE` only fold ASCII, so
+    /// a Cyrillic query would otherwise be case-sensitive.
     pub async fn search_transcripts(
         pool: &SqlitePool,
         query: &str,
     ) -> Result<Vec<TranscriptSearchResult>, SqlxError> {
-        if query.trim().is_empty() {
+        use futures_util::TryStreamExt;
+
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
             return Ok(Vec::new());
         }
 
-        let search_query = format!("%{}%", query.to_lowercase());
-
-        let rows = sqlx::query_as::<_, (String, String, String, String)>(
+        let mut rows = sqlx::query_as::<_, (String, String, String, String)>(
             "SELECT m.id, m.title, t.transcript, t.timestamp
              FROM meetings m
-             JOIN transcripts t ON m.id = t.meeting_id
-             WHERE LOWER(t.transcript) LIKE ?",
+             JOIN transcripts t ON m.id = t.meeting_id",
         )
-        .bind(&search_query)
-        .fetch_all(pool)
-        .await?;
-
-        let results = rows
-            .into_iter()
-            .map(|(id, title, transcript, timestamp)| {
-                let match_context = Self::get_match_context(&transcript, query);
-                TranscriptSearchResult {
+        .fetch(pool);
+        let mut results = Vec::new();
+        while let Some((id, title, transcript, timestamp)) = rows.try_next().await? {
+            if let Some(match_context) = Self::get_match_context(&transcript, &needle) {
+                results.push(TranscriptSearchResult {
                     id,
                     title,
                     match_context,
                     timestamp,
-                }
-            })
-            .collect();
-
+                });
+            }
+        }
         Ok(results)
     }
 
-    /// Helper function to extract a snippet of text around the first match of a query.
-    fn get_match_context(transcript: &str, query: &str) -> String {
-        let transcript_lower = transcript.to_lowercase();
-        let query_lower = query.to_lowercase();
-
-        match transcript_lower.find(&query_lower) {
-            Some(match_index) => {
-                let start_index = match_index.saturating_sub(100);
-                let end_index = (match_index + query.len() + 100).min(transcript.len());
-
-                let mut context = String::new();
-                if start_index > 0 {
-                    context.push_str("...");
-                }
-                context.push_str(&transcript[start_index..end_index]);
-                if end_index < transcript.len() {
-                    context.push_str("...");
-                }
-                context
-            }
-            None => transcript.chars().take(200).collect(), // Fallback to the start of the transcript
+    /// Lines of one meeting containing `query`, as `(id, offset)` where
+    /// `offset` is the line's position in the paginated transcript order
+    /// (`audio_start_time ASC, id ASC`), so the UI can load the right page.
+    pub async fn search_meeting_transcript(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        query: &str,
+    ) -> Result<Vec<(String, i64)>, SqlxError> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
         }
+        let rows = sqlx::query_as::<_, (String, String)>(
+            "SELECT id, transcript FROM transcripts
+             WHERE meeting_id = ? ORDER BY audio_start_time ASC, id ASC",
+        )
+        .bind(meeting_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .enumerate()
+            .filter(|(_, (_, text))| text.to_lowercase().contains(&needle))
+            .map(|(offset, (id, _))| (id, offset as i64))
+            .collect())
+    }
+
+    /// Up to 100 characters either side of the first case-insensitive match of
+    /// the lowercase `needle`, or `None` when the text does not contain it.
+    /// Works on characters, never bytes, so it cannot split a Cyrillic letter.
+    fn get_match_context(transcript: &str, needle: &str) -> Option<String> {
+        const AROUND: usize = 100;
+        let chars: Vec<char> = transcript.chars().collect();
+        let lower: Vec<char> = chars
+            .iter()
+            .map(|c| c.to_lowercase().next().unwrap_or(*c))
+            .collect();
+        let needle: Vec<char> = needle.chars().collect();
+        let start = lower
+            .windows(needle.len().max(1))
+            .position(|window| window == needle.as_slice())?;
+        let from = start.saturating_sub(AROUND);
+        let to = (start + needle.len() + AROUND).min(chars.len());
+        let mut context = String::new();
+        if from > 0 {
+            context.push_str("...");
+        }
+        context.extend(&chars[from..to]);
+        if to < chars.len() {
+            context.push_str("...");
+        }
+        Some(context)
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::TranscriptsRepository;
+
+    #[test]
+    fn match_context_is_case_insensitive_for_cyrillic_and_char_safe() {
+        let text = format!("{}Привет, мир{}", "я".repeat(150), "ю".repeat(150));
+        let context = TranscriptsRepository::get_match_context(&text, "привет").unwrap();
+        assert!(context.starts_with("...") && context.ends_with("..."));
+        assert!(context.contains("Привет, мир"));
+        assert_eq!(TranscriptsRepository::get_match_context("Hello", "bye"), None);
+    }
+
+    #[tokio::test]
+    async fn meeting_search_returns_page_offsets_in_transcript_order() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE transcripts (id TEXT, meeting_id TEXT, transcript TEXT, audio_start_time REAL)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO transcripts VALUES
+            ('c', 'm', 'Третий: ПРИВЕТ', 30.0), ('a', 'm', 'первый', 10.0),
+            ('b', 'm', 'Второй привет', 20.0), ('x', 'other', 'привет', 5.0)")
+            .execute(&pool).await.unwrap();
+        let found = TranscriptsRepository::search_meeting_transcript(&pool, "m", "Привет").await.unwrap();
+        assert_eq!(found, vec![("b".to_string(), 1), ("c".to_string(), 2)]);
     }
 }

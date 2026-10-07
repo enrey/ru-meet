@@ -322,16 +322,18 @@ impl ParakeetEngine {
                 current_dir.join("models").join("parakeet")
             } else {
                 // Production mode
-                crate::portable::data_root()
-                    .cloned()
-                    .or_else(dirs::data_dir)
-                    .or_else(|| dirs::home_dir())
-                    .ok_or_else(|| anyhow!("Could not find system data directory"))?
-                    .join(if crate::portable::data_root().is_some() {
-                        ""
+                ({
+                    let base = crate::portable::data_root()
+                        .cloned()
+                        .or_else(dirs::data_dir)
+                        .or_else(|| dirs::home_dir())
+                        .ok_or_else(|| anyhow!("Could not find system data directory"))?;
+                    if crate::portable::data_root().is_some() {
+                        base
                     } else {
-                        "Meetily"
-                    })
+                        crate::portable::product_dir(base)
+                    }
+                })
                     .join("models")
                     .join("parakeet")
             }

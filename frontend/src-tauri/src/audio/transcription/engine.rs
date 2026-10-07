@@ -90,105 +90,104 @@ static ENGINE_LIFECYCLE_LOCK: Lazy<AsyncMutex<()>> = Lazy::new(|| AsyncMutex::ne
 // MODEL VALIDATION AND INITIALIZATION
 // ============================================================================
 
-/// Validate that transcription models (Whisper or Parakeet) are ready before starting recording
-pub async fn validate_transcription_model_ready<R: Runtime>(
+/// Transcript configuration the live recording uses, falling back to the
+/// local default when none is stored or it cannot be read.
+async fn recording_transcript_config<R: Runtime>(
+    app: &AppHandle<R>,
+) -> crate::api::api::TranscriptConfig {
+    match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state(), None).await
+    {
+        Ok(Some(config)) => {
+            info!(
+                "📝 Transcript config - provider: {}, model: {}",
+                config.provider, config.model
+            );
+            config
+        }
+        Ok(None) => {
+            info!("📝 No transcript config found, using the local default");
+            crate::api::api::TranscriptConfig::local_default()
+        }
+        Err(e) => {
+            warn!(
+                "⚠️ Failed to get transcript config: {}, using the local default",
+                e
+            );
+            crate::api::api::TranscriptConfig::local_default()
+        }
+    }
+}
+
+/// Cheap pre-start check: the model the recording will transcribe with is on
+/// disk. It does not load the model — the transcription task does that in the
+/// background, so audio capture starts immediately and speech segments queue
+/// until the model is ready.
+pub async fn ensure_transcription_model_available<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<(), String> {
-    // Check transcript configuration to determine which engine to validate
-    let config =
-        match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state(), None)
-            .await
-        {
-            Ok(Some(config)) => {
-                info!(
-                    "📝 Found transcript config - provider: {}, model: {}",
-                    config.provider, config.model
-                );
-                config
-            }
-            Ok(None) => {
-                info!("📝 No transcript config found, using the local default");
-                crate::api::api::TranscriptConfig::local_default()
-            }
-            Err(e) => {
-                warn!(
-                    "⚠️ Failed to get transcript config: {}, using the local default",
-                    e
-                );
-                crate::api::api::TranscriptConfig::local_default()
-            }
-        };
+    let config = recording_transcript_config(app).await;
+    let provider = ProviderId::parse(Some(&config.provider), ProviderId::GigaAm)?;
+    let model = resolve_model(app, provider, Some(&config.model)).await?;
 
-    let local_default = crate::api::api::TranscriptConfig::local_default();
-    let default_provider = ProviderId::parse(Some(&local_default.provider), ProviderId::GigaAm)
-        .unwrap_or(ProviderId::GigaAm);
-    let provider = ProviderId::parse(Some(&config.provider), default_provider)?;
-
-    match provider {
+    let available = match provider {
         ProviderId::Whisper => {
-            info!("🔍 Validating Whisper model...");
-            // Ensure whisper engine is initialized first
-            if let Err(init_error) = crate::whisper_engine::commands::whisper_init().await {
-                warn!("❌ Failed to initialize Whisper engine: {}", init_error);
-                return Err(format!(
-                    "Failed to initialize speech recognition: {}",
-                    init_error
-                ));
-            }
-
-            // Call the whisper validation command with config support
-            match crate::whisper_engine::commands::whisper_validate_model_ready_with_config(app)
+            crate::whisper_engine::commands::whisper_init().await?;
+            let engine = crate::whisper_engine::commands::WHISPER_ENGINE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| "Whisper engine not initialized".to_string())?;
+            engine
+                .discover_models()
                 .await
-            {
-                Ok(model_name) => {
-                    info!(
-                        "✅ Whisper model validation successful: {} is ready",
-                        model_name
-                    );
-                    Ok(())
-                }
-                Err(e) => {
-                    warn!("❌ Whisper model validation failed: {}", e);
-                    Err(e)
-                }
-            }
+                .map_err(|error| format!("Failed to discover Whisper models: {error}"))?
+                .iter()
+                .any(|info| {
+                    info.name == model
+                        && matches!(info.status, crate::whisper_engine::ModelStatus::Available)
+                })
         }
         ProviderId::Parakeet => {
-            info!("🔍 Validating Parakeet model...");
-            // Ensure parakeet engine is initialized first
-            if let Err(init_error) = crate::parakeet_engine::commands::parakeet_init().await {
-                warn!("❌ Failed to initialize Parakeet engine: {}", init_error);
-                return Err(format!(
-                    "Failed to initialize Parakeet speech recognition: {}",
-                    init_error
-                ));
-            }
-
-            // Use the validation command that includes auto-discovery and loading
-            // This matches the Whisper behavior for consistency
-            match crate::parakeet_engine::commands::parakeet_validate_model_ready_with_config(app)
+            crate::parakeet_engine::commands::parakeet_init().await?;
+            let engine = crate::parakeet_engine::commands::PARAKEET_ENGINE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| "Parakeet engine not initialized".to_string())?;
+            engine
+                .discover_models()
                 .await
-            {
-                Ok(model_name) => {
-                    info!(
-                        "✅ Parakeet model validation successful: {} is ready",
-                        model_name
-                    );
-                    Ok(())
-                }
-                Err(e) => {
-                    warn!("❌ Parakeet model validation failed: {}", e);
-                    Err(e)
-                }
-            }
+                .map_err(|error| format!("Failed to discover Parakeet models: {error}"))?
+                .iter()
+                .any(|info| {
+                    info.name == model
+                        && matches!(info.status, crate::parakeet_engine::ModelStatus::Available)
+                })
         }
         ProviderId::GigaAm => {
-            info!("🔍 Validating GigaAM v3 model...");
             crate::gigaam_engine::gigaam_init().await?;
-            crate::gigaam_engine::gigaam_validate_model_ready_with_config(app)
-                .await
-                .map(|model_name| info!("✅ GigaAM model '{}' is ready", model_name))
+            let engine = crate::gigaam_engine::GIGAAM_ENGINE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| "GigaAM engine not initialized".to_string())?;
+            engine.discover_models().iter().any(|info| {
+                info.name == model
+                    && matches!(info.status, crate::parakeet_engine::ModelStatus::Available)
+            })
         }
+    };
+
+    if available {
+        info!("✅ Transcription model '{}' is on disk; it loads in the background", model);
+        Ok(())
+    } else {
+        Err(format!(
+            "Speech recognition model '{model}' is not downloaded. Download it in Settings › Transcription."
+        ))
     }
 }
 
@@ -196,29 +195,7 @@ pub async fn validate_transcription_model_ready<R: Runtime>(
 pub async fn get_or_init_transcription_engine<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<TranscriptionEngine, String> {
-    let config =
-        match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state(), None)
-            .await
-        {
-            Ok(Some(config)) => {
-                info!(
-                    "📝 Transcript config - provider: {}, model: {}",
-                    config.provider, config.model
-                );
-                config
-            }
-            Ok(None) => {
-                info!("📝 No transcript config found, using the local default");
-                crate::api::api::TranscriptConfig::local_default()
-            }
-            Err(e) => {
-                warn!(
-                    "⚠️ Failed to get transcript config: {}, using the local default",
-                    e
-                );
-                crate::api::api::TranscriptConfig::local_default()
-            }
-        };
+    let config = recording_transcript_config(app).await;
     get_or_init_batch_engine(app, Some(&config.provider), Some(&config.model)).await
 }
 

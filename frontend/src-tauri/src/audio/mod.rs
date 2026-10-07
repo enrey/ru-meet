@@ -33,6 +33,7 @@ pub mod recording_preferences;
 pub mod recording_saver;
 pub mod recording_session;
 pub mod recording_state;
+pub mod recording_sources;
 pub mod simple_level_monitor;
 pub mod stream;
 pub mod system_audio_commands;

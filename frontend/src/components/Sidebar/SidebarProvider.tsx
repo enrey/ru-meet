@@ -8,21 +8,25 @@ import type { SummaryProcessResponse } from '@/types';
 import { translate } from '@/lib/i18n';
 
 
-
-interface SidebarItem {
-  id: string;
-  title: string;
-  type: 'folder' | 'file';
-  children?: SidebarItem[];
-}
-
 export interface CurrentMeeting {
   id: string;
   title: string;
 }
 
+/** A meeting as `api_get_meetings` lists it for the library. */
+export interface MeetingListItem extends CurrentMeeting {
+  createdAt: string;
+  durationSeconds: number | null;
+  /** Distinct diarized speakers; 0 when diarization has not run. */
+  speakerCount: number;
+  /** Lowercased summary process status, null when no summary was requested. */
+  summaryStatus: string | null;
+  hasSummary: boolean;
+  preview: string | null;
+}
+
 // Search result type for transcript search
-interface TranscriptSearchResult {
+export interface TranscriptSearchResult {
   id: string;
   title: string;
   matchContext: string;
@@ -38,11 +42,11 @@ interface SummaryPoll {
 interface SidebarContextType {
   currentMeeting: CurrentMeeting | null;
   setCurrentMeeting: (meeting: CurrentMeeting | null) => void;
-  sidebarItems: SidebarItem[];
+  /** Navigation rail shows icons only; expanded it also shows labels. */
   isCollapsed: boolean;
   toggleCollapse: () => void;
-  meetings: CurrentMeeting[];
-  setMeetings: (meetings: CurrentMeeting[]) => void;
+  meetings: MeetingListItem[];
+  setMeetings: React.Dispatch<React.SetStateAction<MeetingListItem[]>>;
   isMeetingActive: boolean;
   setIsMeetingActive: (active: boolean) => void;
   handleRecordingToggle: () => void;
@@ -65,6 +69,8 @@ interface SidebarContextType {
 
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'sidebarCollapsed';
+
 const SidebarContext = createContext<SidebarContextType | null>(null);
 
 export const useSidebar = () => {
@@ -78,8 +84,7 @@ export const useSidebar = () => {
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [currentMeeting, setCurrentMeeting] = useState<CurrentMeeting | null>({ id: 'intro-call', title: '+ New Call' });
   const [isCollapsed, setIsCollapsed] = useState(true);
-  const [meetings, setMeetings] = useState<CurrentMeeting[]>([]);
-  const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
+  const [meetings, setMeetings] = useState<MeetingListItem[]>([]);
   const [isMeetingActive, setIsMeetingActive] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -97,12 +102,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const fetchMeetings = React.useCallback(async () => {
     if (serverAddress) {
       try {
-        const meetings = await invoke('api_get_meetings') as Array<{ id: string, title: string }>;
-        const transformedMeetings = meetings.map((meeting: any) => ({
-          id: meeting.id,
-          title: meeting.title
-        }));
-        setMeetings(transformedMeetings);
+        setMeetings(await invoke<MeetingListItem[]>('api_get_meetings'));
       } catch (error) {
         console.error('Error fetching meetings:', error);
         setMeetings([]);
@@ -122,34 +122,31 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     fetchSettings();
   }, []);
 
-  const baseItems: SidebarItem[] = [
-    {
-      id: 'meetings',
-      title: 'Meeting Notes',
-      type: 'folder' as const,
-      children: [
-        ...meetings.map(meeting => ({ id: meeting.id, title: meeting.title, type: 'file' as const }))
-      ]
-    },
-  ];
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'false') setIsCollapsed(false);
+    } catch {
+      // Storage unavailable: keep the collapsed default.
+    }
+  }, []);
 
-
-  const toggleCollapse = () => {
-    setIsCollapsed(!isCollapsed);
-  };
+  const toggleCollapse = React.useCallback(() => {
+    setIsCollapsed((collapsed) => {
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(!collapsed));
+      } catch {
+        // Storage unavailable: the choice lasts for this session only.
+      }
+      return !collapsed;
+    });
+  }, []);
 
   // Update current meeting when on home page
   useEffect(() => {
     if (pathname === '/') {
       setCurrentMeeting({ id: 'intro-call', title: '+ New Call' });
     }
-    setSidebarItems(baseItems);
   }, [pathname]);
-
-  // Update sidebar items when meetings change
-  useEffect(() => {
-    setSidebarItems(baseItems);
-  }, [meetings]);
 
   // Function to handle recording toggle from sidebar
   const handleRecordingToggle = () => {
@@ -293,7 +290,6 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     <SidebarContext.Provider value={{
       currentMeeting,
       setCurrentMeeting,
-      sidebarItems,
       isCollapsed,
       toggleCollapse,
       meetings,

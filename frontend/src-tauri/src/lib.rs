@@ -50,6 +50,7 @@ pub mod portable;
 pub mod state;
 pub mod summary;
 pub mod tray;
+mod tray_badge;
 pub mod utils;
 pub mod whisper_engine;
 
@@ -98,7 +99,7 @@ pub(crate) fn ensure_onnx_runtime_available() -> anyhow::Result<()> {
         if wait_result.timed_out() {
             anyhow::bail!(
                 "ONNX Runtime failed to initialize (timed out). This can happen if security \
-                 software is intercepting the process; try adding an exclusion for Meetily, or \
+                 software is intercepting the process; try adding an exclusion for Ru-Meet, or \
                  restart the app."
             );
         }
@@ -248,6 +249,7 @@ async fn start_audio_level_monitoring<R: Runtime>(
     );
 
     audio::level_monitor::start_monitoring_thread(app, device_names)
+        .map(|_| ())
         .map_err(|e| format!("Failed to start audio level monitoring: {}", e))
 }
 
@@ -587,6 +589,9 @@ pub fn run() {
                     .set_error(error);
             }
 
+            if let Err(error) = audio::recording_sources::initialize(_app.handle()) {
+                log::error!("Could not initialize recording sources: {error}");
+            }
             if let Err(error) = automation::initialize(_app.handle()) {
                 log::error!("Could not initialize meeting automation: {error}");
             }
@@ -730,6 +735,7 @@ pub fn run() {
             groq::groq::get_groq_models,
             api::api_get_meetings,
             api::api_search_transcripts,
+            api::api_search_meeting_transcript,
             api::api_get_profile,
             api::api_save_profile,
             api::api_update_profile,

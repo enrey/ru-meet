@@ -116,7 +116,7 @@ export function PermissionsStep() {
   return (
     <OnboardingContainer
       title={t('Grant Permissions')}
-      description={t('Meetily needs access to your microphone and system audio to record meetings')}
+      description={t('Ru-Meet needs access to your microphone and system audio to record meetings')}
       step={4}
       hideProgress={true}
       showNavigation={allPermissionsGranted}

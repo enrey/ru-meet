@@ -149,9 +149,10 @@ impl RecordingState {
 
     // Recording control
     pub fn start_recording(&self) -> Result<()> {
+        let mutes = super::recording_sources::current();
+        self.microphone_muted.store(mutes.microphone, Ordering::SeqCst);
+        self.system_muted.store(mutes.system, Ordering::SeqCst);
         self.is_recording.store(true, Ordering::SeqCst);
-        self.microphone_muted.store(false, Ordering::SeqCst);
-        self.system_muted.store(false, Ordering::SeqCst);
         *self.recording_start.lock().unwrap() = Some(Instant::now());
         self.error_count.store(0, Ordering::SeqCst);
         self.recoverable_error_count.store(0, Ordering::SeqCst);

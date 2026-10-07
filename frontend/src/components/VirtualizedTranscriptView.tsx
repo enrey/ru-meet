@@ -10,6 +10,7 @@ import { motion } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
 import { Play, Square } from "lucide-react";
 import { usePhrasePlayback } from "@/hooks/usePhrasePlayback";
+import { SpeakerName } from "@/components/MeetingDetails/SpeakerName";
 import { useI18n } from "@/lib/i18n";
 
 export interface VirtualizedTranscriptViewProps {
@@ -42,20 +43,43 @@ export interface VirtualizedTranscriptViewProps {
     onLoadMore?: () => void;
     onLoadPrevious?: () => void;
     scrollTarget?: { id: string; request: number } | null;
+    /** Transcript search query to highlight in every line. */
+    highlightQuery?: string;
 }
 
 // Threshold for enabling virtualization (below this, use simple rendering)
 const VIRTUALIZATION_THRESHOLD = 10;
 
-// Helper function to format seconds as recording-relative time [MM:SS]
+// Recording-relative time, MM:SS (H:MM:SS past an hour)
 function formatRecordingTime(seconds: number | undefined): string {
-    if (seconds === undefined) return '[--:--]';
+    if (seconds === undefined) return '--:--';
 
     const totalSeconds = Math.floor(seconds);
-    const minutes = Math.floor(totalSeconds / 60);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
     const secs = totalSeconds % 60;
+    const clock = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return hours > 0 ? `${hours}:${clock}` : clock;
+}
 
-    return `[${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
+/** `text` with every case-insensitive occurrence of `query` wrapped in <mark>. */
+function highlightMatches(text: string, query: string | undefined): React.ReactNode {
+    const needle = query?.trim().toLowerCase();
+    if (!needle) return text;
+    const haystack = text.toLowerCase();
+    // Lower-casing can change the length of a few exotic characters; then the
+    // indices would not line up with the original, so don't highlight at all.
+    if (haystack.length !== text.length) return text;
+    const parts: React.ReactNode[] = [];
+    let from = 0;
+    for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length)) {
+        if (at > from) parts.push(text.slice(from, at));
+        parts.push(<mark key={at} className="rounded-sm bg-yellow-200 px-0.5 text-inherit">{text.slice(at, at + needle.length)}</mark>);
+        from = at + needle.length;
+    }
+    if (from === 0) return text;
+    parts.push(text.slice(from));
+    return parts;
 }
 
 // Helper function to remove filler words and repetitions
@@ -87,6 +111,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     canPlay,
     isPlaying,
     onTogglePlay,
+    highlightQuery,
 }: {
     id: string;
     timestamp: number;
@@ -103,12 +128,21 @@ const TranscriptSegment = memo(function TranscriptSegment({
     canPlay: boolean;
     isPlaying: boolean;
     onTogglePlay: (id: string, start: number, end?: number) => void;
+    /** Transcript search query to highlight in the text. */
+    highlightQuery?: string;
 }) {
     const { t } = useI18n();
     const displayText = cleanStopWords(text) || (text.trim() === '' ? `[${t('Silence')}]` : text);
 
     return (
         <div id={`segment-${id}`} className={`${tightBelow ? 'mb-1' : 'mb-3'} rounded-md ${isHighlighted ? 'bg-blue-50 ring-2 ring-blue-400 ring-offset-2' : ''}`}>
+            {/* The speaker's name sits above the row, over the text column, so the
+                play button and time line up with the first line of the text. */}
+            {speaker && showSpeaker && (
+                <div className={`mb-1 ${canPlay ? 'pl-[84px]' : 'pl-16'}`}>
+                    <SpeakerName speaker={speaker} />
+                </div>
+            )}
             <div className="flex items-start gap-2">
                 {canPlay && (
                     <button
@@ -122,10 +156,17 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     </button>
                 )}
                 <Tooltip>
-                    <TooltipTrigger>
-                        <span className={`text-xs mt-1 flex-shrink-0 min-w-[50px] ${isPlaying ? 'text-blue-600 font-medium' : 'text-gray-400'}`}>
+                    <TooltipTrigger asChild>
+                        {/* Clicking the time plays the recording from this phrase. */}
+                        <button
+                            type="button"
+                            disabled={!canPlay}
+                            onClick={() => onTogglePlay(id, timestamp, endTime)}
+                            aria-label={canPlay ? t('Play from {time}', { time: formatRecordingTime(timestamp) }) : undefined}
+                            className={`mt-1 w-14 flex-shrink-0 rounded-sm text-left font-mono text-xs tabular-nums transition-colors enabled:cursor-pointer enabled:hover:text-blue-600 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 disabled:cursor-default ${isPlaying ? 'text-blue-600 font-medium' : 'text-gray-400'}`}
+                        >
                             {formatRecordingTime(timestamp)}
-                        </span>
+                        </button>
                     </TooltipTrigger>
                     <TooltipContent>
                         {confidence !== undefined && showConfidence && (
@@ -133,14 +174,13 @@ const TranscriptSegment = memo(function TranscriptSegment({
                         )}
                     </TooltipContent>
                 </Tooltip>
-                <div className="flex-1">
-                    {speaker && showSpeaker && <p className="text-xs font-medium text-blue-600 mb-1">{speaker}</p>}
+                <div className="min-w-0 flex-1">
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
                             <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
                         </div>
                     ) : (
-                        <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
+                        <p className="text-base text-gray-800 leading-relaxed">{highlightMatches(displayText, highlightQuery)}</p>
                     )}
                 </div>
             </div>
@@ -167,6 +207,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     onLoadMore,
     onLoadPrevious,
     scrollTarget,
+    highlightQuery,
 }) => {
     // Per-phrase audio playback from the meeting's own recording.
     const playback = usePhrasePlayback(meetingId);
@@ -322,7 +363,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         </>
                     ) : (
                         <>
-                            <p className="text-lg font-semibold">{t('Welcome to meetily!')}</p>
+                            <p className="text-lg font-semibold">{t('Welcome to Ru-Meet!')}</p>
                             <p className="text-xs mt-1">{t('Start recording to see live transcription')}</p>
                         </>
                     )}
@@ -374,6 +415,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         canPlay={playback.isAvailable}
                                         isPlaying={playback.playingId === segment.id}
                                         onTogglePlay={playback.toggle}
+                                        highlightQuery={highlightQuery}
                                     />
                                 </div>
                             );
@@ -438,6 +480,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         canPlay={playback.isAvailable}
                                         isPlaying={playback.playingId === segment.id}
                                         onTogglePlay={playback.toggle}
+                                        highlightQuery={highlightQuery}
                                     />
                                 </motion.div>
                             );

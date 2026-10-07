@@ -1,28 +1,15 @@
 "use client";
 
-import { MeetingSummary, Summary, Transcript } from '@/types';
+import { MeetingSummary, Summary } from '@/types';
 import { BlockNoteSummaryView, BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { EmptyStateSummary } from '@/components/EmptyStateSummary';
 import { ModelConfig } from '@/components/ModelSettingsModal';
-import { SummaryGeneratorButtonGroup } from './SummaryGeneratorButtonGroup';
-import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
-import { useCallback, useEffect, useRef, useState, RefObject } from 'react';
-import { useSummarySpeech } from '@/hooks/useSummarySpeech';
+import { RefObject } from 'react';
 import { useSummaryProgress } from '@/hooks/meeting-details/useSummaryProgress';
-import { toast } from 'sonner';
-import { Languages, ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
-import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
-import { useRecentLanguages } from '@/hooks/useRecentLanguages';
-import { labelForCode } from '@/lib/summary-languages';
-import {
-  readMeetingSummaryLanguage,
-  saveMeetingSummaryLanguage,
-  SummaryLanguageStorage,
-} from '@/lib/summary-language-preferences';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
 import { getIntlLocale, useI18n } from '@/lib/i18n';
+
+type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
 
 interface SummaryPanelProps {
   meeting: {
@@ -31,19 +18,11 @@ interface SummaryPanelProps {
     created_at: string;
   };
   meetingTitle: string;
-  isSummaryDirty: boolean;
   summaryRef: RefObject<BlockNoteSummaryViewRef | null>;
-  isSaving: boolean;
-  onSaveAll: () => Promise<void>;
-  onCopySummary: () => Promise<void>;
   aiSummary: MeetingSummary | null;
-  summaryStatus: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
-  transcripts: Transcript[];
+  summaryStatus: SummaryStatus;
   modelConfig: ModelConfig;
-  setModelConfig: (config: ModelConfig | ((prev: ModelConfig) => ModelConfig)) => void;
-  onSaveModelConfig: (config?: ModelConfig) => Promise<void>;
   onGenerateSummary: (customPrompt: string) => Promise<void>;
-  onStopGeneration: () => void;
   customPrompt: string;
   onPromptChange: (value: string) => void;
   onSaveSummary: (summary: MeetingSummary) => Promise<void>;
@@ -51,30 +30,18 @@ interface SummaryPanelProps {
   onDirtyChange: (isDirty: boolean) => void;
   summaryError: string | null;
   onRegenerateSummary: () => Promise<void>;
-  getSummaryStatusMessage: (status: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error') => string;
-  availableTemplates: Array<{ id: string, name: string, description: string }>;
-  selectedTemplate: string;
-  onTemplateSelect: (templateId: string, templateName: string) => void;
-  isModelConfigLoading?: boolean;
-  onOpenModelSettings?: (openFn: () => void) => void;
+  getSummaryStatusMessage: (status: SummaryStatus) => string;
 }
 
+/** The summary pane; its actions live in the meeting's single action bar. */
 export function SummaryPanel({
   meeting,
   meetingTitle,
-  isSummaryDirty,
   summaryRef,
-  isSaving,
-  onSaveAll,
-  onCopySummary,
   aiSummary,
   summaryStatus,
-  transcripts,
   modelConfig,
-  setModelConfig,
-  onSaveModelConfig,
   onGenerateSummary,
-  onStopGeneration,
   customPrompt,
   onPromptChange,
   onSaveSummary,
@@ -83,239 +50,14 @@ export function SummaryPanel({
   summaryError,
   onRegenerateSummary,
   getSummaryStatusMessage,
-  availableTemplates,
-  selectedTemplate,
-  onTemplateSelect,
-  isModelConfigLoading = false,
-  onOpenModelSettings,
 }: SummaryPanelProps) {
-  const [summaryLang, setSummaryLang] = useState<string | null>(null);
-  const [summaryLangStorage, setSummaryLangStorage] = useState<SummaryLanguageStorage>('metadata');
-  const [langPickerOpen, setLangPickerOpen] = useState(false);
-  const languageLoadVersionRef = useRef(0);
-  const activeMeetingIdRef = useRef(meeting.id);
-  const languageSaveVersionRef = useRef(0);
-  const languageSaveLoopRunningRef = useRef(false);
-  const latestLanguageSaveRequestRef = useRef<{
-    version: number;
-    meetingId: string;
-    language: string | null;
-    rollback: {
-      language: string | null;
-      storage: SummaryLanguageStorage;
-    };
-  } | null>(null);
-  activeMeetingIdRef.current = meeting.id;
-  const { addRecent } = useRecentLanguages();
   const { t, locale } = useI18n();
-
-  const effectiveLangLabel = summaryLang ? labelForCode(summaryLang) : t('Auto');
-  const isLocalFallbackLanguage = summaryLangStorage === 'local_fallback';
-  const autoSubtitle = isLocalFallbackLanguage
-    ? t('Saved on this device for folderless meetings')
-    : t('Uses dominant transcript language');
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadVersion = languageLoadVersionRef.current + 1;
-    languageLoadVersionRef.current = loadVersion;
-
-    const loadSummaryLanguage = async () => {
-      try {
-        const stored = await readMeetingSummaryLanguage(meeting.id);
-        if (!cancelled && languageLoadVersionRef.current === loadVersion) {
-          setSummaryLang(stored.language);
-          setSummaryLangStorage(stored.storage);
-        }
-      } catch (err) {
-        console.error('Failed to load summary language:', err);
-        toast.warning(t('Could not load saved summary language'), {
-          description: t('Using Auto until meeting metadata can be read.'),
-        });
-        if (!cancelled && languageLoadVersionRef.current === loadVersion) setSummaryLang(null);
-      }
-    };
-
-    loadSummaryLanguage();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [meeting.id]);
-
-  const persistLatestLanguageSelection = async () => {
-    if (languageSaveLoopRunningRef.current) return;
-    languageSaveLoopRunningRef.current = true;
-
-    try {
-      while (true) {
-        const request = latestLanguageSaveRequestRef.current;
-        if (!request) return;
-
-        try {
-          const saved = await saveMeetingSummaryLanguage(request.meetingId, request.language);
-          const latest = latestLanguageSaveRequestRef.current;
-          if (
-            latest?.version === request.version &&
-            activeMeetingIdRef.current === request.meetingId
-          ) {
-            setSummaryLang(saved.language);
-            setSummaryLangStorage(saved.storage);
-            if (saved.storage === 'local_fallback') {
-              toast.info(t('Summary language saved on this device'), {
-                description: t('This meeting has no recording folder, so the preference cannot be written to meeting metadata.'),
-              });
-            }
-            if (request.language) {
-              addRecent(request.language);
-            }
-            return;
-          }
-
-          if (latest?.version === request.version) return;
-        } catch (err) {
-          const latest = latestLanguageSaveRequestRef.current;
-          if (
-            latest?.version === request.version &&
-            activeMeetingIdRef.current === request.meetingId
-          ) {
-            console.error('Failed to persist summary language:', err);
-            toast.error(t('Failed to save summary language'));
-            setSummaryLang(request.rollback.language);
-            setSummaryLangStorage(request.rollback.storage);
-            return;
-          }
-
-          console.warn('Ignoring failed stale summary language save:', err);
-          if (latest?.version === request.version) return;
-        }
-      }
-    } finally {
-      languageSaveLoopRunningRef.current = false;
-    }
-  };
-
-  const handleLangChange = (code: string | null) => {
-    const previous = summaryLang;
-    const previousStorage = summaryLangStorage;
-    const nextStored = code;
-    languageLoadVersionRef.current += 1;
-    latestLanguageSaveRequestRef.current = {
-      version: languageSaveVersionRef.current + 1,
-      meetingId: meeting.id,
-      language: nextStored,
-      rollback: {
-        language: previous,
-        storage: previousStorage,
-      },
-    };
-    languageSaveVersionRef.current += 1;
-    setSummaryLang(nextStored);
-    setLangPickerOpen(false);
-    void persistLatestLanguageSelection();
-  };
-
   const isSummaryLoading = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
   const hasSummary = hasVisibleSummaryContent(aiSummary);
   const summaryProgress = useSummaryProgress(isSummaryLoading);
 
-  // Same text the copy action uses: the editor's markdown, falling back to
-  // whatever the stored summary carries.
-  const getSummaryMarkdown = useCallback(async () => {
-    const fromEditor = await summaryRef.current?.getMarkdown?.();
-    if (fromEditor) return fromEditor;
-    if (aiSummary && typeof aiSummary.markdown === 'string') return aiSummary.markdown;
-    return '';
-  }, [summaryRef, aiSummary]);
-
-  const speech = useSummarySpeech(getSummaryMarkdown);
-
-  useEffect(() => {
-    if (speech.error) toast.error(speech.error);
-  }, [speech.error]);
-
-  useEffect(() => {
-    if (speech.notice) toast.info(speech.notice);
-  }, [speech.notice]);
-
-  const handleToggleSpeech = () => {
-    void speech.toggle().catch((error) => {
-      console.error('Summary speech failed:', error);
-      toast.error(error instanceof Error ? error.message : t('Could not read the summary aloud'));
-    });
-  };
-
-  const languageSlot = (
-    <Popover open={langPickerOpen} onOpenChange={setLangPickerOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          title={`${t('Summary language: {language}', { language: effectiveLangLabel })}${isLocalFallbackLanguage ? ` (${t('saved on this device')})` : ''}`}
-          aria-label={t('Set summary language')}
-        >
-          <Languages size={18} />
-          <span className="hidden @[40rem]:inline">{effectiveLangLabel}</span>
-          <ChevronDown size={14} className="text-gray-400" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="w-auto p-0 border-0 shadow-none bg-transparent"
-      >
-        <LanguagePickerPopover
-          value={summaryLang}
-          onChange={handleLangChange}
-          onClose={() => setLangPickerOpen(false)}
-          autoSubtitle={autoSubtitle}
-        />
-      </PopoverContent>
-    </Popover>
-  );
-
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-white overflow-hidden h-full w-full @container">
-      {/* Top-level actions — always visible, same pattern as TranscriptPanel */}
-      <div className="p-4 border-b border-gray-200">
-        <div className="flex items-center justify-center w-full min-w-0 gap-2 flex-wrap">
-          <div className="flex-shrink-0 min-w-0">
-            <SummaryGeneratorButtonGroup
-              modelConfig={modelConfig}
-              setModelConfig={setModelConfig}
-              onSaveModelConfig={onSaveModelConfig}
-              onGenerateSummary={onGenerateSummary}
-              onStopGeneration={onStopGeneration}
-              customPrompt={customPrompt}
-              summaryStatus={summaryStatus}
-              availableTemplates={availableTemplates}
-              selectedTemplate={selectedTemplate}
-              onTemplateSelect={onTemplateSelect}
-              hasTranscripts={transcripts.length > 0}
-              hasSummary={hasSummary}
-              isModelConfigLoading={isModelConfigLoading}
-              onOpenModelSettings={onOpenModelSettings}
-              languageSlot={transcripts.length > 0 || hasSummary ? languageSlot : undefined}
-              onToggleSpeech={hasSummary && speech.isAvailable ? handleToggleSpeech : undefined}
-              onStopSpeech={speech.stop}
-              isSpeaking={speech.isActive}
-              isSpeechPaused={speech.isPaused}
-              isSynthesizingSpeech={speech.isBuffering}
-            />
-          </div>
-
-          {hasSummary && !isSummaryLoading && (
-            <div className="flex-shrink-0">
-              <SummaryUpdaterButtonGroup
-                isSaving={isSaving}
-                isDirty={isSummaryDirty}
-                onSave={onSaveAll}
-                onCopy={onCopySummary}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-
       {isSummaryLoading ? (
         <div className="flex items-center justify-center flex-1">
           <div className="text-center">
@@ -345,7 +87,7 @@ export function SummaryPanel({
         />
       ) : (
         <div className="flex-1 overflow-y-auto overflow-x-auto min-h-0">
-          <div className="p-6 w-full">
+          <div className="w-full px-8 py-6">
             <BlockNoteSummaryView
               ref={summaryRef}
               summaryData={aiSummary}

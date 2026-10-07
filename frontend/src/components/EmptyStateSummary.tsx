@@ -9,6 +9,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { Switch } from '@/components/ui/switch';
+import { useConfig } from '@/contexts/ConfigContext';
 import { useI18n } from '@/lib/i18n';
 
 interface EmptyStateSummaryProps {
@@ -29,12 +31,13 @@ export function EmptyStateSummary({
   error = null,
 }: EmptyStateSummaryProps) {
   const { t } = useI18n();
+  const { isAutoSummary, toggleIsAutoSummary } = useConfig();
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="flex flex-col items-center justify-center h-full p-8 text-center"
+      className="flex flex-col items-center justify-start h-full overflow-y-auto px-8 pb-8 pt-12 text-center"
     >
       <FileQuestion className="w-16 h-16 text-gray-300 mb-4" />
       <h3 className="text-lg font-semibold text-gray-900 mb-2">
@@ -64,7 +67,8 @@ export function EmptyStateSummary({
               <Button
                 onClick={onGenerate}
                 disabled={!hasModel || isGenerating}
-                className="gap-2"
+                size="lg"
+                className="gap-2 bg-indigo-600 text-white hover:bg-indigo-700"
               >
                 <Sparkles className="w-4 h-4" />
                 {isGenerating ? t('Generating...') : error ? t('Retry summary') : t('Generate Summary')}
@@ -84,6 +88,19 @@ export function EmptyStateSummary({
           {t('Please select a model in Settings first')}
         </p>
       )}
+
+      {/* Same switch as Settings › Summary: summaries right after each recording. */}
+      <label className="mt-6 flex w-full max-w-md cursor-pointer items-start gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-left">
+        <Switch checked={isAutoSummary} onCheckedChange={toggleIsAutoSummary} className="mt-0.5" />
+        <span className="text-sm">
+          <span className="block font-medium text-gray-800">{t('Automatic summary')}</span>
+          <span className="block text-gray-500">
+            {isAutoSummary
+              ? t('A summary is created automatically after each recording.')
+              : t('Turn on to get a summary automatically after each recording.')}
+          </span>
+        </span>
+      </label>
     </motion.div>
   );
 }

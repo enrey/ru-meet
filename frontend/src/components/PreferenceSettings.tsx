@@ -218,7 +218,7 @@ export function PreferenceSettings() {
           <div>
             <h3 id="auto-record-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Record meetings automatically')}</h3>
             <p id="auto-record-description" className="text-sm text-gray-600">
-              {t('Start recording automatically when an app other than the exclusions plays audio or uses a microphone, or when sound is detected on the selected microphone. Meetings shorter than 1 minute are ignored.')}
+              {t('Start recording automatically after speech is confirmed on the selected microphone or in audio from an app other than the exclusions. Non-speech sounds do not trigger recording. Meetings shorter than 1 minute are ignored.')}
             </p>
             {automation && !automation.autoRecordSupported && (
               <p className="mt-2 text-sm text-gray-600">{t('Meeting detection is currently available only on Windows.')}</p>
@@ -236,7 +236,7 @@ export function PreferenceSettings() {
         <div className="space-y-3">
           <label htmlFor="auto-record-exclusion" className="block text-sm font-medium text-gray-900">{t('Excluded apps')}</label>
           <p id="auto-record-exclusion-help" className="text-sm text-gray-600">
-            {t('Audio from these apps never starts a recording. Enter the .exe name, for example Spotify.exe. Meetily audio is always excluded. Exclusions do not remove audio from a recording already in progress.')}
+            {t('Audio from these apps never starts a recording. Enter the .exe name, for example Spotify.exe. Ru-Meet audio is always excluded. Exclusions do not remove audio from a recording already in progress.')}
           </p>
           <form className="flex gap-2" onSubmit={event => {
             event.preventDefault();
@@ -267,7 +267,7 @@ export function PreferenceSettings() {
         <div className="flex items-center justify-between gap-6 border-t border-gray-200 pt-6">
           <div>
             <h3 id="launch-at-login-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Launch at startup')}</h3>
-            <p className="text-sm text-gray-600">{t('Start Meetily automatically when you sign in.')}</p>
+            <p className="text-sm text-gray-600">{t('Start Ru-Meet automatically when you sign in.')}</p>
           </div>
           <Switch
             aria-labelledby="launch-at-login-label"
@@ -284,7 +284,7 @@ export function PreferenceSettings() {
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('Data Storage Locations')}</h3>
         <p className="text-sm text-gray-600 mb-6">
-          {t('View and access where Meetily stores your data')}
+          {t('View and access where Ru-Meet stores your data')}
         </p>
 
         <div className="space-y-4">

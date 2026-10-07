@@ -41,61 +41,61 @@ fn detect_and_report_gpu_capabilities() {
 
     match target_os.as_str() {
         "macos" => {
-            println!("cargo:warning=✅ macOS: Metal GPU acceleration ENABLED by default");
+            println!("cargo:warning=Whisper: ✅ macOS: Metal GPU acceleration ENABLED by default");
             #[cfg(feature = "coreml")]
-            println!("cargo:warning=✅ CoreML acceleration ENABLED");
+            println!("cargo:warning=Whisper: ✅ CoreML acceleration ENABLED");
         }
         "windows" => {
             if cfg!(feature = "cuda") {
-                println!("cargo:warning=✅ Windows: CUDA GPU acceleration ENABLED");
+                println!("cargo:warning=Whisper: ✅ Windows: CUDA GPU acceleration ENABLED");
             } else if cfg!(feature = "vulkan") {
-                println!("cargo:warning=✅ Windows: Vulkan GPU acceleration ENABLED");
+                println!("cargo:warning=Whisper: ✅ Windows: Vulkan GPU acceleration ENABLED");
             } else if cfg!(feature = "openblas") {
-                println!("cargo:warning=✅ Windows: OpenBLAS CPU optimization ENABLED");
+                println!("cargo:warning=Whisper: ✅ Windows: OpenBLAS CPU optimization ENABLED");
             } else {
                 println!(
-                    "cargo:warning=⚠️  Windows: Using CPU-only mode (no GPU or BLAS acceleration)"
+                    "cargo:warning=Whisper: ⚠️  Windows: Using CPU-only mode (no GPU or BLAS acceleration)"
                 );
-                println!("cargo:warning=💡 For NVIDIA GPU: cargo build --release --features cuda");
+                println!("cargo:warning=Whisper: 💡 For NVIDIA GPU: cargo build --release --features cuda");
                 println!(
-                    "cargo:warning=💡 For AMD/Intel GPU: cargo build --release --features vulkan"
+                    "cargo:warning=Whisper: 💡 For AMD/Intel GPU: cargo build --release --features vulkan"
                 );
-                println!("cargo:warning=💡 For CPU optimization: cargo build --release --features openblas");
+                println!("cargo:warning=Whisper: 💡 For CPU optimization: cargo build --release --features openblas");
 
                 // Try to detect NVIDIA GPU
                 if which::which("nvidia-smi").is_ok() {
-                    println!("cargo:warning=🎯 NVIDIA GPU detected! Consider rebuilding with --features cuda");
+                    println!("cargo:warning=Whisper: 🎯 NVIDIA GPU detected! Consider rebuilding with --features cuda");
                 }
             }
         }
         "linux" => {
             if cfg!(feature = "cuda") {
-                println!("cargo:warning=✅ Linux: CUDA GPU acceleration ENABLED");
+                println!("cargo:warning=Whisper: ✅ Linux: CUDA GPU acceleration ENABLED");
             } else if cfg!(feature = "vulkan") {
-                println!("cargo:warning=✅ Linux: Vulkan GPU acceleration ENABLED");
+                println!("cargo:warning=Whisper: ✅ Linux: Vulkan GPU acceleration ENABLED");
             } else if cfg!(feature = "hipblas") {
-                println!("cargo:warning=✅ Linux: AMD ROCm (HIP) acceleration ENABLED");
+                println!("cargo:warning=Whisper: ✅ Linux: AMD ROCm (HIP) acceleration ENABLED");
             } else if cfg!(feature = "openblas") {
-                println!("cargo:warning=✅ Linux: OpenBLAS CPU optimization ENABLED");
+                println!("cargo:warning=Whisper: ✅ Linux: OpenBLAS CPU optimization ENABLED");
             } else {
                 println!(
-                    "cargo:warning=⚠️  Linux: Using CPU-only mode (no GPU or BLAS acceleration)"
+                    "cargo:warning=Whisper: ⚠️  Linux: Using CPU-only mode (no GPU or BLAS acceleration)"
                 );
-                println!("cargo:warning=💡 For NVIDIA GPU: cargo build --release --features cuda");
-                println!("cargo:warning=💡 For AMD GPU: cargo build --release --features hipblas");
+                println!("cargo:warning=Whisper: 💡 For NVIDIA GPU: cargo build --release --features cuda");
+                println!("cargo:warning=Whisper: 💡 For AMD GPU: cargo build --release --features hipblas");
                 println!(
-                    "cargo:warning=💡 For other GPUs: cargo build --release --features vulkan"
+                    "cargo:warning=Whisper: 💡 For other GPUs: cargo build --release --features vulkan"
                 );
-                println!("cargo:warning=💡 For CPU optimization: cargo build --release --features openblas");
+                println!("cargo:warning=Whisper: 💡 For CPU optimization: cargo build --release --features openblas");
 
                 // Try to detect NVIDIA GPU
                 if which::which("nvidia-smi").is_ok() {
-                    println!("cargo:warning=🎯 NVIDIA GPU detected! Consider rebuilding with --features cuda");
+                    println!("cargo:warning=Whisper: 🎯 NVIDIA GPU detected! Consider rebuilding with --features cuda");
                 }
 
                 // Try to detect AMD GPU
                 if which::which("rocm-smi").is_ok() {
-                    println!("cargo:warning=🎯 AMD GPU detected! Consider rebuilding with --features hipblas");
+                    println!("cargo:warning=Whisper: 🎯 AMD GPU detected! Consider rebuilding with --features hipblas");
                 }
             }
         }
@@ -111,7 +111,7 @@ fn detect_and_report_gpu_capabilities() {
         && !cfg!(feature = "openblas")
         && target_os != "macos"
     {
-        println!("cargo:warning=📊 Performance: CPU-only builds are significantly slower than GPU/BLAS builds");
-        println!("cargo:warning=📚 See README.md for GPU/BLAS setup instructions");
+        println!("cargo:warning=Whisper: 📊 Performance: CPU-only builds are significantly slower than GPU/BLAS builds");
+        println!("cargo:warning=Whisper: 📚 See README.md for GPU/BLAS setup instructions");
     }
 }

@@ -15,7 +15,6 @@ use super::{
     default_output_device, // Get default system audio
     parse_audio_device,
     recording_manager::RecordingStartError,
-    recording_state::RecordingState,
     RecordingManager,
 };
 
@@ -42,7 +41,7 @@ fn session_live(s: &Arc<super::RecordingState>) -> bool {
 }
 
 const TRANSCRIPTION_RUNTIME_START_ERROR_CODE: &str = "TRANSCRIPTION_RUNTIME_INITIALIZATION_FAILED";
-const TRANSCRIPTION_RUNTIME_USER_MESSAGE: &str = "Speech recognition could not initialize. Restart Meetily. If the problem continues, repair or reinstall the app.";
+const TRANSCRIPTION_RUNTIME_USER_MESSAGE: &str = "Speech recognition could not initialize. Restart Ru-Meet. If the problem continues, repair or reinstall the app.";
 
 // ============================================================================
 // PUBLIC TYPES
@@ -55,12 +54,7 @@ pub struct ActiveRecordingDevices {
     pub system: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordingSourceMutes {
-    pub microphone: bool,
-    pub system: bool,
-}
+pub use super::recording_sources::RecordingSourceMutes;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,11 +68,6 @@ pub struct FinalizedRecording {
 
 pub(crate) async fn unload_transcription_engine<R: Runtime>(app: &AppHandle<R>) {
     transcription::unload_configured_engine(app).await;
-}
-
-fn recording_source_mutes(state: &RecordingState) -> RecordingSourceMutes {
-    let (microphone, system) = state.source_mutes();
-    RecordingSourceMutes { microphone, system }
 }
 
 /// Names of endpoints that the active recording actually opened. This differs
@@ -98,29 +87,26 @@ pub fn get_active_recording_devices() -> Result<ActiveRecordingDevices, String> 
 
 #[tauri::command]
 pub fn get_recording_source_mutes() -> Result<RecordingSourceMutes, String> {
-    super::recording_session::RECORDING_SESSION
-        .with_manager(|manager| recording_source_mutes(manager.get_state()))
+    Ok(super::recording_sources::current())
 }
 
 #[tauri::command]
-pub fn set_recording_source_muted(
+pub fn set_recording_source_muted<R: Runtime>(
+    app: AppHandle<R>,
     source: String,
     muted: bool,
 ) -> Result<RecordingSourceMutes, String> {
-    let state = super::recording_session::RECORDING_SESSION
-        .with_manager(|manager| manager.get_state().clone())?;
-    if !state.is_recording() {
-        return Err("No active recording".to_string());
-    }
-
     let device_type = match source.as_str() {
         "microphone" => super::recording_state::DeviceType::Microphone,
         "system" => super::recording_state::DeviceType::System,
         _ => return Err(format!("Unknown recording source: {source}")),
     };
-    state.set_source_muted(device_type, muted);
+    let mutes = super::recording_sources::set(&app, &source, muted)?;
+    let _ = super::recording_session::RECORDING_SESSION.with_manager(|manager| {
+        manager.get_state().set_source_muted(device_type, muted);
+    });
     info!("Recording source '{}' muted: {}", source, muted);
-    Ok(recording_source_mutes(&state))
+    Ok(mutes)
 }
 
 pub(crate) fn map_recording_start_error<R: Runtime>(

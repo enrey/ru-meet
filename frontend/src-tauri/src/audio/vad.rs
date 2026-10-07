@@ -54,6 +54,7 @@ pub fn set_models_directory<R: Runtime>(app: &AppHandle<R>) {
 /// sample count and timestamp inside this module is expressed in it.
 const VAD_SAMPLE_RATE: u32 = 16000;
 const SILERO_FRAME_SIZE: usize = 512;
+const SILERO_CONTEXT_SIZE: usize = 64;
 // Pinned to a tagged release, not `master`: verified by direct inference test
 // against real speech (JFK "Ask not..." sample) that the current `master` /
 // v6.2.2 tag's silero_vad.onnx is degenerate - its "output" is essentially
@@ -72,6 +73,7 @@ const SILERO_VAD_MODEL_SIZE: u64 = 2_327_524;
 struct SileroVad {
     session: Session,
     state: Array3<f32>,
+    context: [f32; SILERO_CONTEXT_SIZE],
 }
 
 impl SileroVad {
@@ -89,12 +91,22 @@ impl SileroVad {
         Ok(Self {
             session,
             state: Array3::zeros((2, 1, 128)),
+            context: [0.0; SILERO_CONTEXT_SIZE],
         })
     }
 
     fn probability(&mut self, samples: &[f32]) -> Result<f32> {
         debug_assert_eq!(samples.len(), SILERO_FRAME_SIZE);
-        let audio = Array2::from_shape_vec((1, SILERO_FRAME_SIZE), samples.to_vec())?;
+        // Match the official v5 ONNX wrapper: each 32ms frame is preceded
+        // by 4ms from the previous frame. Recurrent state alone is insufficient,
+        // especially for quiet loopback speech after an output-device change.
+        let mut input = Vec::with_capacity(SILERO_CONTEXT_SIZE + SILERO_FRAME_SIZE);
+        input.extend_from_slice(&self.context);
+        input.extend_from_slice(samples);
+        let audio = Array2::from_shape_vec(
+            (1, SILERO_CONTEXT_SIZE + SILERO_FRAME_SIZE),
+            input,
+        )?;
         let sample_rate = Array1::from_vec(vec![VAD_SAMPLE_RATE as i64]);
         let outputs = self.session.run(inputs![
             "input" => TensorRef::from_array_view(audio.view())?,
@@ -115,6 +127,7 @@ impl SileroVad {
             .try_extract_array::<f32>()?
             .to_owned()
             .into_dimensionality::<Ix3>()?;
+        self.context.copy_from_slice(&samples[SILERO_FRAME_SIZE - SILERO_CONTEXT_SIZE..]);
         Ok(probability)
     }
 }
@@ -144,10 +157,11 @@ fn ensure_silero_model() -> Result<PathBuf> {
         // No live Tauri app ever called `set_models_directory` (e.g. `cargo
         // test`) - fall back to the pre-unification location rather than
         // failing outright.
-        None => dirs::data_dir()
-            .ok_or_else(|| anyhow!("could not determine the application data directory"))?
-            .join("Meetily")
-            .join("models"),
+        None => crate::portable::product_dir(
+            dirs::data_dir()
+                .ok_or_else(|| anyhow!("could not determine the application data directory"))?,
+        )
+        .join("models"),
     };
     let model_path = models_dir.join("silero_vad.onnx");
     if model_path.is_file() && verify_silero_model(&model_path) {
@@ -306,6 +320,21 @@ impl ContinuousVadProcessor {
         }
 
         Ok(completed_segments)
+    }
+
+    /// Lightweight activity mode: keep recurrent Silero state and only one
+    /// partial frame, without accumulating audio for transcription.
+    pub(crate) fn process_activity(&mut self, samples: &[f32]) -> Result<Vec<(f32, f32)>> {
+        let samples = self.resample_to_16k(samples)?;
+        self.buffer.extend(samples);
+        let mut frames = Vec::new();
+        while self.buffer.len() >= SILERO_FRAME_SIZE {
+            let frame: Vec<f32> = self.buffer.drain(..SILERO_FRAME_SIZE).collect();
+            let rms = (frame.iter().map(|sample| sample * sample).sum::<f32>() / SILERO_FRAME_SIZE as f32).sqrt();
+            let probability = self.session.probability(&frame)?;
+            frames.push((rms, probability));
+        }
+        Ok(frames)
     }
 
     /// Improved resampling from input sample rate to 16kHz with anti-aliasing
@@ -670,6 +699,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires ONNX Runtime"]
+    fn quiet_speech_keeps_context_across_frames() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jfk.mp3");
+        let decoded = super::super::decoder::decode_audio_file(&path).unwrap();
+        let mono = super::super::audio_processing::audio_to_mono(
+            &decoded.samples, decoded.channels,
+        );
+        let mut processor = ContinuousVadProcessor::new(decoded.sample_rate, 500).unwrap();
+        let quiet: Vec<f32> = mono.iter().map(|sample| sample * 0.01).collect();
+        let mut speech_frames = 0;
+        for chunk in quiet.chunks((decoded.sample_rate / 10) as usize) {
+            speech_frames += processor.process_activity(chunk).unwrap().iter()
+                .filter(|(_, probability)| *probability >= 0.5).count();
+        }
+        assert!(speech_frames >= 20, "quiet speech was lost: {speech_frames} frames");
+    }
 
     /// Tests that build a real [`VadProcessor`] are `#[ignore]`d: they need a
     /// live ONNX Runtime, and on Windows `ort` is built with `load-dynamic`, so

@@ -9,6 +9,8 @@ import { useI18n } from '@/lib/i18n';
 interface AutomationPreferences {
   autoRecordMeetings: boolean;
   autoRecordSupported: boolean;
+  /** After a manual stop the detector waits for 5 s of silence before listening again. */
+  pausedAfterManualStop: boolean;
 }
 
 export function useAutoRecording() {

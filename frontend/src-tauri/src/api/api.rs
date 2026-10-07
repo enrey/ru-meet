@@ -6,9 +6,9 @@ use tauri_plugin_store::StoreExt;
 
 use crate::{
     database::{
-        models::MeetingModel,
+        models::{DateTimeUtc, MeetingModel},
         repositories::{
-            meeting::MeetingsRepository, setting::SettingsRepository,
+            meeting::{meeting_preview, MeetingsRepository}, setting::SettingsRepository,
             transcript::TranscriptsRepository,
         },
     },
@@ -26,10 +26,21 @@ pub struct ApiResponse<T> {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Meeting {
+/// A meeting as the library list shows it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingListItem {
     pub id: String,
     pub title: String,
+    pub created_at: DateTimeUtc,
+    /// End of the last transcript segment; `None` when segments carry no timing.
+    pub duration_seconds: Option<f64>,
+    /// Distinct diarized speakers; 0 when diarization has not run.
+    pub speaker_count: i64,
+    /// Lowercased `summary_processes.status`, `None` when no summary was requested.
+    pub summary_status: Option<String>,
+    pub has_summary: bool,
+    pub preview: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -341,24 +352,36 @@ pub async fn api_get_meetings<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     auth_token: Option<String>,
-) -> Result<Vec<Meeting>, String> {
+) -> Result<Vec<MeetingListItem>, String> {
     log_info!(
         "api_get_meetings called with auth_token(native) : {}",
         auth_token.is_some()
     );
     let pool = state.db_manager.pool();
-    let meetings: Result<Vec<MeetingModel>, sqlx::Error> =
-        MeetingsRepository::get_meetings(pool).await;
 
-    match meetings {
-        Ok(meeting_models) => {
-            log_info!("Successfully got {} meetings", meeting_models.len());
+    match MeetingsRepository::get_meeting_list(pool).await {
+        Ok(rows) => {
+            log_info!("Successfully got {} meetings", rows.len());
 
-            let result: Vec<Meeting> = meeting_models
+            let result = rows
                 .into_iter()
-                .map(|m| Meeting {
-                    id: m.id,
-                    title: m.title,
+                .map(|row| {
+                    let has_summary = row.summary_status.as_deref() == Some("completed")
+                        && row.summary_markdown.as_deref().is_some_and(|m| !m.trim().is_empty());
+                    let preview = meeting_preview(
+                        row.summary_markdown.as_deref(),
+                        row.first_transcript.as_deref(),
+                    );
+                    MeetingListItem {
+                        id: row.id,
+                        title: row.title,
+                        created_at: row.created_at,
+                        duration_seconds: row.duration_seconds,
+                        speaker_count: row.speaker_count,
+                        summary_status: row.summary_status,
+                        has_summary,
+                        preview,
+                    }
                 })
                 .collect();
             Ok(result)
@@ -947,6 +970,24 @@ pub async fn api_find_transcript_at_time(
     .await
     .map(|match_| match_.map(|(id, offset)| serde_json::json!({ "id": id, "offset": offset })))
     .map_err(|error| format!("Failed to find transcript at this time: {error}"))
+}
+
+/// Lines of one meeting matching `query`, with their pagination offsets.
+#[tauri::command]
+pub async fn api_search_meeting_transcript(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    query: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    TranscriptsRepository::search_meeting_transcript(state.db_manager.pool(), &meeting_id, &query)
+        .await
+        .map(|matches| {
+            matches
+                .into_iter()
+                .map(|(id, offset)| serde_json::json!({ "id": id, "offset": offset }))
+                .collect()
+        })
+        .map_err(|error| format!("Failed to search the transcript: {error}"))
 }
 
 #[tauri::command]

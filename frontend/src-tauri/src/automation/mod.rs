@@ -5,6 +5,9 @@ use tauri_plugin_store::StoreExt;
 
 mod monitor;
 pub(crate) mod microphone_activity;
+pub(crate) mod preview_vad;
+#[cfg(target_os = "windows")]
+mod preview_keeper;
 #[cfg(target_os = "windows")]
 mod windows;
 
@@ -39,6 +42,8 @@ pub struct AutomationPreferences {
     launch_at_login: bool,
     auto_record_supported: bool,
     excluded_apps: Vec<String>,
+    /// The detector waits for silence after a manual stop before listening again.
+    paused_after_manual_stop: bool,
 }
 
 pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -54,6 +59,19 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
+/// Automatic recording is enabled, supported here, has a source to listen to
+/// and is not paused after a manual stop — i.e. it would start on speech.
+pub(crate) fn is_listening<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let enabled = app
+        .try_state::<AutomationState>()
+        .is_some_and(|state| state.0.read().is_ok_and(|settings| settings.auto_record_meetings));
+    let mutes = crate::audio::recording_sources::current();
+    cfg!(target_os = "windows")
+        && enabled
+        && !(mutes.microphone && mutes.system)
+        && !monitor::paused_after_manual_stop()
+}
+
 #[tauri::command]
 pub fn get_automation_preferences<R: Runtime>(
     app: AppHandle<R>,
@@ -67,6 +85,7 @@ pub fn get_automation_preferences<R: Runtime>(
         launch_at_login: app.autolaunch().is_enabled().map_err(|e| e.to_string())?,
         auto_record_supported: cfg!(target_os = "windows"),
         excluded_apps: settings.excluded_apps.clone(),
+        paused_after_manual_stop: monitor::paused_after_manual_stop(),
     })
 }
 
@@ -94,6 +113,7 @@ pub fn set_auto_record_meetings<R: Runtime>(
     *settings = next;
     drop(settings);
     let _ = app.emit("auto-record-meetings-changed", enabled);
+    crate::tray::refresh_tray_indicator(&app);
     Ok(())
 }
 

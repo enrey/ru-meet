@@ -1,18 +1,50 @@
 use crate::api::{MeetingDetails, MeetingTranscript};
-use crate::database::models::{MeetingModel, Transcript};
+use crate::database::models::{MeetingListRow, MeetingModel, Transcript};
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
 use tracing::{error, info};
 
 pub struct MeetingsRepository;
 
+/// Longest preview line shown under a meeting title in the library.
+const PREVIEW_MAX_CHARS: usize = 220;
+
 impl MeetingsRepository {
-    pub async fn get_meetings(pool: &SqlitePool) -> Result<Vec<MeetingModel>, sqlx::Error> {
-        let meetings =
-            sqlx::query_as::<_, MeetingModel>("SELECT * FROM meetings ORDER BY created_at DESC")
-                .fetch_all(pool)
-                .await?;
-        Ok(meetings)
+    /// Meetings newest first, with the aggregates the library list shows.
+    /// Each child table is scanned once via GROUP BY rather than per meeting.
+    pub async fn get_meeting_list(pool: &SqlitePool) -> Result<Vec<MeetingListRow>, SqlxError> {
+        sqlx::query_as::<_, MeetingListRow>(
+            r#"
+            SELECT
+                m.id,
+                m.title,
+                m.created_at,
+                durations.duration_seconds,
+                COALESCE(speakers.speaker_count, 0) AS speaker_count,
+                LOWER(s.status) AS summary_status,
+                CASE WHEN json_valid(s.result) THEN json_extract(s.result, '$.markdown') END
+                    AS summary_markdown,
+                firsts.transcript AS first_transcript
+            FROM meetings m
+            LEFT JOIN (
+                SELECT meeting_id, MAX(audio_end_time) AS duration_seconds
+                FROM transcripts GROUP BY meeting_id
+            ) durations ON durations.meeting_id = m.id
+            LEFT JOIN (
+                -- SQLite returns the bare column from the row that holds MIN().
+                SELECT meeting_id, transcript, MIN(COALESCE(audio_start_time, 0))
+                FROM transcripts GROUP BY meeting_id
+            ) firsts ON firsts.meeting_id = m.id
+            LEFT JOIN (
+                SELECT meeting_id, COUNT(DISTINCT speaker) AS speaker_count
+                FROM diarization_turns GROUP BY meeting_id
+            ) speakers ON speakers.meeting_id = m.id
+            LEFT JOIN summary_processes s ON s.meeting_id = m.id
+            ORDER BY m.created_at DESC
+            "#,
+        )
+        .fetch_all(pool)
+        .await
     }
 
     pub async fn delete_meeting(pool: &SqlitePool, meeting_id: &str) -> Result<bool, SqlxError> {
@@ -272,4 +304,129 @@ async fn delete_meeting_with_transaction(
         .await?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// One plain-text line for the library list: the first prose of the summary
+/// (headings and markdown markup dropped), else the opening of the transcript.
+pub fn meeting_preview(summary_markdown: Option<&str>, first_transcript: Option<&str>) -> Option<String> {
+    summary_markdown
+        .and_then(summary_prose)
+        .or_else(|| first_transcript.map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned))
+        .map(|text| truncate_chars(&text, PREVIEW_MAX_CHARS))
+}
+
+fn summary_prose(markdown: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut len = 0;
+    for line in markdown.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('|') || line.starts_with("---") {
+            continue;
+        }
+        let line = strip_list_marker(line).replace("**", "").replace('`', "");
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        len += line.chars().count();
+        parts.push(line.to_owned());
+        if len >= PREVIEW_MAX_CHARS {
+            break;
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// Drops a leading `- `, `* `, `> `, `1. `, `2) ` and `[ ]`/`[x]` checkbox.
+fn strip_list_marker(line: &str) -> &str {
+    let mut rest = line;
+    for marker in ["- ", "* ", "+ ", "> "] {
+        if let Some(stripped) = rest.strip_prefix(marker) {
+            rest = stripped.trim_start();
+            break;
+        }
+    }
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits > 0 {
+        let after = &rest[digits..];
+        if let Some(stripped) = after.strip_prefix(". ").or_else(|| after.strip_prefix(") ")) {
+            rest = stripped.trim_start();
+        }
+    }
+    for checkbox in ["[ ] ", "[x] ", "[X] "] {
+        if let Some(stripped) = rest.strip_prefix(checkbox) {
+            return stripped.trim_start();
+        }
+    }
+    rest
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((cut, _)) => format!("{}…", text[..cut].trim_end()),
+        None => text.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_skips_headings_and_markup() {
+        let markdown = "# Сводка\n\n## Решения\n- **Релиз** переносится\n1. Диаризация `polyvoice`\n";
+        assert_eq!(
+            meeting_preview(Some(markdown), Some("ignored")).as_deref(),
+            Some("Релиз переносится; Диаризация polyvoice")
+        );
+        assert_eq!(
+            meeting_preview(Some("- [x] xml экспорт\n2026 год"), None).as_deref(),
+            Some("xml экспорт; 2026 год")
+        );
+    }
+
+    #[test]
+    fn preview_falls_back_to_transcript() {
+        assert_eq!(meeting_preview(Some("# Only heading"), Some("  привет  ")).as_deref(), Some("привет"));
+        assert_eq!(meeting_preview(None, Some("   ")), None);
+    }
+
+    #[test]
+    fn preview_truncates_on_char_boundary() {
+        let long = "я".repeat(PREVIEW_MAX_CHARS + 10);
+        let preview = meeting_preview(None, Some(&long)).unwrap();
+        assert_eq!(preview.chars().count(), PREVIEW_MAX_CHARS + 1);
+        assert!(preview.ends_with('…'));
+    }
+
+    #[tokio::test]
+    async fn meeting_list_aggregates_child_tables() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        for ddl in [
+            "CREATE TABLE meetings (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT, folder_path TEXT)",
+            "CREATE TABLE transcripts (id TEXT, meeting_id TEXT, transcript TEXT, audio_start_time REAL, audio_end_time REAL)",
+            "CREATE TABLE diarization_turns (meeting_id TEXT, start_time REAL, end_time REAL, speaker TEXT)",
+            "CREATE TABLE summary_processes (meeting_id TEXT PRIMARY KEY, status TEXT, result TEXT)",
+            "INSERT INTO meetings VALUES ('a', 'Old', '2026-10-01T10:00:00Z', '2026-10-01T10:00:00Z', NULL)",
+            "INSERT INTO meetings VALUES ('b', 'New', '2026-10-02T10:00:00Z', '2026-10-02T10:00:00Z', NULL)",
+            "INSERT INTO transcripts VALUES ('1', 'b', 'second', 5.0, 61.5), ('2', 'b', 'first', 0.0, 4.0)",
+            "INSERT INTO diarization_turns VALUES ('b', 0, 1, 'S1'), ('b', 1, 2, 'S2'), ('b', 2, 3, 'S1')",
+            "INSERT INTO summary_processes VALUES ('b', 'COMPLETED', '{\"markdown\":\"Итог\"}'), ('a', 'PENDING', NULL)",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+
+        let rows = MeetingsRepository::get_meeting_list(&pool).await.unwrap();
+        assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
+        let new = &rows[0];
+        assert_eq!(new.duration_seconds, Some(61.5));
+        assert_eq!(new.speaker_count, 2);
+        assert_eq!(new.summary_status.as_deref(), Some("completed"));
+        assert_eq!(new.summary_markdown.as_deref(), Some("Итог"));
+        assert_eq!(new.first_transcript.as_deref(), Some("first"));
+        let old = &rows[1];
+        assert_eq!((old.duration_seconds, old.speaker_count), (None, 0));
+        assert_eq!(old.summary_status.as_deref(), Some("pending"));
+        assert_eq!(old.summary_markdown, None);
+    }
 }

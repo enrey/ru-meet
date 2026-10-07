@@ -28,7 +28,7 @@ static DATA_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
 
     #[cfg(target_os = "windows")]
     {
-        let executable = std::env::current_exe().expect("Cannot locate Meetily executable");
+        let executable = std::env::current_exe().expect("Cannot locate Ru-Meet executable");
         let executable_dir = executable
             .parent()
             .expect("Executable has no parent directory");
@@ -56,6 +56,34 @@ static DATA_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
     }
 });
 
+/// Per-user folder name outside a portable install.
+const PRODUCT_DIR: &str = "Ru-Meet";
+/// Name used before the Ru-Meet rename.
+const LEGACY_PRODUCT_DIR: &str = "Meetily";
+const RECORDINGS_DIR: &str = "ru-meet-recordings";
+const LEGACY_RECORDINGS_DIR: &str = "meetily-recordings";
+
+/// `base/Ru-Meet`, or `base/Meetily` when an install from before the rename
+/// already keeps data there, so models (hundreds of MB), templates and other
+/// files are neither stranded nor downloaded again.
+pub fn product_dir(base: PathBuf) -> PathBuf {
+    prefer_existing(base, LEGACY_PRODUCT_DIR, PRODUCT_DIR)
+}
+
+/// Default recordings folder inside `base`, with the same legacy rule.
+pub fn recordings_dir(base: PathBuf) -> PathBuf {
+    prefer_existing(base, LEGACY_RECORDINGS_DIR, RECORDINGS_DIR)
+}
+
+fn prefer_existing(base: PathBuf, legacy: &str, current: &str) -> PathBuf {
+    let legacy_path = base.join(legacy);
+    if legacy_path.exists() {
+        legacy_path
+    } else {
+        base.join(current)
+    }
+}
+
 pub fn data_root() -> Option<&'static PathBuf> {
     DATA_DIR.as_ref()
 }
@@ -71,5 +99,27 @@ pub fn store_path(name: &str) -> PathBuf {
     match data_root() {
         Some(path) => path.join(name),
         None => PathBuf::from(name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn existing_pre_rename_folders_keep_being_used() {
+        let base = std::env::temp_dir().join(format!("ru-meet-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        assert_eq!(product_dir(base.clone()), base.join("Ru-Meet"));
+        assert_eq!(recordings_dir(base.clone()), base.join("ru-meet-recordings"));
+
+        std::fs::create_dir(base.join("Meetily")).unwrap();
+        std::fs::create_dir(base.join("meetily-recordings")).unwrap();
+        assert_eq!(product_dir(base.clone()), base.join("Meetily"));
+        assert_eq!(recordings_dir(base.clone()), base.join("meetily-recordings"));
+
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

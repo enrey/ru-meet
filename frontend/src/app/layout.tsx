@@ -1,7 +1,6 @@
 'use client'
 
 import './globals.css'
-import { Source_Sans_3 } from 'next/font/google'
 import Sidebar from '@/components/Sidebar'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
@@ -23,6 +22,7 @@ import { UpdateCheckProvider } from '@/components/UpdateCheckProvider'
 import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcessingProvider'
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
+import { TranscriptRecoveryProvider } from '@/contexts/TranscriptRecoveryContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
 import {
   Dialog,
@@ -36,11 +36,6 @@ import { Button } from '@/components/ui/button'
 import { I18nProvider, getLocale, translate as t } from '@/lib/i18n'
 
 
-const sourceSans3 = Source_Sans_3({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-source-sans-3',
-})
 
 // Module-level component — stable reference across RootLayout re-renders.
 // Defined here (not inside RootLayout) so React never sees a new function type
@@ -273,7 +268,7 @@ export default function RootLayout({
 
   return (
     <html lang={getLocale()}>
-      <body className={`${sourceSans3.variable} font-sans antialiased`}>
+      <body className="font-sans antialiased">
         <I18nProvider>
         <RecordingStateProvider>
             <TranscriptProvider>
@@ -292,10 +287,12 @@ export default function RootLayout({
                               {showOnboarding ? (
                                 <OnboardingFlow onComplete={handleOnboardingComplete} />
                               ) : (
-                                <div className="flex">
-                                  <Sidebar />
-                                  <MainContent>{children}</MainContent>
-                                </div>
+                                <TranscriptRecoveryProvider>
+                                  <div className="flex">
+                                    <Sidebar />
+                                    <MainContent>{children}</MainContent>
+                                  </div>
+                                </TranscriptRecoveryProvider>
                               )}
                               {/* Import audio overlay and dialog */}
                               <ImportDropOverlay visible={showDropOverlay} />
@@ -320,7 +317,7 @@ export default function RootLayout({
                                   <DialogHeader>
                                     <DialogTitle>{t('Database could not be opened')}</DialogTitle>
                                     <DialogDescription>
-                                      {t('Meetily started without access to your local data. You can create a new database after preserving the existing files as a backup.')}
+                                      {t('Ru-Meet started without access to your local data. You can create a new database after preserving the existing files as a backup.')}
                                     </DialogDescription>
                                   </DialogHeader>
                                   <p className="text-sm text-muted-foreground">

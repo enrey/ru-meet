@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { VisuallyHidden } from "./ui/visually-hidden";
 import { About } from "./About";
 import { useI18n } from "@/lib/i18n";
+import { useAppVersion } from "@/hooks/useAppVersion";
 
 interface LogoProps {
   isCollapsed: boolean;
@@ -12,6 +13,7 @@ interface LogoProps {
 const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
   ({ isCollapsed }, ref) => {
     const { t } = useI18n();
+    const appVersion = useAppVersion();
     return (
       <Dialog aria-describedby={undefined}>
         {isCollapsed ? (
@@ -23,7 +25,7 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
               aria-label={t('About Ru-Meet')}
             >
               <Image
-                src="/logo-collapsed.png"
+                src="/app-icon.png"
                 alt="Ru-Meet"
                 width={40}
                 height={40}
@@ -37,10 +39,21 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
             <button
               ref={ref}
               type="button"
-              className="w-full text-lg text-center border rounded-full bg-blue-50 border-white font-semibold text-gray-700 mb-2 block items-center cursor-pointer hover:opacity-80 transition-opacity focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="mb-2 flex w-full items-center gap-3 rounded-xl px-1 py-1 text-left cursor-pointer transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               aria-label={t('About Ru-Meet')}
             >
-              <span>Ru-Meet</span>
+              <Image
+                src="/app-icon.png"
+                alt=""
+                width={40}
+                height={40}
+                className="shrink-0 object-contain"
+                priority
+              />
+              <span className="flex items-baseline gap-2">
+                <span className="text-lg font-semibold text-gray-900">Ru-Meet</span>
+                {appVersion && <span className="text-xs text-gray-400">v{appVersion}</span>}
+              </span>
             </button>
           </DialogTrigger>
         )}

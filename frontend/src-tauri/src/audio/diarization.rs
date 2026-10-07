@@ -16,7 +16,7 @@ use polyvoice::{ModelRegistry, Pipeline, Profile, SampleRate};
 use serde::{Deserialize, Serialize};
 use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -131,7 +131,7 @@ impl SpeakrsEngine {
     fn model_dir() -> Result<PathBuf> {
         Ok(crate::portable::data_root()
             .cloned()
-            .or_else(|| dirs::data_local_dir().map(|path| path.join("Meetily")))
+            .or_else(|| dirs::data_local_dir().map(crate::portable::product_dir))
             .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
             .join("models")
             .join("diarization")
@@ -209,14 +209,14 @@ impl DiarizationEngine for SpeakrsEngine {
 }
 
 /// Full-recording PyAnnote + WeSpeaker pipeline.  Models are verified by the
-/// registry before use and cached under Meetily's application data directory.
+/// registry before use and cached under the application data directory.
 struct PyannoteWeSpeakerEngine;
 
 impl PyannoteWeSpeakerEngine {
     fn model_registry() -> Result<ModelRegistry> {
         let root = crate::portable::data_root()
             .cloned()
-            .or_else(|| dirs::data_local_dir().map(|path| path.join("Meetily")))
+            .or_else(|| dirs::data_local_dir().map(crate::portable::product_dir))
             .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
             .join("models")
             .join("diarization");
@@ -265,7 +265,7 @@ impl NvidiaSortformerV2Engine {
     fn model_dir() -> Result<PathBuf> {
         Ok(crate::portable::data_root()
             .cloned()
-            .or_else(|| dirs::data_local_dir().map(|path| path.join("Meetily")))
+            .or_else(|| dirs::data_local_dir().map(crate::portable::product_dir))
             .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
             .join("models")
             .join("diarization")
@@ -421,6 +421,25 @@ static JOB_STATUS: Lazy<Mutex<DiarizationJobStatus>> = Lazy::new(|| {
     })
 });
 static CANCELLED_RERUNS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+static MEETING_JOBS: Lazy<Mutex<HashMap<String, DiarizationJobStatus>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static JOB_QUEUE: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+fn set_meeting_job_status(meeting_id: &str, in_progress: bool, message: &str) {
+    let next = DiarizationJobStatus {
+        in_progress,
+        message: message.into(),
+        meeting_id: Some(meeting_id.into()),
+    };
+    if let Ok(mut jobs) = MEETING_JOBS.lock() {
+        jobs.insert(meeting_id.into(), next.clone());
+    }
+    if let Ok(mut status) = JOB_STATUS.lock() {
+        if !status.in_progress || status.meeting_id.as_deref() == Some(meeting_id) {
+            *status = next;
+        }
+    }
+}
 
 pub fn load_diarization_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let store = app
@@ -499,7 +518,13 @@ pub fn get_diarization_model_statuses() -> Result<Vec<DiarizationModelStatus>, S
 }
 
 #[tauri::command]
-pub fn get_diarization_status() -> Result<DiarizationJobStatus, String> {
+pub fn get_diarization_status(meeting_id: Option<String>) -> Result<DiarizationJobStatus, String> {
+    if let Some(meeting_id) = meeting_id {
+        return Ok(MEETING_JOBS.lock().map_err(|_| "Diarization status lock is unavailable")?
+            .get(&meeting_id).cloned().unwrap_or(DiarizationJobStatus {
+                in_progress: false, message: String::new(), meeting_id: Some(meeting_id),
+            }));
+    }
     JOB_STATUS
         .lock()
         .map(|status| status.clone())
@@ -570,23 +595,6 @@ pub fn rerun_diarization<R: Runtime>(
     meeting_id: String,
     meeting_folder_path: String,
 ) -> Result<(), String> {
-    let mut status = JOB_STATUS
-        .lock()
-        .map_err(|_| "Diarization status lock is unavailable")?;
-    if status.in_progress {
-        return Err("Speaker diarization is already running".into());
-    }
-    *status = DiarizationJobStatus {
-        in_progress: true,
-        message: "Identifying speakers…".into(),
-        meeting_id: Some(meeting_id.clone()),
-    };
-    drop(status);
-    CANCELLED_RERUNS
-        .lock()
-        .map_err(|_| "Diarization cancellation lock is unavailable")?
-        .remove(&meeting_id);
-
     let folder = std::path::PathBuf::from(meeting_folder_path);
     let audio_path = [
         "audio.mp4",
@@ -601,19 +609,68 @@ pub fn rerun_diarization<R: Runtime>(
     .map(|name| folder.join(name))
     .find(|path| path.is_file())
     .ok_or_else(|| "No recording audio was found for this meeting".to_string())?;
-    let pool = state.db_manager.pool().clone();
+    start_meeting_diarization(app, state.db_manager.pool().clone(), meeting_id, audio_path, None)
+}
+
+/// Register before returning from Stop so a newly opened meeting can query
+/// its status even when it missed the first progress event.
+pub fn start_recording_diarization<R: Runtime>(
+    app: AppHandle<R>, pool: sqlx::SqlitePool, meeting_id: String,
+    audio_path: Option<String>, target: DiarizationTarget,
+) -> String {
+    match get_diarization_settings() {
+        Ok(settings) if !settings.enabled => return "skipped".into(),
+        Err(error) => {
+            emit_rerun_error(&app, &meeting_id, error);
+            return "failed".into();
+        }
+        _ => {}
+    }
+    let Some(audio_path) = audio_path else { return "skipped".into(); };
+    match start_meeting_diarization(app.clone(), pool, meeting_id.clone(), audio_path.into(), Some(target)) {
+        Ok(()) => "pending".into(),
+        Err(error) => {
+            emit_rerun_error(&app, &meeting_id, error);
+            "failed".into()
+        }
+    }
+}
+
+fn start_meeting_diarization<R: Runtime>(
+    app: AppHandle<R>, pool: sqlx::SqlitePool, meeting_id: String,
+    audio_path: PathBuf, target: Option<DiarizationTarget>,
+) -> Result<(), String> {
     let (engine, collapse) = {
         let settings = SETTINGS
             .lock()
             .map_err(|_| "Diarization settings lock is unavailable")?;
         (settings.engine.clone(), settings.collapse_minor_speakers)
     };
+    {
+        let mut jobs = MEETING_JOBS.lock().map_err(|_| "Diarization status lock is unavailable")?;
+        if jobs.get(&meeting_id).is_some_and(|status| status.in_progress) {
+            return Err("Speaker diarization is already running for this meeting".into());
+        }
+        CANCELLED_RERUNS.lock().map_err(|_| "Diarization cancellation lock is unavailable")?.remove(&meeting_id);
+        jobs.insert(meeting_id.clone(), DiarizationJobStatus {
+            in_progress: true,
+            message: "Waiting for speaker diarization…".into(),
+            meeting_id: Some(meeting_id.clone()),
+        });
+    }
     let _ = app.emit(
         "diarization-progress",
-        serde_json::json!({"stage":"processing", "message":"Identifying speakers…", "meetingId": meeting_id}),
+        serde_json::json!({"stage":"queued", "message":"Waiting for speaker diarization…", "meetingId": meeting_id}),
     );
 
     tauri::async_runtime::spawn(async move {
+        let _queue_guard = JOB_QUEUE.lock().await;
+        if take_rerun_cancellation(&meeting_id) {
+            finish_cancelled_rerun(&app, &meeting_id);
+            return;
+        }
+        set_meeting_job_status(&meeting_id, true, "Identifying speakers…");
+        let _ = app.emit("diarization-progress", serde_json::json!({"stage":"processing", "message":"Identifying speakers…", "meetingId": meeting_id}));
         // Decode first so the heartbeat below can quote the recording's real
         // length, and so a decode failure is reported as such.
         let decoded =
@@ -655,18 +712,15 @@ pub fn rerun_diarization<R: Runtime>(
             Ok(Ok(turns)) => {
                 match TranscriptsRepository::apply_speaker_turns(&pool, &meeting_id, &turns).await {
                     Ok(()) => {
+                        if let Some(target) = target {
+                            target.apply_speaker_turns(&turns);
+                        }
                         crate::audio::transcript_export::export_meeting_transcripts_logged(
                             &pool,
                             &meeting_id,
                         )
                         .await;
-                        if let Ok(mut status) = JOB_STATUS.lock() {
-                            *status = DiarizationJobStatus {
-                                in_progress: false,
-                                message: "Speaker labels are ready".into(),
-                                meeting_id: Some(meeting_id.clone()),
-                            };
-                        }
+                        set_meeting_job_status(&meeting_id, false, "Speaker labels are ready");
                         let _ = app.emit("diarization-complete", serde_json::json!({
                         "meetingId": meeting_id,
                         "speakers": turns.iter().map(|turn| &turn.speaker).collect::<std::collections::BTreeSet<_>>().len(),
@@ -689,13 +743,13 @@ pub fn rerun_diarization<R: Runtime>(
 
 #[tauri::command]
 pub fn cancel_diarization<R: Runtime>(app: AppHandle<R>, meeting_id: String) -> Result<(), String> {
-    let status = JOB_STATUS
+    let jobs = MEETING_JOBS
         .lock()
         .map_err(|_| "Diarization status lock is unavailable")?;
-    if !status.in_progress || status.meeting_id.as_deref() != Some(meeting_id.as_str()) {
+    if !jobs.get(&meeting_id).is_some_and(|status| status.in_progress) {
         return Err("No diarization job is running for this meeting".into());
     }
-    drop(status);
+    drop(jobs);
     CANCELLED_RERUNS
         .lock()
         .map_err(|_| "Diarization cancellation lock is unavailable")?
@@ -760,6 +814,13 @@ fn spawn_progress_heartbeat<R: Runtime>(
             if let Ok(mut status) = JOB_STATUS.lock() {
                 status.message = message.clone();
             }
+            if let Some(meeting_id) = &meeting_id {
+                if let Ok(mut jobs) = MEETING_JOBS.lock() {
+                    if let Some(status) = jobs.get_mut(meeting_id) {
+                        status.message = message.clone();
+                    }
+                }
+            }
             let mut payload = serde_json::json!({ "stage": "processing", "message": message });
             if let Some(meeting_id) = &meeting_id {
                 payload["meetingId"] = serde_json::json!(meeting_id);
@@ -817,13 +878,7 @@ fn take_rerun_cancellation(meeting_id: &str) -> bool {
 }
 
 fn finish_cancelled_rerun<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) {
-    if let Ok(mut status) = JOB_STATUS.lock() {
-        *status = DiarizationJobStatus {
-            in_progress: false,
-            message: "Speaker diarization stopped".into(),
-            meeting_id: Some(meeting_id.to_string()),
-        };
-    }
+    set_meeting_job_status(meeting_id, false, "Speaker diarization stopped");
     let _ = app.emit(
         "diarization-cancelled",
         serde_json::json!({"meetingId": meeting_id}),
@@ -832,13 +887,7 @@ fn finish_cancelled_rerun<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) {
 
 fn emit_rerun_error<R: Runtime>(app: &AppHandle<R>, meeting_id: &str, error: String) {
     log::warn!("Diarization failed: {error}");
-    if let Ok(mut status) = JOB_STATUS.lock() {
-        *status = DiarizationJobStatus {
-            in_progress: false,
-            message: "Speaker diarization failed".into(),
-            meeting_id: Some(meeting_id.to_string()),
-        };
-    }
+    set_meeting_job_status(meeting_id, false, "Speaker diarization failed");
     let _ = app.emit(
         "diarization-rerun-error",
         serde_json::json!({"meetingId": meeting_id}),

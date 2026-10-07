@@ -352,7 +352,7 @@ pub async fn show_recording_started_notification<R: Runtime>(
                 }
 
                 // Fallback: Use Tauri's notification API directly
-                let title = "Meetily";
+                let title = "Ru-Meet";
                 let body = crate::notifications::types::recording_started_body(meeting_name);
 
                 log_info!(
@@ -405,7 +405,7 @@ pub async fn show_recording_stopped_notification<R: Runtime>(
         }
 
         // Use direct Tauri notification as fallback for stop notification
-        let title = "Meetily";
+        let title = "Ru-Meet";
         let body = crate::i18n::tr("Recording has stopped", "Запись остановлена");
 
         log_info!(

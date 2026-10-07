@@ -135,14 +135,14 @@ impl Notification {
     pub fn recording_started(meeting_name: Option<String>) -> Self {
         let body = recording_started_body(meeting_name);
 
-        Notification::new("Meetily", body, NotificationType::RecordingStarted)
+        Notification::new("Ru-Meet", body, NotificationType::RecordingStarted)
             .with_priority(NotificationPriority::High)
             .with_timeout(NotificationTimeout::Seconds(5))
     }
 
     pub fn recording_stopped() -> Self {
         Notification::new(
-            "Meetily",
+            "Ru-Meet",
             tr("Recording has been stopped and saved", "Запись остановлена и сохранена"),
             NotificationType::RecordingStopped,
         )
@@ -152,7 +152,7 @@ impl Notification {
 
     pub fn recording_paused() -> Self {
         Notification::new(
-            "Meetily",
+            "Ru-Meet",
             tr("Recording has been paused", "Запись приостановлена"),
             NotificationType::RecordingPaused,
         )
@@ -162,7 +162,7 @@ impl Notification {
 
     pub fn recording_resumed() -> Self {
         Notification::new(
-            "Meetily",
+            "Ru-Meet",
             tr("Recording has been resumed", "Запись возобновлена"),
             NotificationType::RecordingResumed,
         )
@@ -177,7 +177,7 @@ impl Notification {
             None => tr("Transcription has been completed", "Транскрипция завершена").to_string(),
         };
 
-        Notification::new("Meetily", body, NotificationType::TranscriptionComplete)
+        Notification::new("Ru-Meet", body, NotificationType::TranscriptionComplete)
             .with_priority(NotificationPriority::Normal)
             .with_timeout(NotificationTimeout::Seconds(5))
     }
@@ -193,7 +193,7 @@ impl Notification {
         };
 
         Notification::new(
-            "Meetily",
+            "Ru-Meet",
             body,
             NotificationType::MeetingReminder(minutes_until),
         )
@@ -204,7 +204,7 @@ impl Notification {
     pub fn system_error(error: impl Into<String>) -> Self {
         let error_string = error.into();
         Notification::new(
-            tr("Meetily Error", "Ошибка Meetily"),
+            tr("Ru-Meet Error", "Ошибка Ru-Meet"),
             error_string.clone(),
             NotificationType::SystemError(error_string),
         )
@@ -214,7 +214,7 @@ impl Notification {
 
     pub fn test_notification() -> Self {
         Notification::new(
-            "Meetily",
+            "Ru-Meet",
             tr(
                 "This is a test notification to verify the system is working correctly",
                 "Это тестовое уведомление для проверки работы системы",

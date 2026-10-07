@@ -127,8 +127,10 @@ impl RecordingSession {
             ));
         }
 
-        info!("Validating transcription model availability before starting recording...");
-        if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await
+        // Only check the model is on disk: loading it takes seconds, and the
+        // transcription task does that after capture has already started.
+        if let Err(validation_error) =
+            transcription::ensure_transcription_model_available(&app).await
         {
             error!("Model validation failed: {}", validation_error);
             let _ = app.emit(
@@ -316,25 +318,6 @@ impl RecordingSession {
             .await
             .map_err(|error| format!("Failed to save recording files: {error}"))?;
 
-        let (turns, diarization_status) = if let Some(audio_path) = audio_path {
-            match super::diarization::run_diarization_task(
-                app.clone(),
-                diarization_target,
-                audio_path,
-            )
-            .await
-            {
-                Ok(turns) if turns.is_empty() => (turns, "skipped".to_string()),
-                Ok(turns) => (turns, "completed".to_string()),
-                Err(error) => {
-                    warn!("Diarization reached a failed terminal state: {error}");
-                    (Vec::new(), "failed".to_string())
-                }
-            }
-        } else {
-            (Vec::new(), "skipped".to_string())
-        };
-
         let segments = resources.manager.get_transcript_segments();
         let database_segments: Vec<crate::api::TranscriptSegment> = segments
             .iter()
@@ -360,15 +343,10 @@ impl RecordingSession {
             )
             .await
             .map_err(|error| format!("Failed to persist finalized recording: {error}"))?;
-        if !turns.is_empty() {
-            crate::database::repositories::transcript::TranscriptsRepository::apply_speaker_turns(
-                app_state.db_manager.pool(),
-                &meeting_id,
-                &turns,
-            )
-            .await
-            .map_err(|error| format!("Failed to persist speaker labels: {error}"))?;
-        }
+        let diarization_status = super::diarization::start_recording_diarization(
+            app.clone(), app_state.db_manager.pool().clone(), meeting_id.clone(),
+            audio_path, diarization_target,
+        );
 
         let result = FinalizedRecording {
             meeting_id,

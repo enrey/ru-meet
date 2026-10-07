@@ -24,6 +24,7 @@ function MeetingDetailsContent() {
   const searchParams = useSearchParams();
   const meetingId = searchParams.get('id');
   const source = searchParams.get('source'); // Check if navigated from recording
+  const searchQuery = searchParams.get('q') ?? ''; // Transcript search from the library
   const { setCurrentMeeting, refetchMeetings } = useSidebar();
   const { isAutoSummary } = useConfig(); // Get auto-summary toggle state
   const router = useRouter();
@@ -51,6 +52,7 @@ function MeetingDetailsContent() {
     loadMore,
     loadPrevious,
     jumpToSpeakerTime,
+    jumpToTranscript,
     renameSpeakerLocally,
     refetch,
     error: transcriptError,
@@ -258,7 +260,7 @@ function MeetingDetailsContent() {
         <div className="text-center">
           <p className="text-red-500 mb-4">{t(error)}</p>
           <button
-            onClick={() => router.push('/')}
+            onClick={() => router.push('/meetings')}
             className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
           >
             {t('Go Back')}
@@ -300,6 +302,8 @@ function MeetingDetailsContent() {
     onLoadMore={loadMore}
     onLoadPrevious={loadPrevious}
     onJumpToSpeakerTime={jumpToSpeakerTime}
+    onJumpToTranscript={jumpToTranscript}
+    initialSearchQuery={searchQuery}
     onSpeakerRenamed={renameSpeakerLocally}
   />;
 }

@@ -10,6 +10,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { configService } from '@/services/configService';
 import { normalizeAudioDevicePreferences, stripAudioDeviceSuffix } from '@/lib/audioDevicePreferences';
 import { useI18n } from '@/lib/i18n';
+import { notifyRecordingSourceMutesChanged } from '@/hooks/useRecordingSourceMutes';
 
 type Devices = { micDevice: string | null; systemDevice: string | null };
 type ActiveDevices = { microphone: string | null; system: string | null };
@@ -49,7 +50,6 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
     setLevels(new Map());
     if (!recording) {
       setActiveDevices(null);
-      setSourceMutes({ microphone: false, system: false });
     }
     if (disabled || (!recording && !alwaysVisible)) return;
     let cancelled = false;
@@ -66,7 +66,11 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
           invoke<SourceMutes>('get_recording_source_mutes'),
         ]);
       } else {
-        const available = await invoke<AudioDevice[]>('get_audio_devices');
+        const [available, savedMutes] = await Promise.all([
+          invoke<AudioDevice[]>('get_audio_devices'),
+          invoke<SourceMutes>('get_recording_source_mutes'),
+        ]);
+        mutes = savedMutes;
         if (cancelled) return;
         setAvailableDevices(available);
         active = {
@@ -77,6 +81,7 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
       if (cancelled) return;
       setActiveDevices(active);
       setSourceMutes(mutes);
+      notifyRecordingSourceMutesChanged(mutes);
       const names = [active.microphone, active.system].filter((item): item is string => Boolean(item));
       unlisten = await listen<AudioLevelUpdate>('audio-levels', ({ payload }) => {
         if (!cancelled) setLevels(new Map(payload.levels.map(level => [level.device_name, level])));
@@ -175,6 +180,7 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
         muted: !sourceMutes[kind],
       });
       setSourceMutes(mutes);
+      notifyRecordingSourceMutesChanged(mutes);
     } catch (error) {
       setSwitchError(t(
         kind === 'microphone'
@@ -194,21 +200,24 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
     const isMuted = sourceMutes[kind];
     const SourceIcon = kind === 'microphone' ? Mic : Headphones;
     return <div className="space-y-1" key={label}>
+      <div className="flex items-center gap-1.5 text-xs font-medium">
       <button
         type="button"
         onClick={() => toggleSource(kind)}
-        disabled={!recording || disabled || togglingSource !== null}
-        className={`flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${isMuted ? 'text-gray-400' : 'text-gray-800 hover:text-gray-600'}`}
-        aria-pressed={isMuted}
+        disabled={disabled || togglingSource !== null}
+        className="relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-700 transition-colors enabled:cursor-pointer enabled:hover:bg-gray-100 enabled:active:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-default disabled:opacity-50"
+        aria-pressed={!isMuted}
+        aria-label={isMuted ? t('Enable {source}', { source: label }) : t('Mute {source}', { source: label })}
         title={isMuted ? t('Enable {source}', { source: label }) : t('Mute {source}', { source: label })}
       >
-        <span className="relative inline-flex">
-          <SourceIcon className="h-3.5 w-3.5" aria-hidden="true" />
-          {isMuted && <span className="absolute left-[-1px] top-1/2 h-px w-[18px] -rotate-45 bg-current" aria-hidden="true" />}
+        <span className="relative inline-flex shrink-0">
+          {togglingSource === kind ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <SourceIcon className="h-3.5 w-3.5" aria-hidden="true" />}
+          {isMuted && <span className="absolute left-[-1px] top-1/2 h-0.5 w-[18px] -rotate-45 rounded-full bg-red-500" aria-hidden="true" />}
         </span>
-        <span className={isMuted ? 'line-through' : ''}>{label}</span>
-        {togglingSource === kind && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
+        {!isMuted && <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-green-500 ring-1 ring-white" aria-hidden="true" />}
       </button>
+      <span className="text-gray-800">{label}</span>
+      </div>
       <button
         type="button"
         onClick={() => setExpandedDevice(isExpanded ? null : kind)}
@@ -230,7 +239,6 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
           >{device.name}</button>)}
         </div>
         {switching === kind && <p className="mt-1 flex items-center gap-1 text-xs text-gray-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('Switching…')}</p>}
-        {switchError && <p className="mt-1 text-xs text-red-600">{switchError}</p>}
       </div>}
       <AudioLevelMeter
         rmsLevel={isMuted ? 0 : level?.rms_level || 0}
@@ -307,6 +315,7 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
     {!collapsed && <>
       {row('microphone', t('Microphone'), mic, inputs)}
       {row('system', t('System audio'), system, outputs)}
+      {switchError && <p className="mt-1 text-xs text-red-600">{switchError}</p>}
     </>}
   </div>;
 }

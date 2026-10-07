@@ -5,6 +5,12 @@ use tauri::{
 };
 
 use crate::i18n::tr;
+use crate::tray_badge::TrayIndicator;
+
+const PRODUCT_NAME: &str = "Ru-Meet";
+
+/// Last indicator pushed to the tray, so periodic refreshes are free.
+static LAST_INDICATOR: std::sync::Mutex<Option<TrayIndicator>> = std::sync::Mutex::new(None);
 
 #[derive(Debug, Clone)]
 pub enum RecordingState {
@@ -24,7 +30,7 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
-        .tooltip("Meetily")
+        .tooltip(PRODUCT_NAME)
         .icon(app.default_window_icon().unwrap().clone())
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
         .build(app)?;
@@ -244,7 +250,48 @@ async fn check_can_record<R: Runtime>(app: &AppHandle<R>) -> bool {
     }
 }
 
+/// Recompute the tray badge and tooltip from the recording session and the
+/// automatic-recording detector. Cheap when nothing changed.
+pub fn refresh_tray_indicator<R: Runtime>(app: &AppHandle<R>) {
+    use crate::audio::recording_session::{SessionPhase, RECORDING_SESSION};
+    let indicator = match RECORDING_SESSION.phase() {
+        SessionPhase::Paused => TrayIndicator::Paused,
+        SessionPhase::Starting | SessionPhase::Recording => TrayIndicator::Recording,
+        // Stopping only finalises (transcripts, diarization): capture is over.
+        SessionPhase::Idle | SessionPhase::Stopping if crate::automation::is_listening(app) => {
+            TrayIndicator::Listening
+        }
+        SessionPhase::Idle | SessionPhase::Stopping => TrayIndicator::Idle,
+    };
+
+    {
+        let mut last = LAST_INDICATOR.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == Some(indicator) {
+            return;
+        }
+        *last = Some(indicator);
+    }
+
+    let Some(tray) = app.tray_by_id("main-tray") else {
+        return;
+    };
+    if let Some(base) = app.default_window_icon() {
+        let rgba = crate::tray_badge::compose(base.rgba(), base.width(), base.height(), indicator);
+        let side = crate::tray_badge::SIZE;
+        let _ = tray.set_icon(Some(tauri::image::Image::new_owned(rgba, side, side)));
+    }
+    let status = match indicator {
+        TrayIndicator::Idle => None,
+        TrayIndicator::Listening => Some(tr("automatic recording is waiting for speech", "автозапись ждёт речь")),
+        TrayIndicator::Recording => Some(tr("recording", "идёт запись")),
+        TrayIndicator::Paused => Some(tr("recording paused", "запись на паузе")),
+    };
+    let tooltip = status.map_or_else(|| PRODUCT_NAME.to_string(), |status| format!("{PRODUCT_NAME} — {status}"));
+    let _ = tray.set_tooltip(Some(tooltip));
+}
+
 pub async fn update_tray_menu_async<R: Runtime>(app: &AppHandle<R>) {
+    refresh_tray_indicator(app);
     log::info!("Tray: update_tray_menu_async called");
     // Get the current recording state
     let recording_state = get_current_recording_state().await;

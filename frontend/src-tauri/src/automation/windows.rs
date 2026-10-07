@@ -1,11 +1,12 @@
-//! Enumerates playback and microphone stream state, not volume. Silence and muting do not
+//! Enumerates playback stream state. Microphone triggers require confirmed VAD speech.
+//! Silence and muting do not
 //! end a meeting while its application still has an active audio stream.
 use std::collections::{HashMap, HashSet};
 use windows::core::{Interface, PWSTR};
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE},
     Media::Audio::{
-        eAll, AudioSessionStateActive, IAudioSessionControl2, IAudioSessionManager2,
+        eRender, AudioSessionStateActive, IAudioSessionControl2, IAudioSessionManager2,
         IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
     },
     System::{
@@ -89,7 +90,7 @@ fn executable_name(pid: u32) -> windows::core::Result<String> {
     }
 }
 
-pub fn has_active_audio(excluded_apps: &[String]) -> Result<bool, String> {
+pub fn has_active_playback(excluded_apps: &[String]) -> Result<bool, String> {
     // CPAL and other COM users can initialize Tokio's reusable blocking
     // threads with a different apartment type. Use a fresh MTA thread so
     // detection keeps working after device enumeration and recording start.
@@ -112,10 +113,7 @@ fn enumerate_audio(excluded_apps: &[String]) -> Result<bool, String> {
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
         let devices = enumerator
-            // Both output and input sessions can identify a meeting. Our own
-            // recording sessions are filtered below, so mic capture cannot
-            // keep an automatic recording alive after the other app stops.
-            .EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE)
+            .EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
             .map_err(|e| e.to_string())?;
         for index in 0..devices.GetCount().map_err(|e| e.to_string())? {
             let device = devices.Item(index).map_err(|e| e.to_string())?;
@@ -154,7 +152,7 @@ fn enumerate_audio(excluded_apps: &[String]) -> Result<bool, String> {
 mod tests {
     use super::*;
     #[test]
-    fn windows_can_enumerate_live_output_and_microphone_sessions() {
-        has_active_audio(&[]).expect("Windows output and microphone session enumeration must work");
+    fn windows_can_enumerate_live_playback_sessions() {
+        has_active_playback(&[]).expect("Windows playback session enumeration must work");
     }
 }
