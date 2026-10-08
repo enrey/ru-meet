@@ -22,18 +22,18 @@ export async function showRecordingNotification(): Promise<void> {
       const toastId = toast.info(`🔴 ${t('Recording Started')}`, {
         description: (
           <div className="space-y-3 min-w-[280px]">
-            <p className="text-sm font-medium text-gray-900">
+            <p className="text-sm font-medium text-slate-900">
               {t('Inform all participants this meeting is being recorded.')}
             </p>
-            <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-blue-100 p-2 rounded transition-colors">
+            <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-indigo-100 p-2 rounded transition-colors">
               <input
                 type="checkbox"
                 onChange={(e) => {
                   dontShowAgain = e.target.checked;
                 }}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-2"
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 focus:ring-2"
               />
-              <span className="select-none text-gray-700">{t("Don't show this again")}</span>
+              <span className="select-none text-slate-700">{t("Don't show this again")}</span>
             </label>
             <button
               onClick={async () => {
@@ -45,7 +45,7 @@ export async function showRecordingNotification(): Promise<void> {
                 }
                 toast.dismiss(toastId);
               }}
-              className="w-full px-3 py-1.5 bg-gray-900 text-white text-xs rounded hover:bg-gray-800 transition-colors font-medium"
+              className="w-full px-3 py-1.5 bg-slate-900 text-white text-xs rounded hover:bg-slate-800 transition-colors font-medium"
             >
               {t("I've Notified Participants")}
             </button>

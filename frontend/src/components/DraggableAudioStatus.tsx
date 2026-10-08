@@ -96,7 +96,7 @@ export function DraggableAudioStatus({ devices, recording, disabled = false }: {
         tabIndex: 0,
         'aria-label': t('Move audio panel. Drag the header or use arrow keys.'),
         title: t('Drag to move'),
-        className: `touch-none select-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`,
+        className: `touch-none select-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`,
         onPointerDown: startDrag,
         onPointerMove: moveDrag,
         onPointerUp: endDrag,

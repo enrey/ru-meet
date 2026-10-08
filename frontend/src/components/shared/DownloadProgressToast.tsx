@@ -63,26 +63,26 @@ function DownloadToastContent({
   const unitLabel = t(download.unitLabel ?? 'MB');
 
   return (
-    <div className="flex items-center gap-3 w-full max-w-sm bg-white rounded-lg shadow-lg border border-gray-200 p-3 relative">
+    <div className="flex items-center gap-3 w-full max-w-sm bg-white rounded-lg shadow-lg border border-slate-200 p-3 relative">
 
       {/* Icon */}
-      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${isComplete ? 'bg-green-100' : hasError ? 'bg-red-100' : isCancelled ? 'bg-gray-100' : 'bg-gray-100'
+      <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${isComplete ? 'bg-green-100' : hasError ? 'bg-red-100' : isCancelled ? 'bg-slate-100' : 'bg-slate-100'
         }`}>
         {isComplete ? (
           <Check className="w-4 h-4 text-green-600" />
         ) : hasError ? (
           <X className="w-4 h-4 text-red-600" />
         ) : isCancelled ? (
-          <X className="w-4 h-4 text-gray-600" />
+          <X className="w-4 h-4 text-slate-600" />
         ) : (
-          <ArrowBigDownDash className="size-5 text-gray-600 " />
+          <ArrowBigDownDash className="size-5 text-slate-600 " />
         )}
       </div>
 
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2 mb-1">
-          <p className="text-sm font-medium text-gray-900 truncate">
+          <p className="text-sm font-medium text-slate-900 truncate">
             {download.displayName}
           </p>
         </div>
@@ -92,19 +92,19 @@ function DownloadToastContent({
         ) : isComplete ? (
           <p className="text-xs text-green-600">{t('Download complete')}</p>
         ) : isCancelled ? (
-          <p className="text-xs text-gray-600">{t('Download cancelled')}</p>
+          <p className="text-xs text-slate-600">{t('Download cancelled')}</p>
         ) : (
           <>
             {/* Progress bar */}
-            <div className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden mb-1.5">
+            <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden mb-1.5">
               <div
-                className="h-full bg-gray-900 rounded-full transition-all duration-300"
+                className="h-full bg-slate-900 rounded-full transition-all duration-300"
                 style={{ width: `${download.progress}%` }}
               />
             </div>
 
             {/* Progress text */}
-            <div className="flex items-center justify-between text-xs text-gray-500">
+            <div className="flex items-center justify-between text-xs text-slate-500">
               <span>
                 {download.downloadedMb.toFixed(1)} / {download.totalMb.toFixed(1)} {unitLabel}
               </span>
@@ -112,7 +112,7 @@ function DownloadToastContent({
                 {download.speedMbps > 0 && (
                   <span>{download.speedMbps.toFixed(1)} {unitLabel}/{t('s')}</span>
                 )}
-                <span className="text-gray-900 font-medium">
+                <span className="text-slate-900 font-medium">
                   {Math.round(download.progress)}%
                 </span>
               </span>

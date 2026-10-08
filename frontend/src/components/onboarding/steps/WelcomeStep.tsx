@@ -33,7 +33,7 @@ export function WelcomeStep() {
     >
       <div className="flex flex-col items-center space-y-10">
         {/* Interface language: a clean install starts in Russian */}
-        <div role="radiogroup" aria-label={t('Interface language')} className="flex gap-1 rounded-full border border-gray-200 bg-white p-1 text-sm">
+        <div role="radiogroup" aria-label={t('Interface language')} className="flex gap-1 rounded-full border border-slate-200 bg-white p-1 text-sm">
           {UI_LOCALES.map(option => (
             <button
               key={option.value}
@@ -41,7 +41,7 @@ export function WelcomeStep() {
               role="radio"
               aria-checked={locale === option.value}
               onClick={() => setLocale(option.value as Locale)}
-              className={`rounded-full px-3 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900 ${locale === option.value ? 'bg-gray-900 text-white' : 'text-gray-600 hover:text-gray-900'}`}
+              className={`rounded-full px-3 py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${locale === option.value ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:text-slate-900'}`}
             >
               {option.label}
             </button>
@@ -49,20 +49,20 @@ export function WelcomeStep() {
         </div>
 
         {/* Divider */}
-        <div className="w-16 h-px bg-gray-300" />
+        <div className="w-16 h-px bg-slate-300" />
 
         {/* Features Card */}
-        <div className="w-full max-w-md bg-white rounded-lg border border-gray-200 shadow-sm p-6 space-y-4">
+        <div className="w-full max-w-md bg-white rounded-lg border border-slate-200 shadow-sm p-6 space-y-4">
           {features.map((feature, index) => {
             const Icon = feature.icon;
             return (
               <div key={index} className="flex items-start gap-3">
                 <div className="flex-shrink-0 mt-0.5">
-                  <div className="w-5 h-5 rounded-full bg-gray-100 flex items-center justify-center">
-                    <Icon className="w-3 h-3 text-gray-700" />
+                  <div className="w-5 h-5 rounded-full bg-slate-100 flex items-center justify-center">
+                    <Icon className="w-3 h-3 text-slate-700" />
                   </div>
                 </div>
-                <p className="text-sm text-gray-700 leading-relaxed">{feature.title}</p>
+                <p className="text-sm text-slate-700 leading-relaxed">{feature.title}</p>
               </div>
             );
           })}
@@ -72,11 +72,11 @@ export function WelcomeStep() {
         <div className="w-full max-w-xs space-y-3">
           <Button
             onClick={goNext}
-            className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
+            className="w-full h-11 bg-indigo-600 hover:bg-indigo-700 text-white"
           >
             {t('Get Started')}
           </Button>
-          <p className="text-xs text-center text-gray-500">{t('Takes less than 3 minutes')}</p>
+          <p className="text-xs text-center text-slate-500">{t('Takes less than 3 minutes')}</p>
         </div>
       </div>
     </OnboardingContainer>

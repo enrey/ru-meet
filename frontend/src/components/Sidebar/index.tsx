@@ -39,7 +39,7 @@ const NavItem = React.forwardRef<HTMLButtonElement, NavItemProps>(
         aria-current={active ? 'page' : undefined}
         className={`flex h-11 shrink-0 items-center rounded-xl transition-colors duration-150 ${
           collapsed ? 'w-11 justify-center' : 'w-full gap-3 px-3 text-left'
-        } ${active ? 'bg-indigo-50 text-indigo-700' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'} ${className}`}
+        } ${active ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'} ${className}`}
         {...props}
       >
         <span className="relative grid shrink-0 place-items-center">
@@ -50,7 +50,7 @@ const NavItem = React.forwardRef<HTMLButtonElement, NavItemProps>(
           <>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium">{label}</span>
-              {detail && <span className="block truncate text-xs text-gray-500">{detail}</span>}
+              {detail && <span className="block truncate text-xs text-slate-500">{detail}</span>}
             </span>
             {trailing}
           </>
@@ -119,7 +119,7 @@ const Sidebar: React.FC = () => {
   return (
     <TooltipProvider>
       <nav
-        className={`fixed top-0 left-0 z-40 flex h-screen flex-col gap-1 border-r border-gray-200 bg-white py-4 transition-[width] duration-300 ${
+        className={`fixed top-0 left-0 z-40 flex h-screen flex-col gap-1 border-r border-slate-200 bg-white py-4 transition-[width] duration-300 ${
           isCollapsed ? 'w-16 items-center' : 'w-64 px-3'
         }`}
       >
@@ -150,7 +150,7 @@ const Sidebar: React.FC = () => {
           label={t('Meetings')}
           active={isLibraryPage}
           onClick={() => router.push('/meetings')}
-          trailing={meetings.length > 0 && <span className="text-xs text-gray-400">{meetings.length}</span>}
+          trailing={meetings.length > 0 && <span className="text-xs text-slate-400">{meetings.length}</span>}
         />
 
         {betaFeatures.importAndRetranscribe && (

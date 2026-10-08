@@ -64,9 +64,9 @@ export function TranscriptPanel({
   );
 
   return (
-    <div className="w-full min-h-0 border-r border-gray-200 bg-white flex flex-col overflow-hidden">
+    <div className="w-full min-h-0 border-r border-slate-200 bg-white flex flex-col overflow-hidden">
       {/* Title area - Sticky header */}
-      <div className="shrink-0 z-10 bg-white p-4 border-gray-200">
+      <div className="shrink-0 z-10 bg-white p-4 border-slate-200">
         <div className="flex flex-col space-y-3">
           <div className="flex  flex-col space-y-2">
             <div className="flex justify-center  items-center space-x-2">

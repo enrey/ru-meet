@@ -103,7 +103,7 @@ function StatusChip({ meeting, t }: { meeting: MeetingListItem; t: TranslateFn }
     );
   }
   return (
-    <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
+    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
       {t('Transcript')}
     </span>
   );
@@ -253,17 +253,17 @@ export default function MeetingsLibraryPage() {
 
       <div className="mt-5 flex flex-wrap items-center gap-3">
         <div className="flex h-10 w-full max-w-md items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100">
-          {isSearching ? <Loader2 className="h-4 w-4 animate-spin text-gray-400" /> : <Search className="h-4 w-4 text-gray-400" />}
+          {isSearching ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" /> : <Search className="h-4 w-4 text-slate-400" />}
           <input
             ref={searchInputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => event.key === 'Escape' && setQuery('')}
             placeholder={t('Search titles and transcripts')}
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400"
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400"
           />
           {query ? (
-            <button type="button" onClick={() => setQuery('')} aria-label={t('Clear')} className="text-gray-400 hover:text-gray-600">
+            <button type="button" onClick={() => setQuery('')} aria-label={t('Clear')} className="text-slate-400 hover:text-slate-600">
               <X className="h-4 w-4" />
             </button>
           ) : (
@@ -304,10 +304,10 @@ export default function MeetingsLibraryPage() {
               <div className="mb-1 grid h-14 w-14 place-items-center rounded-2xl bg-slate-100 text-slate-400">
                 <AudioLines className="h-7 w-7" />
               </div>
-              <p className="font-semibold text-gray-700">
+              <p className="font-semibold text-slate-700">
                 {meetings.length === 0 ? t('No meetings yet') : t('Nothing found')}
               </p>
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-slate-500">
                 {meetings.length === 0
                   ? t('Record a meeting or import audio, and it will appear here.')
                   : t('Try a different query or filter.')}
@@ -431,7 +431,7 @@ export default function MeetingsLibraryPage() {
           </VisuallyHidden>
           <div className="py-4">
             <h3 className="mb-4 text-lg font-semibold">{t('Edit Meeting Title')}</h3>
-            <label htmlFor="meeting-title" className="mb-2 block text-sm font-medium text-gray-700">
+            <label htmlFor="meeting-title" className="mb-2 block text-sm font-medium text-slate-700">
               {t('Meeting Title')}
             </label>
             <input
@@ -440,7 +440,7 @@ export default function MeetingsLibraryPage() {
               value={renaming?.title ?? ''}
               onChange={(event) => setRenaming((current) => current && { ...current, title: event.target.value })}
               onKeyDown={(event) => event.key === 'Enter' && void handleRenameConfirm()}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-md border border-slate-300 px-3 py-2 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder={t('Enter meeting title')}
               autoFocus
             />
@@ -449,14 +449,14 @@ export default function MeetingsLibraryPage() {
             <button
               type="button"
               onClick={() => setRenaming(null)}
-              className="rounded-md bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200"
+              className="rounded-md bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200"
             >
               {t('Cancel')}
             </button>
             <button
               type="button"
               onClick={() => void handleRenameConfirm()}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+              className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
             >
               {t('Save')}
             </button>

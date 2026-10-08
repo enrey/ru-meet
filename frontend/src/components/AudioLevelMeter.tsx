@@ -73,7 +73,7 @@ export function AudioLevelMeter({
     <div className={`flex items-center space-x-2 ${className}`}>
       {/* Device activity indicator */}
       <div className={`w-2 h-2 rounded-full ${
-        isActive ? 'bg-green-400 animate-pulse' : 'bg-gray-300'
+        isActive ? 'bg-green-400 animate-pulse' : 'bg-slate-300'
       }`} title={`${deviceName} - ${isActive ? 'Active' : 'Inactive'}`} />
 
       {/* Level meter container */}
@@ -82,7 +82,7 @@ export function AudioLevelMeter({
         title={`RMS ${formatDbfs(rmsDbfs)}, peak ${formatDbfs(peakDbfs)}`}
       >
         {/* Background */}
-        <div className="w-full h-full bg-gray-200 rounded-sm overflow-hidden">
+        <div className="w-full h-full bg-slate-200 rounded-sm overflow-hidden">
           {/* RMS level bar (main level) */}
           <div
             className={`${sizes.meter} ${rmsColor} transition-all duration-150 ease-out rounded-sm`}
@@ -102,14 +102,14 @@ export function AudioLevelMeter({
         {[-24, -12, -6].map(dbfs => (
           <div
             key={dbfs}
-            className="pointer-events-none absolute inset-y-0 w-px bg-gray-500 opacity-30"
+            className="pointer-events-none absolute inset-y-0 w-px bg-slate-500 opacity-30"
             style={{ left: `${dbfsToMeterPercent(dbfs)}%` }}
           />
         ))}
       </div>
 
       {/* RMS value; 0 dBFS is the digital clipping ceiling. */}
-      <div className={`${sizes.text} text-gray-600 font-mono min-w-[5.25rem] text-right`}>
+      <div className={`${sizes.text} text-slate-600 font-mono min-w-[5.25rem] text-right`}>
         {formatDbfs(rmsDbfs)}
       </div>
     </div>
@@ -138,11 +138,11 @@ export function CompactAudioLevelMeter({
     <div className={`flex items-center space-x-1 ${className}`}>
       {/* Activity dot */}
       <div className={`w-1.5 h-1.5 rounded-full ${
-        isActive ? 'bg-green-400' : 'bg-gray-300'
+        isActive ? 'bg-green-400' : 'bg-slate-300'
       }`} />
 
       {/* Mini meter */}
-      <div className="w-8 h-1.5 bg-gray-200 rounded-sm overflow-hidden">
+      <div className="w-8 h-1.5 bg-slate-200 rounded-sm overflow-hidden">
         <div
           className={`h-full ${getLevelColor(rmsDbfs)} transition-all duration-150`}
           style={{ width: `${rmsPercent}%` }}

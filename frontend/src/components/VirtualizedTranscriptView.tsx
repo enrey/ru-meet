@@ -135,7 +135,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     const displayText = cleanStopWords(text) || (text.trim() === '' ? `[${t('Silence')}]` : text);
 
     return (
-        <div id={`segment-${id}`} className={`${tightBelow ? 'mb-1' : 'mb-3'} rounded-md ${isHighlighted ? 'bg-blue-50 ring-2 ring-blue-400 ring-offset-2' : ''}`}>
+        <div id={`segment-${id}`} className={`${tightBelow ? 'mb-1' : 'mb-3'} rounded-md ${isHighlighted ? 'bg-indigo-50 ring-2 ring-indigo-400 ring-offset-2' : ''}`}>
             {/* The speaker's name sits above the row, over the text column, so the
                 play button and time line up with the first line of the text. */}
             {speaker && showSpeaker && (
@@ -148,7 +148,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                     <button
                         type="button"
                         onClick={() => onTogglePlay(id, timestamp, endTime)}
-                        className="mt-1 flex-shrink-0 leading-none text-gray-400 transition-colors hover:text-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:ring-offset-1 rounded-sm"
+                        className="mt-1 flex-shrink-0 leading-none text-slate-400 transition-colors hover:text-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:ring-offset-1 rounded-sm"
                         aria-label={isPlaying ? t('Stop playback') : t('Play this phrase')}
                         title={isPlaying ? t('Stop') : t('Play this phrase')}
                     >
@@ -163,7 +163,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                             disabled={!canPlay}
                             onClick={() => onTogglePlay(id, timestamp, endTime)}
                             aria-label={canPlay ? t('Play from {time}', { time: formatRecordingTime(timestamp) }) : undefined}
-                            className={`mt-1 w-14 flex-shrink-0 rounded-sm text-left font-mono text-xs tabular-nums transition-colors enabled:cursor-pointer enabled:hover:text-blue-600 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 disabled:cursor-default ${isPlaying ? 'text-blue-600 font-medium' : 'text-gray-400'}`}
+                            className={`mt-1 w-14 flex-shrink-0 rounded-sm text-left font-mono text-xs tabular-nums transition-colors enabled:cursor-pointer enabled:hover:text-indigo-600 focus:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 disabled:cursor-default ${isPlaying ? 'text-indigo-600 font-medium' : 'text-slate-400'}`}
                         >
                             {formatRecordingTime(timestamp)}
                         </button>
@@ -176,11 +176,11 @@ const TranscriptSegment = memo(function TranscriptSegment({
                 </Tooltip>
                 <div className="min-w-0 flex-1">
                     {isStreaming ? (
-                        <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
-                            <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
+                        <div className="bg-slate-100 border border-slate-200 rounded-lg px-3 py-2">
+                            <p className="text-base text-slate-800 leading-relaxed">{displayText}</p>
                         </div>
                     ) : (
-                        <p className="text-base text-gray-800 leading-relaxed">{highlightMatches(displayText, highlightQuery)}</p>
+                        <p className="text-base text-slate-800 leading-relaxed">{highlightMatches(displayText, highlightQuery)}</p>
                     )}
                 </div>
             </div>
@@ -333,7 +333,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
             {hasPrevious && !isRecording && (
                 <button
                     type="button"
-                    className="mb-2 shrink-0 self-center rounded px-3 py-1 text-sm text-blue-600 hover:bg-blue-50 disabled:text-gray-400"
+                    className="mb-2 shrink-0 self-center rounded px-3 py-1 text-sm text-indigo-600 hover:bg-indigo-50 disabled:text-slate-400"
                     disabled={isLoadingPrevious}
                     onClick={onLoadPrevious}
                 >
@@ -347,17 +347,17 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    className="text-center text-gray-500 mt-8"
+                    className="text-center text-slate-500 mt-8"
                 >
                     {isRecording ? (
                         <>
                             <div className="flex items-center justify-center mb-3">
-                                <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-blue-500 animate-pulse'}`}></div>
+                                <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-indigo-500 animate-pulse'}`}></div>
                             </div>
-                            <p className="text-sm text-gray-600">
+                            <p className="text-sm text-slate-600">
                                 {isPaused ? t('Recording paused') : t('Listening for speech...')}
                             </p>
-                            <p className="text-xs mt-1 text-gray-400">
+                            <p className="text-xs mt-1 text-slate-400">
                                 {isPaused ? t('Click resume to continue recording') : t('Speak to see live transcription')}
                             </p>
                         </>
@@ -426,12 +426,12 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     {(hasMore || isLoadingMore) && !isRecording && segments.length > 0 && (
                         <div ref={loadMoreTriggerRef} className="flex justify-center items-center py-4 mt-2">
                             {isLoadingMore ? (
-                                <div className="flex items-center gap-2 text-gray-500">
-                                    <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                                <div className="flex items-center gap-2 text-slate-500">
+                                    <div className="w-4 h-4 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
                                     <span className="text-sm">{t('Loading more...')}</span>
                                 </div>
                             ) : hasMore && totalCount > 0 ? (
-                                <span className="text-sm text-gray-400">
+                                <span className="text-sm text-slate-400">
                                     Showing {loadedCount} of {totalCount} segments
                                 </span>
                             ) : null}
@@ -444,9 +444,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
-                            className="flex items-center gap-2 mt-4 text-gray-500"
+                            className="flex items-center gap-2 mt-4 text-slate-500"
                         >
-                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                            <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></div>
                             <span className="text-sm">{t('Listening...')}</span>
                         </motion.div>
                     )}
@@ -491,12 +491,12 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     {(hasMore || isLoadingMore) && !isRecording && segments.length > 0 && (
                         <div ref={loadMoreTriggerRef} className="flex justify-center items-center py-4 mt-2">
                             {isLoadingMore ? (
-                                <div className="flex items-center gap-2 text-gray-500">
-                                    <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                                <div className="flex items-center gap-2 text-slate-500">
+                                    <div className="w-4 h-4 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
                                     <span className="text-sm">{t('Loading more...')}</span>
                                 </div>
                             ) : hasMore && totalCount > 0 ? (
-                                <span className="text-sm text-gray-400">
+                                <span className="text-sm text-slate-400">
                                     Showing {loadedCount} of {totalCount} segments
                                 </span>
                             ) : null}
@@ -509,9 +509,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
-                            className="flex items-center gap-2 mt-4 text-gray-500"
+                            className="flex items-center gap-2 mt-4 text-slate-500"
                         >
-                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                            <div className="w-2 h-2 bg-indigo-500 rounded-full animate-pulse"></div>
                             <span className="text-sm">{t('Listening...')}</span>
                         </motion.div>
                     )}

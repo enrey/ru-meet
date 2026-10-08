@@ -48,7 +48,7 @@ function neutralDark(family, spec) {
 
 // Hues: pale fills and borders become tints over the dark surface; dark text
 // shades become their light counterparts. Saturated shades stay as they are.
-const SURFACE = colors.gray['900'];
+const SURFACE = colors.slate['900'];
 const HUE_DARK = {
   bg: { 50: 0.12, 100: 0.2, 200: 0.3 },
   border: { 50: 0.2, 100: 0.25, 200: 0.3, 300: 0.45 },
@@ -88,7 +88,7 @@ function build() {
   for (const role of ['bg', 'border']) {
     const name = `--p-${role}-white`;
     light[name] = '255 255 255';
-    dark[name] = neutralDark('gray', NEUTRAL_DARK[role].white);
+    dark[name] = neutralDark('slate', NEUTRAL_DARK[role].white);
     roles[role].white = `rgb(var(${name}) / <alpha-value>)`;
   }
   dark['--p-text-black'] = '255 255 255';

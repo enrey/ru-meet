@@ -39,7 +39,7 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
             <button
               ref={ref}
               type="button"
-              className="mb-2 flex w-full items-center gap-3 rounded-xl px-1 py-1 text-left cursor-pointer transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="mb-2 flex w-full items-center gap-3 rounded-xl px-1 py-1 text-left cursor-pointer transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               aria-label={t('About Ru-Meet')}
             >
               <Image
@@ -51,8 +51,8 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
                 priority
               />
               <span className="flex items-baseline gap-2">
-                <span className="text-lg font-semibold text-gray-900">Ru-Meet</span>
-                {appVersion && <span className="text-xs text-gray-400">v{appVersion}</span>}
+                <span className="text-lg font-semibold text-slate-900">Ru-Meet</span>
+                {appVersion && <span className="text-xs text-slate-400">v{appVersion}</span>}
               </span>
             </button>
           </DialogTrigger>

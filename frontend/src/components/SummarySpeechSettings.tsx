@@ -65,22 +65,22 @@ export function SummarySpeechSettings() {
   const isInstalled = installed.length > 0 && status.problem === null
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+    <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
       <div className="flex items-center justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-2">
-            <Volume2 className="h-5 w-5 text-gray-600" />
-            <h3 className="text-lg font-semibold text-gray-900">
+            <Volume2 className="h-5 w-5 text-slate-600" />
+            <h3 className="text-lg font-semibold text-slate-900">
               {t("Read summaries aloud")}
             </h3>
             <span className="px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
               {t("BETA")}
             </span>
           </div>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-slate-600">
             {t("Adds a play button next to the summary. Speech is synthesized on this machine, offline.")}
           </p>
-          <p className="mt-2 text-xs text-gray-500">
+          <p className="mt-2 text-xs text-slate-500">
             {isInstalled
               ? t("Runs on the GPU through llama.cpp.")
               : status.problem ?? t("No speech model is installed.")}
@@ -99,10 +99,10 @@ export function SummarySpeechSettings() {
       </div>
 
       {status.models.length > 0 && (
-        <div className="mt-4 flex items-center justify-between gap-4 border-t border-gray-100 pt-4">
+        <div className="mt-4 flex items-center justify-between gap-4 border-t border-slate-100 pt-4">
           <div>
-            <p className="text-sm font-medium text-gray-900">{t("Model")}</p>
-            <p className="text-xs text-gray-500">
+            <p className="text-sm font-medium text-slate-900">{t("Model")}</p>
+            <p className="text-xs text-slate-500">
               {t("Applies to the next summary you play.")}
             </p>
           </div>

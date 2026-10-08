@@ -174,8 +174,8 @@ export function LanguageSelection({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Globe className="h-4 w-4 text-gray-600" />
-          <h4 className="text-sm font-medium text-gray-900">{t('Transcription Language')}</h4>
+          <Globe className="h-4 w-4 text-slate-600" />
+          <h4 className="text-sm font-medium text-slate-900">{t('Transcription Language')}</h4>
         </div>
       </div>
 
@@ -184,7 +184,7 @@ export function LanguageSelection({
           value={isGigaAM ? 'ru' : selectedLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
           disabled={disabled || saving || isGigaAM}
-          className="w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
+          className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 disabled:bg-slate-50 disabled:text-slate-500"
         >
           {availableLanguages.map((language) => (
             <option key={language.code} value={language.code}>
@@ -202,14 +202,14 @@ export function LanguageSelection({
           </div>
         )}
         {isGigaAM && (
-          <div className="mt-2 rounded-md bg-blue-50 p-2 text-blue-800">
+          <div className="mt-2 rounded-md bg-indigo-50 p-2 text-indigo-800">
             <p className="text-xs">{t('GigaAM v3 supports Russian speech only.')}</p>
           </div>
         )}
 
         {/* Info text */}
         <div className="text-xs space-y-2 pt-2">
-          <p className="text-gray-600">
+          <p className="text-slate-600">
             <strong>{t('Current:')}</strong> {selectedLanguageName}
           </p>
           {effectiveLanguage === 'auto' && (
@@ -219,13 +219,13 @@ export function LanguageSelection({
             </div>
           )}
           {effectiveLanguage === 'auto-translate' && (
-            <div className="p-2 bg-blue-50 border border-blue-200 rounded text-blue-800">
+            <div className="p-2 bg-indigo-50 border border-indigo-200 rounded text-indigo-800">
               <p className="font-medium">🌐 {t('Translation Mode Active')}</p>
               <p className="mt-1">{t('All audio will be automatically translated to English. Best for multilingual meetings where you need English output.')}</p>
             </div>
           )}
           {effectiveLanguage !== 'auto' && effectiveLanguage !== 'auto-translate' && (
-            <p className="text-gray-600">
+            <p className="text-slate-600">
               {t('Transcription will be optimized for')} <strong>{selectedLanguageName}</strong>
             </p>
           )}

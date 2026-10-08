@@ -22,8 +22,8 @@ export const TranscriptSearchBar = forwardRef<HTMLInputElement, TranscriptSearch
 
     return (
       <div className="flex min-w-0 items-center gap-2">
-        <div className="flex h-8 w-72 min-w-0 items-center gap-2 rounded-md border border-gray-200 bg-white px-2.5 focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100">
-          {searching ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-gray-400" /> : <Search className="h-3.5 w-3.5 shrink-0 text-gray-400" />}
+        <div className="flex h-8 w-72 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100">
+          {searching ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-400" /> : <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
           <input
             ref={ref}
             value={query}
@@ -41,19 +41,19 @@ export const TranscriptSearchBar = forwardRef<HTMLInputElement, TranscriptSearch
             }}
             placeholder={t('Search in transcript')}
             aria-label={t('Search in transcript')}
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400"
+            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400"
           />
           {hasQuery ? (
-            <button type="button" onClick={() => onQueryChange('')} aria-label={t('Clear')} className="text-gray-400 hover:text-gray-600">
+            <button type="button" onClick={() => onQueryChange('')} aria-label={t('Clear')} className="text-slate-400 hover:text-slate-600">
               <X className="h-3.5 w-3.5" />
             </button>
           ) : (
-            <kbd className="rounded border border-gray-200 bg-gray-50 px-1 text-[10px] text-gray-500">Ctrl F</kbd>
+            <kbd className="rounded border border-slate-200 bg-slate-50 px-1 text-[10px] text-slate-500">Ctrl F</kbd>
           )}
         </div>
         {hasQuery && !searching && (
           <>
-            <span className="whitespace-nowrap text-xs tabular-nums text-gray-500" aria-live="polite">
+            <span className="whitespace-nowrap text-xs tabular-nums text-slate-500" aria-live="polite">
               {matchCount ? t('{position} of {count}', { position, count: matchCount }) : t('No matches')}
             </span>
             <button
@@ -62,7 +62,7 @@ export const TranscriptSearchBar = forwardRef<HTMLInputElement, TranscriptSearch
               disabled={matchCount === 0}
               aria-label={t('Previous match')}
               title={`${t('Previous match')} (Shift+Enter)`}
-              className="grid h-7 w-7 place-items-center rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-40"
+              className="grid h-7 w-7 place-items-center rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-40"
             >
               <ChevronUp className="h-4 w-4" />
             </button>
@@ -72,7 +72,7 @@ export const TranscriptSearchBar = forwardRef<HTMLInputElement, TranscriptSearch
               disabled={matchCount === 0}
               aria-label={t('Next match')}
               title={`${t('Next match')} (Enter)`}
-              className="grid h-7 w-7 place-items-center rounded-md text-gray-500 hover:bg-gray-100 disabled:opacity-40"
+              className="grid h-7 w-7 place-items-center rounded-md text-slate-500 hover:bg-slate-100 disabled:opacity-40"
             >
               <ChevronDown className="h-4 w-4" />
             </button>

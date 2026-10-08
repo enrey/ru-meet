@@ -129,11 +129,11 @@ export function SpeakerTimeline({
       style={height === null ? undefined : { height }}
     >
       <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-gray-900">{t('Speaker timeline')}</h3>
+        <h3 className="text-sm font-semibold text-slate-900">{t('Speaker timeline')}</h3>
       </div>
       <div className="min-h-0 flex-1 overflow-auto pb-3">
         <div className="min-w-[440px] space-y-2">
-          <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-3 text-[10px] text-gray-500">
+          <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-3 text-[10px] text-slate-500">
             <span />
             <div className="flex justify-between">
               {[0, 0.25, 0.5, 0.75, 1].map((fraction) => (
@@ -144,12 +144,12 @@ export function SpeakerTimeline({
           {timeline.speakers.map((speaker) => (
             <div key={speaker} className="grid grid-cols-[180px_minmax(0,1fr)] items-center gap-3">
               <SpeakerName speaker={speaker} className="text-xs" />
-              <div className="relative h-6 overflow-hidden rounded-md bg-gray-100" aria-label={t('{speaker} speech intervals', { speaker: meetingSpeakers.displayName(speaker) })}>
+              <div className="relative h-6 overflow-hidden rounded-md bg-slate-100" aria-label={t('{speaker} speech intervals', { speaker: meetingSpeakers.displayName(speaker) })}>
                 {timeline.valid.filter((turn) => turn.speaker === speaker).map((turn, turnIndex) => (
                   <button
                     key={`${turn.start}-${turn.end}-${turnIndex}`}
                     type="button"
-                    className="absolute top-1 h-4 cursor-pointer rounded-sm transition-opacity hover:opacity-75 focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700"
+                    className="absolute top-1 h-4 cursor-pointer rounded-sm transition-opacity hover:opacity-75 focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700"
                     style={{
                       left: `${turn.start / timeline.duration * 100}%`,
                       width: `${(turn.end - turn.start) / timeline.duration * 100}%`,
@@ -180,14 +180,14 @@ export function SpeakerTimeline({
       aria-valuemin={MIN_HEIGHT}
       aria-valuemax={maxHeight()}
       tabIndex={0}
-      className="group relative z-10 flex h-2 w-full shrink-0 cursor-row-resize items-center justify-stretch focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset"
+      className="group relative z-10 flex h-2 w-full shrink-0 cursor-row-resize items-center justify-stretch focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-inset"
       onPointerDown={onSeparatorPointerDown}
       onPointerMove={onSeparatorPointerMove}
       onPointerUp={onSeparatorPointerUp}
       onPointerCancel={onSeparatorPointerUp}
       onKeyDown={onSeparatorKeyDown}
     >
-      <div className="h-px w-full bg-gray-200 transition-[height,background-color] duration-150 ease-out group-hover:h-1 group-hover:bg-blue-400 group-active:h-1 group-active:bg-blue-500" />
+      <div className="h-px w-full bg-slate-200 transition-[height,background-color] duration-150 ease-out group-hover:h-1 group-hover:bg-indigo-400 group-active:h-1 group-active:bg-indigo-500" />
     </div>
     </>
   );

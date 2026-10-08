@@ -42,11 +42,11 @@ export function SetupOverviewStep() {
       totalSteps={isMac ? 4 : 3}
     >
       <div className="mx-auto w-full max-w-lg space-y-5">
-        <fieldset className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
-          <legend className="px-1 font-medium text-gray-900">{t('Download now')}</legend>
+        <fieldset className="space-y-3 rounded-lg border border-slate-200 bg-white p-4">
+          <legend className="px-1 font-medium text-slate-900">{t('Download now')}</legend>
           <label className="flex cursor-pointer items-start gap-3 text-sm">
             <input type="checkbox" checked={downloadTranscription} onChange={(event) => setDownloadTranscription(event.target.checked)} className="mt-0.5" />
-            <span>{t('Selected transcription model')}<span className="block text-gray-500">{t('Needed for recording and transcription')}</span></span>
+            <span>{t('Selected transcription model')}<span className="block text-slate-500">{t('Needed for recording and transcription')}</span></span>
           </label>
           <div className="space-y-2 pl-6">
             {ENGINES.map((engine) => {
@@ -57,7 +57,7 @@ export function SetupOverviewStep() {
                   key={engine.id}
                   className={cn(
                     'flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition-all duration-200',
-                    selected ? 'border-gray-900 bg-gray-100' : 'border-gray-200 bg-white hover:border-gray-300'
+                    selected ? 'border-slate-900 bg-slate-100' : 'border-slate-200 bg-white hover:border-slate-300'
                   )}
                 >
                   <input
@@ -67,31 +67,31 @@ export function SetupOverviewStep() {
                     onChange={() => setTranscriptionProvider(engine.id)}
                     className="sr-only"
                   />
-                  <div className={cn('flex size-8 shrink-0 items-center justify-center rounded-full', selected ? 'bg-gray-200' : 'bg-gray-50')}>
-                    <Icon className={cn('h-4 w-4', selected ? 'text-gray-900' : 'text-gray-500')} />
+                  <div className={cn('flex size-8 shrink-0 items-center justify-center rounded-full', selected ? 'bg-slate-200' : 'bg-slate-50')}>
+                    <Icon className={cn('h-4 w-4', selected ? 'text-slate-900' : 'text-slate-500')} />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-gray-900">{engine.name}</div>
-                    <div className="text-xs text-gray-500">{t(engine.detail)} · {engine.size}</div>
+                    <div className="text-sm font-medium text-slate-900">{engine.name}</div>
+                    <div className="text-xs text-slate-500">{t(engine.detail)} · {engine.size}</div>
                   </div>
-                  <div className={cn('flex size-5 shrink-0 items-center justify-center rounded-full', selected ? 'bg-gray-900' : 'bg-gray-100')}>
+                  <div className={cn('flex size-5 shrink-0 items-center justify-center rounded-full', selected ? 'bg-indigo-600' : 'bg-slate-100')}>
                     {selected && <Check className="h-3 w-3 text-white" />}
                   </div>
                 </label>
               );
             })}
           </div>
-          <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadDiarization} onChange={(event) => setDownloadDiarization(event.target.checked)} /><span>{t('Speaker diarization models')}<span className="block text-gray-500">{t('Optional; identify speakers after a recording')}</span></span></label>
-          {downloadDiarization && <label className="block pl-6 text-sm text-gray-700">{t('Diarization engine')}
-            <select value={diarizationEngine} onChange={(event) => setDiarizationEngine(event.target.value as typeof diarizationEngine)} className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2">
+          <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadDiarization} onChange={(event) => setDownloadDiarization(event.target.checked)} /><span>{t('Speaker diarization models')}<span className="block text-slate-500">{t('Optional; identify speakers after a recording')}</span></span></label>
+          {downloadDiarization && <label className="block pl-6 text-sm text-slate-700">{t('Diarization engine')}
+            <select value={diarizationEngine} onChange={(event) => setDiarizationEngine(event.target.value as typeof diarizationEngine)} className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2">
               {Object.entries(DIARIZATION_MODELS).map(([id, model]) => (
                 <option key={id} value={id}>{model.name} · {model.size}</option>
               ))}
             </select>
           </label>}
-          <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadSummary} onChange={(event) => setDownloadSummary(event.target.checked)} /><span>{t('Local summarization model')}<span className="block text-gray-500">{t('Optional; you can set up a model or external provider later')}</span></span></label>
-          {downloadSummary && <label className="block pl-6 text-sm text-gray-700">{t('Summarization model')}
-            <select value={selectedSummaryModel} onChange={(event) => selectSummaryModel(event.target.value)} className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2">
+          <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadSummary} onChange={(event) => setDownloadSummary(event.target.checked)} /><span>{t('Local summarization model')}<span className="block text-slate-500">{t('Optional; you can set up a model or external provider later')}</span></span></label>
+          {downloadSummary && <label className="block pl-6 text-sm text-slate-700">{t('Summarization model')}
+            <select value={selectedSummaryModel} onChange={(event) => selectSummaryModel(event.target.value)} className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2">
               {SUMMARY_MODELS.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.name} ({t(model.tier)}) · {getSummaryModelSizeLabel(model.id)}{model.id === recommendedSummaryModel ? ` · ${t('Recommended')}` : ''}
@@ -100,7 +100,7 @@ export function SetupOverviewStep() {
             </select>
           </label>}
         </fieldset>
-        <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>{t('Back')}</Button><Button onClick={goNext} className="h-11 flex-1 bg-gray-900 text-white hover:bg-gray-800">{t('Continue')}</Button></div>
+        <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>{t('Back')}</Button><Button onClick={goNext} className="h-11 flex-1 bg-indigo-600 text-white hover:bg-indigo-700">{t('Continue')}</Button></div>
       </div>
     </OnboardingContainer>
   );

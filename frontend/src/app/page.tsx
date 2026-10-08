@@ -33,7 +33,7 @@ export default function Home() {
   const isProcessingStop = status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-slate-50">
       {/* All Modals supported*/}
       <SettingsModals
         modals={modals}

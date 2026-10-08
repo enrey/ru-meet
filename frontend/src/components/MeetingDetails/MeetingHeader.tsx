@@ -57,7 +57,7 @@ function SummaryChip({ state, t }: { state: MeetingSummaryState; t: TranslateFn 
     case 'error':
       return <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">{t('Error')}</span>;
     default:
-      return <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">{t('Transcript')}</span>;
+      return <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{t('Transcript')}</span>;
   }
 }
 
@@ -145,12 +145,12 @@ export function MeetingHeader({
   ].filter((fact): fact is string => Boolean(fact));
 
   return (
-    <header className="@container shrink-0 border-b border-gray-200 bg-white px-8 pt-2">
+    <header className="@container shrink-0 border-b border-slate-200 bg-white px-8 pt-2">
       <button
         type="button"
         onClick={() => router.push('/meetings')}
         title={`${t('Back to meetings')} (Alt+←)`}
-        className="-ml-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900"
+        className="-ml-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
       >
         <ArrowLeft className="h-3.5 w-3.5" />
         {t('Meetings')}
@@ -177,27 +177,27 @@ export function MeetingHeader({
                   setEditing(false);
                 }
               }}
-              className="-ml-1.5 w-full rounded-md border border-blue-300 bg-white px-1.5 py-0.5 text-xl font-semibold text-gray-900 outline-none ring-2 ring-blue-100"
+              className="-ml-1.5 w-full rounded-md border border-indigo-300 bg-white px-1.5 py-0.5 text-xl font-semibold text-slate-900 outline-none ring-2 ring-indigo-100"
             />
           ) : (
             <button
               type="button"
               onClick={() => setEditing(true)}
               title={t('Rename meeting')}
-              className="group -ml-1.5 flex max-w-full items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-gray-50"
+              className="group -ml-1.5 flex max-w-full items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-slate-50"
             >
-              <h1 className="line-clamp-2 break-words text-xl font-semibold text-gray-900" title={title}>{title}</h1>
-              <Pencil className="h-4 w-4 shrink-0 text-gray-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+              <h1 className="line-clamp-2 break-words text-xl font-semibold text-slate-900" title={title}>{title}</h1>
+              <Pencil className="h-4 w-4 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
             </button>
           )}
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-500">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
             {facts.map((fact, index) => (
               <span key={fact} className="inline-flex items-center gap-2 tabular-nums">
-                {index > 0 && <span aria-hidden className="text-gray-300">·</span>}
+                {index > 0 && <span aria-hidden className="text-slate-300">·</span>}
                 {fact}
               </span>
             ))}
-            {facts.length > 0 && <span aria-hidden className="text-gray-300">·</span>}
+            {facts.length > 0 && <span aria-hidden className="text-slate-300">·</span>}
             <SummaryChip state={summaryState} t={t} />
           </div>
         </div>
@@ -218,7 +218,7 @@ export function MeetingHeader({
               aria-controls={`meeting-panel-${value}`}
               onClick={() => onTabChange(value)}
               className={`-mb-px border-b-2 pb-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:text-indigo-700 ${
-                selected ? 'border-indigo-500 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-800'
+                selected ? 'border-indigo-500 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
               {t(label)}

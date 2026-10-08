@@ -146,18 +146,18 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
   };
 
   if (loading) {
-    return <div className="h-24 rounded-lg bg-gray-100 animate-pulse" />;
+    return <div className="h-24 rounded-lg bg-slate-100 animate-pulse" />;
   }
 
   return (
     <div
-      className={`rounded-lg border-2 p-4 ${selectedModel === MODEL && available ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}
+      className={`rounded-lg border-2 p-4 ${selectedModel === MODEL && available ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 bg-white'}`}
       onClick={() => { if (available) void select(); }}
     >
       <div className="flex items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-gray-900">🇷🇺 GigaAM v3</span>
+            <span className="font-semibold text-slate-900">🇷🇺 GigaAM v3</span>
             {/* Always rendered, never conditionally hidden - so "it's blank"
                 is never confusable with "the component didn't mount" or "the
                 request hasn't come back yet". Defaults to a neutral "Unknown"
@@ -168,8 +168,8 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
                 isAccelerated
                   ? 'bg-purple-100 text-purple-700'
                   : providerStatus?.label
-                  ? 'bg-gray-100 text-gray-600'
-                  : 'bg-gray-100 text-gray-400'
+                  ? 'bg-slate-100 text-slate-600'
+                  : 'bg-slate-100 text-slate-400'
               }`}
               title={
                 !providerStatus?.label
@@ -214,7 +214,7 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
               </Button>
             )}
           </div>
-          <p className="mt-1 text-sm text-gray-600">{t('Fast and accurate Russian speech recognition')} · 186 {t('MB')}</p>
+          <p className="mt-1 text-sm text-slate-600">{t('Fast and accurate Russian speech recognition')} · 186 {t('MB')}</p>
         </div>
         {available ? (
           <div className="flex items-center gap-2">
@@ -224,7 +224,7 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
             </Button>
           </div>
         ) : progress !== null ? (
-          <div className="flex min-w-20 items-center gap-2 text-sm text-blue-600">
+          <div className="flex min-w-20 items-center gap-2 text-sm text-indigo-600">
             <Loader2 className="h-4 w-4 animate-spin" /> {progress}%
           </div>
         ) : (
@@ -234,8 +234,8 @@ export function GigaAMModelManager({ selectedModel, onModelSelect, autoSave = fa
         )}
       </div>
       {progress !== null && (
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-200">
-          <div className="h-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+          <div className="h-full bg-indigo-600 transition-all" style={{ width: `${progress}%` }} />
         </div>
       )}
     </div>

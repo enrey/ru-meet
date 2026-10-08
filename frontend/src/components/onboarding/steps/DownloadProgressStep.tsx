@@ -161,9 +161,9 @@ export function DownloadProgressStep() {
   };
 
   const card = (title: string, detail: string, state: Download, retry: () => void) => (
-    <div className="rounded-xl border border-gray-200 bg-white p-5">
-      <div className="flex items-center justify-between gap-3"><div><h3 className="font-medium text-gray-900">{title}</h3><p className="text-sm text-gray-500">{detail}</p></div><span className="text-sm text-gray-600">{t(DOWNLOAD_STATUS_LABELS[state.status])}</span></div>
-      {(state.status === 'downloading' || state.status === 'completed') && <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-200"><div className="h-full bg-gray-900" style={{ width: `${state.progress}%` }} /></div>}
+    <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <div className="flex items-center justify-between gap-3"><div><h3 className="font-medium text-slate-900">{title}</h3><p className="text-sm text-slate-500">{detail}</p></div><span className="text-sm text-slate-600">{t(DOWNLOAD_STATUS_LABELS[state.status])}</span></div>
+      {(state.status === 'downloading' || state.status === 'completed') && <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full bg-indigo-600" style={{ width: `${state.progress}%` }} /></div>}
       {state.status === 'error' && <div className="mt-3 text-sm text-red-600"><p>{state.error}</p><Button className="mt-2" variant="outline" onClick={retry}>{t('Try again')}</Button></div>}
     </div>
   );
@@ -174,8 +174,8 @@ export function DownloadProgressStep() {
         {downloadTranscription && card(label, transcriptionProvider === 'gigaam' ? '~186 MB' : '~670 MB', transcription, () => { void retryTranscription(); })}
         {downloadSummary && card(t('Local summarization model'), getSummaryModelSizeLabel(selectedSummaryModel || recommendedSummaryModel), summary, () => { void retrySummary(); })}
         {downloadDiarization && card(t('Speaker diarization'), `${getDiarizationModelInfo(diarizationEngine).name} · ${getDiarizationModelInfo(diarizationEngine).size}`, diarization, () => { void retryDiarization(); })}
-        {!downloadTranscription && !downloadSummary && !downloadDiarization && <p className="rounded-lg bg-gray-100 p-4 text-sm text-gray-700">{t('No models selected for download. Recording will need a transcription model later.')}</p>}
-        <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>{t('Back')}</Button><Button className="flex-1 bg-gray-900 text-white hover:bg-gray-800" disabled={isCompleting} onClick={() => { void continueSetup(); }}>{isCompleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t('Continue')}</Button></div>
+        {!downloadTranscription && !downloadSummary && !downloadDiarization && <p className="rounded-lg bg-slate-100 p-4 text-sm text-slate-700">{t('No models selected for download. Recording will need a transcription model later.')}</p>}
+        <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>{t('Back')}</Button><Button className="flex-1 bg-indigo-600 text-white hover:bg-indigo-700" disabled={isCompleting} onClick={() => { void continueSetup(); }}>{isCompleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t('Continue')}</Button></div>
       </div>
     </OnboardingContainer>
   );

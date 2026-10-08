@@ -261,7 +261,7 @@ function MeetingDetailsContent() {
           <p className="text-red-500 mb-4">{t(error)}</p>
           <button
             onClick={() => router.push('/meetings')}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+            className="px-4 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600"
           >
             {t('Go Back')}
           </button>

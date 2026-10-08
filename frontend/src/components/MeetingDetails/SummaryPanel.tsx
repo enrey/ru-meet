@@ -61,10 +61,10 @@ export function SummaryPanel({
       {isSummaryLoading ? (
         <div className="flex items-center justify-center flex-1">
           <div className="text-center">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
-            <p className="text-gray-600">{t('Generating AI Summary...')}</p>
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500 mb-4"></div>
+            <p className="text-slate-600">{t('Generating AI Summary...')}</p>
             {summaryProgress ? (
-              <p className="text-sm text-gray-500 mt-2 tabular-nums">
+              <p className="text-sm text-slate-500 mt-2 tabular-nums">
                 {t('{count} tokens generated', { count: summaryProgress.generatedTokens.toLocaleString(getIntlLocale(locale)) })}
                 {' · '}
                 {t('{rate} tok/s', { rate: summaryProgress.tokensPerSec.toFixed(1) })}
@@ -72,7 +72,7 @@ export function SummaryPanel({
                 {t('prompt {count}', { count: summaryProgress.promptTokens.toLocaleString(getIntlLocale(locale)) })}
               </p>
             ) : (
-              <p className="text-sm text-gray-500 mt-2">{t('Reading the transcript…')}</p>
+              <p className="text-sm text-slate-500 mt-2">{t('Reading the transcript…')}</p>
             )}
           </div>
         </div>
@@ -107,7 +107,7 @@ export function SummaryPanel({
           {summaryStatus !== 'idle' && (
             <div className={`mt-4 p-4 rounded-lg ${summaryStatus === 'error' ? 'bg-red-100 text-red-700' :
               summaryStatus === 'completed' ? 'bg-green-100 text-green-700' :
-                'bg-blue-100 text-blue-700'
+                'bg-indigo-100 text-indigo-700'
               }`}>
               <p className="text-sm font-medium">{getSummaryStatusMessage(summaryStatus)}</p>
             </div>

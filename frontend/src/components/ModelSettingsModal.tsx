@@ -1219,7 +1219,7 @@ export function ModelSettingsModal({
                       variant="default"
                       size="sm"
                       onClick={() => invoke('open_external_url', { url: 'https://ollama.com/download' })}
-                      className="w-full bg-blue-600 hover:bg-blue-700"
+                      className="w-full bg-indigo-600 hover:bg-indigo-700"
                     >
                       <ExternalLink className="mr-2 h-4 w-4" />
                       {t('Download Ollama')}
@@ -1264,14 +1264,14 @@ export function ModelSettingsModal({
                         {isDownloading('gemma3:1b') && getProgress('gemma3:1b') !== undefined && (
                           <div className="bg-white rounded-md border p-3">
                             <div className="flex items-center justify-between mb-2">
-                              <span className="text-sm font-medium text-blue-600">{t('Downloading {model}', { model: 'gemma3:1b' })}</span>
-                              <span className="text-sm font-semibold text-blue-600">
+                              <span className="text-sm font-medium text-indigo-600">{t('Downloading {model}', { model: 'gemma3:1b' })}</span>
+                              <span className="text-sm font-semibold text-indigo-600">
                                 {Math.round(getProgress('gemma3:1b')!)}%
                               </span>
                             </div>
-                            <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                            <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
                               <div
-                                className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-300"
+                                className="h-full bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-full transition-all duration-300"
                                 style={{ width: `${getProgress('gemma3:1b')}%` }}
                               />
                             </div>
@@ -1302,7 +1302,7 @@ export function ModelSettingsModal({
                           className={cn(
                             'bg-card p-2 m-0 rounded-md border transition-colors',
                             modelConfig.model === model.name
-                              ? 'ring-1 ring-blue-500 border-blue-500 background-blue-100'
+                              ? 'ring-1 ring-indigo-500 border-indigo-500 bg-indigo-50'
                               : 'hover:bg-muted/50',
                             !modelIsDownloading && 'cursor-pointer'
                           )}
@@ -1320,14 +1320,14 @@ export function ModelSettingsModal({
 
                           {/* Progress bar for downloading models */}
                           {modelIsDownloading && progress !== undefined && (
-                            <div className="mt-3 pt-3 border-t border-gray-200">
+                            <div className="mt-3 pt-3 border-t border-slate-200">
                               <div className="flex items-center justify-between mb-2">
-                                <span className="text-sm font-medium text-blue-600">{t('Downloading...')}</span>
-                                <span className="text-sm font-semibold text-blue-600">{Math.round(progress)}%</span>
+                                <span className="text-sm font-medium text-indigo-600">{t('Downloading...')}</span>
+                                <span className="text-sm font-semibold text-indigo-600">{Math.round(progress)}%</span>
                               </div>
-                              <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                              <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
                                 <div
-                                  className="h-full bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-300"
+                                  className="h-full bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-full transition-all duration-300"
                                   style={{ width: `${progress}%` }}
                                 />
                               </div>
@@ -1360,8 +1360,8 @@ export function ModelSettingsModal({
       <div className="mt-6 flex justify-end">
         <Button
           className={cn(
-            'px-4 text-sm font-medium text-white rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500',
-            isDoneDisabled ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
+            'px-4 text-sm font-medium text-white rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500',
+            isDoneDisabled ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
           )}
           onClick={handleSave}
           disabled={isDoneDisabled}

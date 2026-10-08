@@ -86,27 +86,27 @@ export function RecordingActivityBar() {
     <div className="shrink-0 px-8 pt-3 pb-1">
       <div className={`flex min-h-10 flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl border px-4 py-1 ${
         recording ? (state.isPaused ? 'border-amber-100 bg-amber-50 text-amber-700' : 'border-red-100 bg-red-50 text-red-600')
-        : busy ? 'border-blue-100 bg-blue-50 text-blue-700'
+        : busy ? 'border-indigo-100 bg-indigo-50 text-indigo-700'
         : noSources ? 'border-red-100 bg-red-50 text-red-600'
-        : enabled ? 'border-blue-100 bg-blue-50/70 text-blue-700' : 'border-gray-200 bg-gray-50 text-gray-600'
+        : enabled ? 'border-indigo-100 bg-indigo-50/70 text-indigo-700' : 'border-slate-200 bg-slate-50 text-slate-600'
       }`}>
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
           {busy ? <Loader2 aria-hidden className="h-4 w-4 motion-safe:animate-spin" />
             : recording ? <span aria-hidden className={`h-3 w-3 shrink-0 rounded-full ${state.isPaused ? 'bg-amber-500' : 'bg-red-500 motion-safe:animate-pulse'}`} />
-            : <svg aria-hidden viewBox="0 0 32 32" className={`h-7 w-7 shrink-0 ${noSources ? 'text-red-500' : listening ? 'text-blue-600' : 'text-gray-400'}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            : <svg aria-hidden viewBox="0 0 32 32" className={`h-7 w-7 shrink-0 ${noSources ? 'text-red-500' : listening ? 'text-indigo-600' : 'text-slate-400'}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
                 <circle cx="16" cy="16" r="2.5" fill="currentColor" stroke="none" />
                 <g className={listening ? 'auto-record-echo auto-record-echo-inner' : ''}><path d="M10 11a7 7 0 0 0 0 10M22 11a7 7 0 0 1 0 10" /></g>
                 <g className={listening ? 'auto-record-echo auto-record-echo-outer' : ''}><path d="M6 7a13 13 0 0 0 0 18M26 7a13 13 0 0 1 0 18" /></g>
               </svg>}
           <span className="font-semibold" role="status">{label}</span>
-          {recording && <><span aria-hidden className="text-gray-400">·</span><span className="tabular-nums text-gray-600">{duration}</span></>}
+          {recording && <><span aria-hidden className="text-slate-400">·</span><span className="tabular-nums text-slate-600">{duration}</span></>}
           {modelLoading && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-gray-500" role="status">
+            <span className="inline-flex items-center gap-1.5 text-xs text-slate-500" role="status">
               <Loader2 aria-hidden className="h-3 w-3 motion-safe:animate-spin" />
               {t('Loading speech recognition model… audio is already being recorded')}
             </span>
           )}
-          {!recording && !busy && <span className="text-xs text-gray-500">{autoDescription}</span>}
+          {!recording && !busy && <span className="text-xs text-slate-500">{autoDescription}</span>}
         </div>
         {recording ? <div className="flex shrink-0 items-center gap-2">
           <Button variant="ghost" size="sm" onClick={togglePause} disabled={actionPending} aria-label={state.isPaused ? t('Resume recording') : t('Pause recording')} title={state.isPaused ? t('Resume recording') : t('Pause recording')}>
@@ -118,7 +118,7 @@ export function RecordingActivityBar() {
         </div> : !busy && <label className="flex min-h-9 shrink-0 cursor-pointer items-center gap-3 text-sm">
           <span>{preferences ? (enabled ? t('On') : t('Off')) : '—'}</span>
           {saving && <Loader2 aria-hidden className="h-3 w-3 motion-safe:animate-spin" />}
-          <Switch checked={!!enabled} disabled={!preferences?.autoRecordSupported || saving} onCheckedChange={setEnabled} aria-label={t('Automatic recording')} className="data-[state=checked]:bg-blue-600" />
+          <Switch checked={!!enabled} disabled={!preferences?.autoRecordSupported || saving} onCheckedChange={setEnabled} aria-label={t('Automatic recording')} className="data-[state=checked]:bg-indigo-600" />
         </label>}
       </div>
     </div>

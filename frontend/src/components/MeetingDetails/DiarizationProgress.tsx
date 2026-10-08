@@ -77,7 +77,7 @@ export function DiarizationProgress({ meetingId, onLabelsSaved, onStatusChange }
 
   return (
     <div
-      className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-medium ${failed ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700'}`}
+      className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-medium ${failed ? 'bg-red-50 text-red-700' : 'bg-indigo-50 text-indigo-700'}`}
       title={t(status.message)}
       role="status"
       aria-live="polite"

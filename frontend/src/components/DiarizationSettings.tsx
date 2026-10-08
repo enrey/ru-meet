@@ -100,11 +100,11 @@ export function DiarizationSettings() {
   };
 
   return (
-    <section className="mt-6 w-full rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
+    <section className="mt-6 w-full rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
       <div className="flex items-start justify-between gap-6">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">{t('Speaker diarization')}</h2>
-          <p className="mt-1 text-sm text-gray-600">
+          <h2 className="text-lg font-semibold text-slate-900">{t('Speaker diarization')}</h2>
+          <p className="mt-1 text-sm text-slate-600">
             {t('Identify and label speakers after a recording has been saved.')}
           </p>
         </div>
@@ -115,10 +115,10 @@ export function DiarizationSettings() {
         />
       </div>
 
-      <div className="mt-6 flex items-start justify-between gap-6 border-t border-gray-100 pt-6">
+      <div className="mt-6 flex items-start justify-between gap-6 border-t border-slate-100 pt-6">
         <div>
-          <h3 className="text-sm font-medium text-gray-900">{t('Merge barely-heard speakers')}</h3>
-          <p className="mt-1 text-sm text-gray-500">
+          <h3 className="text-sm font-medium text-slate-900">{t('Merge barely-heard speakers')}</h3>
+          <p className="mt-1 text-sm text-slate-500">
             {t('Speakers with under 1% of the talking — and less than 30 seconds of it — are labelled “Others” instead of getting their own entry. Re-run diarization with this off to get them back.')}
           </p>
         </div>
@@ -129,17 +129,17 @@ export function DiarizationSettings() {
         />
       </div>
 
-      <div className="mt-6 border-t border-gray-100 pt-6">
+      <div className="mt-6 border-t border-slate-100 pt-6">
         <div className="mb-4">
-          <h3 className="text-sm font-medium text-gray-900">{t('Diarization model')}</h3>
-          <p className="mt-1 text-sm text-gray-500">{t('Choose which local model identifies speakers after recording.')}</p>
+          <h3 className="text-sm font-medium text-slate-900">{t('Diarization model')}</h3>
+          <p className="mt-1 text-sm text-slate-500">{t('Choose which local model identifies speakers after recording.')}</p>
         </div>
 
         {isLoading ? (
           <div className="grid gap-2">
-            <div className="h-16 animate-pulse rounded-lg bg-gray-100" />
-            <div className="h-16 animate-pulse rounded-lg bg-gray-100" />
-            <div className="h-16 animate-pulse rounded-lg bg-gray-100" />
+            <div className="h-16 animate-pulse rounded-lg bg-slate-100" />
+            <div className="h-16 animate-pulse rounded-lg bg-slate-100" />
+            <div className="h-16 animate-pulse rounded-lg bg-slate-100" />
           </div>
         ) : (
           <div className="grid gap-2">
@@ -161,23 +161,23 @@ export function DiarizationSettings() {
                       save({ ...settings, engine: id });
                     }
                   }}
-                  className={`group cursor-pointer rounded-lg border px-3 py-2.5 text-left transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                  className={`group cursor-pointer rounded-lg border px-3 py-2.5 text-left transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
                     selected
-                      ? 'border-blue-500 bg-blue-50'
-                      : 'border-gray-200 bg-white hover:border-gray-300'
+                      ? 'border-indigo-500 bg-indigo-50'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
                   }`}
                   aria-pressed={selected}
                 >
                   <div className="flex items-center gap-3">
-                    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${selected ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${selected ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
                       <Icon className="h-4 w-4" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-baseline gap-x-2">
-                        <span className="text-sm font-semibold text-gray-900">{model.name}</span>
-                        <span className="text-xs font-medium text-gray-500">{model.size}</span>
+                        <span className="text-sm font-semibold text-slate-900">{model.name}</span>
+                        <span className="text-xs font-medium text-slate-500">{model.size}</span>
                       </div>
-                      <p className="truncate text-xs leading-4 text-gray-600" title={t(model.description)}>
+                      <p className="truncate text-xs leading-4 text-slate-600" title={t(model.description)}>
                         {t(model.description)}
                       </p>
                     </div>
@@ -186,7 +186,7 @@ export function DiarizationSettings() {
                         <CheckCircle2 className="h-3.5 w-3.5" /> {t('Ready')}
                       </span>
                     ) : downloading ? (
-                      <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-blue-600">
+                      <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-indigo-600">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" /> {downloadProgress}%
                       </span>
                     ) : (
@@ -205,8 +205,8 @@ export function DiarizationSettings() {
                   </div>
 
                   {downloading && (
-                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-blue-100">
-                      <div className="h-full bg-blue-600 transition-all" style={{ width: `${downloadProgress}%` }} />
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-indigo-100">
+                      <div className="h-full bg-indigo-600 transition-all" style={{ width: `${downloadProgress}%` }} />
                     </div>
                   )}
                 </div>

@@ -115,14 +115,14 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="h-full min-h-0 bg-gray-50 flex flex-col overflow-hidden">
+    <div className="h-full min-h-0 bg-slate-50 flex flex-col overflow-hidden">
       {/* Fixed Header */}
-      <div className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+      <div className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200">
         <div className="max-w-6xl mx-auto px-8 py-6">
           <div className="flex items-center gap-4">
             <button
               onClick={() => router.back()}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors"
+              className="flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
               <span>{t('Back')}</span>
@@ -132,9 +132,9 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <nav aria-label={t('Settings sections')} className="shrink-0 bg-gray-50 px-4 sm:px-8">
+      <nav aria-label={t('Settings sections')} className="shrink-0 bg-slate-50 px-4 sm:px-8">
         <div className="max-w-6xl mx-auto overflow-x-auto">
-            <div className="flex relative w-max min-w-full border-b border-gray-200">
+            <div className="flex relative w-max min-w-full border-b border-slate-200">
               {TABS.map((tab, index) => {
                 const Icon = tab.icon;
                 return (
@@ -147,7 +147,7 @@ export default function SettingsPage() {
                       scrollToSection(index);
                     }}
                     ref={el => { tabRefs.current[index] = el }}
-                    className={`flex items-center gap-2 px-4 sm:px-6 py-4 whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600 relative z-10 ${activeTab === tab.value ? 'text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
+                    className={`flex items-center gap-2 px-4 sm:px-6 py-4 whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-600 relative z-10 ${activeTab === tab.value ? 'text-indigo-600 font-medium' : 'text-slate-600 hover:text-slate-900'}`}
                   >
                     <Icon className="w-4 h-4" aria-hidden="true" />
                     {t(tab.label)}
@@ -156,7 +156,7 @@ export default function SettingsPage() {
               })}
 
               <motion.div
-                className="absolute bottom-0 z-20 h-0.5 bg-blue-600"
+                className="absolute bottom-0 z-20 h-0.5 bg-indigo-600"
                 aria-hidden="true"
                 animate={{ left: underlineStyle.left, width: underlineStyle.width }}
                 transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 400, damping: 40 }}
@@ -174,9 +174,9 @@ export default function SettingsPage() {
               id={`settings-${tab.value}`}
               aria-labelledby={`settings-heading-${tab.value}`}
               ref={element => { sectionRefs.current[index] = element; }}
-              className="py-8 first:pt-0 border-b border-gray-200 last:border-b-0"
+              className="py-8 first:pt-0 border-b border-slate-200 last:border-b-0"
             >
-              <h2 id={`settings-heading-${tab.value}`} className="text-xl font-semibold text-gray-900 mb-6">
+              <h2 id={`settings-heading-${tab.value}`} className="text-xl font-semibold text-slate-900 mb-6">
                 {t(tab.label)}
               </h2>
               {tab.value === 'general' && <PreferenceSettings />}

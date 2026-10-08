@@ -39,11 +39,11 @@ export function EmptyStateSummary({
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="flex flex-col items-center justify-start h-full overflow-y-auto px-8 pb-8 pt-12 text-center"
     >
-      <FileQuestion className="w-16 h-16 text-gray-300 mb-4" />
-      <h3 className="text-lg font-semibold text-gray-900 mb-2">
+      <FileQuestion className="w-16 h-16 text-slate-300 mb-4" />
+      <h3 className="text-lg font-semibold text-slate-900 mb-2">
         {t('No Summary Generated Yet')}
       </h3>
-      <p className="text-sm text-gray-500 mb-6 max-w-md">
+      <p className="text-sm text-slate-500 mb-6 max-w-md">
         {t('Generate an AI-powered summary of your meeting transcript to get key points, action items, and decisions.')}
       </p>
 
@@ -55,7 +55,7 @@ export function EmptyStateSummary({
 
       <textarea
         placeholder={t('Add summary context — people involved, meeting overview, objectives…')}
-        className="mb-4 min-h-[96px] w-full max-w-md resize-y rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-left shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        className="mb-4 min-h-[96px] w-full max-w-md resize-y rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-left shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         value={customPrompt}
         onChange={(event) => onPromptChange(event.target.value)}
       />
@@ -90,11 +90,11 @@ export function EmptyStateSummary({
       )}
 
       {/* Same switch as Settings › Summary: summaries right after each recording. */}
-      <label className="mt-6 flex w-full max-w-md cursor-pointer items-start gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-left">
+      <label className="mt-6 flex w-full max-w-md cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-left">
         <Switch checked={isAutoSummary} onCheckedChange={toggleIsAutoSummary} className="mt-0.5" />
         <span className="text-sm">
-          <span className="block font-medium text-gray-800">{t('Automatic summary')}</span>
-          <span className="block text-gray-500">
+          <span className="block font-medium text-slate-800">{t('Automatic summary')}</span>
+          <span className="block text-slate-500">
             {isAutoSummary
               ? t('A summary is created automatically after each recording.')
               : t('Turn on to get a summary automatically after each recording.')}

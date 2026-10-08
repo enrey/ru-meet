@@ -180,14 +180,14 @@ export function PreferenceSettings() {
   return (
     <div className="space-y-6">
       {/* Interface Language Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+      <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
         <div className="flex items-center justify-between gap-6">
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <Languages size={18} className="text-gray-500" aria-hidden="true" />
-              <h3 id="ui-language-label" className="text-lg font-semibold text-gray-900">{t('Interface language')}</h3>
+              <Languages size={18} className="text-slate-500" aria-hidden="true" />
+              <h3 id="ui-language-label" className="text-lg font-semibold text-slate-900">{t('Interface language')}</h3>
             </div>
-            <p className="text-sm text-gray-600">{t('Language of menus, buttons and messages in the app')}</p>
+            <p className="text-sm text-slate-600">{t('Language of menus, buttons and messages in the app')}</p>
           </div>
           <Select value={locale} onValueChange={value => setLocale(value as Locale)}>
             <SelectTrigger aria-labelledby="ui-language-label" className="w-44 shrink-0">
@@ -203,25 +203,25 @@ export function PreferenceSettings() {
       </div>
 
       {/* Notifications Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+      <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 id="notifications-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Notifications')}</h3>
-            <p className="text-sm text-gray-600">{t('Enable or disable notifications of start and end of meeting')}</p>
+            <h3 id="notifications-label" className="text-lg font-semibold text-slate-900 mb-2">{t('Notifications')}</h3>
+            <p className="text-sm text-slate-600">{t('Enable or disable notifications of start and end of meeting')}</p>
           </div>
           <Switch aria-labelledby="notifications-label" checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm space-y-6">
+      <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm space-y-6">
         <div className="flex items-center justify-between gap-6">
           <div>
-            <h3 id="auto-record-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Record meetings automatically')}</h3>
-            <p id="auto-record-description" className="text-sm text-gray-600">
+            <h3 id="auto-record-label" className="text-lg font-semibold text-slate-900 mb-2">{t('Record meetings automatically')}</h3>
+            <p id="auto-record-description" className="text-sm text-slate-600">
               {t('Start recording automatically after speech is confirmed on the selected microphone or in audio from an app other than the exclusions. Non-speech sounds do not trigger recording. Meetings shorter than 1 minute are ignored.')}
             </p>
             {automation && !automation.autoRecordSupported && (
-              <p className="mt-2 text-sm text-gray-600">{t('Meeting detection is currently available only on Windows.')}</p>
+              <p className="mt-2 text-sm text-slate-600">{t('Meeting detection is currently available only on Windows.')}</p>
             )}
           </div>
           <Switch
@@ -234,8 +234,8 @@ export function PreferenceSettings() {
           />
         </div>
         <div className="space-y-3">
-          <label htmlFor="auto-record-exclusion" className="block text-sm font-medium text-gray-900">{t('Excluded apps')}</label>
-          <p id="auto-record-exclusion-help" className="text-sm text-gray-600">
+          <label htmlFor="auto-record-exclusion" className="block text-sm font-medium text-slate-900">{t('Excluded apps')}</label>
+          <p id="auto-record-exclusion-help" className="text-sm text-slate-600">
             {t('Audio from these apps never starts a recording. Enter the .exe name, for example Spotify.exe. Ru-Meet audio is always excluded. Exclusions do not remove audio from a recording already in progress.')}
           </p>
           <form className="flex gap-2" onSubmit={event => {
@@ -249,25 +249,25 @@ export function PreferenceSettings() {
               onChange={event => setExcludedAppInput(event.target.value)}
               placeholder="Spotify.exe"
               disabled={!automation?.autoRecordSupported || savingAutomation}
-              className="min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 disabled:opacity-50"
+              className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 disabled:opacity-50"
             />
-            <button type="submit" disabled={!automation?.autoRecordSupported || savingAutomation || !excludedAppInput.trim()} className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-blue-600">{t('Add')}</button>
+            <button type="submit" disabled={!automation?.autoRecordSupported || savingAutomation || !excludedAppInput.trim()} className="rounded-md border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-600">{t('Add')}</button>
           </form>
           {!!automation?.excludedApps.length && (
             <ul className="space-y-2">
               {automation.excludedApps.map(name => (
-                <li key={name} className="flex items-center justify-between gap-3 rounded-md bg-gray-50 px-3 py-2">
+                <li key={name} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
                   <span className="text-sm break-all">{name}</span>
-                  <button type="button" aria-label={t('Remove {name} from exclusions', { name })} disabled={savingAutomation} onClick={() => void saveExcludedApps(automation.excludedApps.filter(app => app !== name))} className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-blue-600">{t('Remove')}</button>
+                  <button type="button" aria-label={t('Remove {name} from exclusions', { name })} disabled={savingAutomation} onClick={() => void saveExcludedApps(automation.excludedApps.filter(app => app !== name))} className="text-sm text-slate-600 hover:text-slate-900 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-600">{t('Remove')}</button>
                 </li>
               ))}
             </ul>
           )}
         </div>
-        <div className="flex items-center justify-between gap-6 border-t border-gray-200 pt-6">
+        <div className="flex items-center justify-between gap-6 border-t border-slate-200 pt-6">
           <div>
-            <h3 id="launch-at-login-label" className="text-lg font-semibold text-gray-900 mb-2">{t('Launch at startup')}</h3>
-            <p className="text-sm text-gray-600">{t('Start Ru-Meet automatically when you sign in.')}</p>
+            <h3 id="launch-at-login-label" className="text-lg font-semibold text-slate-900 mb-2">{t('Launch at startup')}</h3>
+            <p className="text-sm text-slate-600">{t('Start Ru-Meet automatically when you sign in.')}</p>
           </div>
           <Switch
             aria-labelledby="launch-at-login-label"
@@ -281,22 +281,22 @@ export function PreferenceSettings() {
       </div>
 
       {/* Data Storage Locations Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('Data Storage Locations')}</h3>
-        <p className="text-sm text-gray-600 mb-6">
+      <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">{t('Data Storage Locations')}</h3>
+        <p className="text-sm text-slate-600 mb-6">
           {t('View and access where Ru-Meet stores your data')}
         </p>
 
         <div className="space-y-4">
           {/* Database Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
+          {/* <div className="p-4 border rounded-lg bg-slate-50">
             <div className="font-medium mb-2">Database</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
+            <div className="text-sm text-slate-600 mb-3 break-all font-mono text-xs">
               {storageLocations?.database || 'Loading...'}
             </div>
             <button
               onClick={() => handleOpenFolder('database')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm border border-slate-300 rounded-md hover:bg-slate-100 transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
               Open Folder
@@ -304,14 +304,14 @@ export function PreferenceSettings() {
           </div> */}
 
           {/* Models Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
+          {/* <div className="p-4 border rounded-lg bg-slate-50">
             <div className="font-medium mb-2">Whisper Models</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
+            <div className="text-sm text-slate-600 mb-3 break-all font-mono text-xs">
               {storageLocations?.models || 'Loading...'}
             </div>
             <button
               onClick={() => handleOpenFolder('models')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm border border-slate-300 rounded-md hover:bg-slate-100 transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
               Open Folder
@@ -319,14 +319,14 @@ export function PreferenceSettings() {
           </div> */}
 
           {/* Recordings Location */}
-          <div className="p-4 border rounded-lg bg-gray-50">
+          <div className="p-4 border rounded-lg bg-slate-50">
             <div className="font-medium mb-2">{t('Meeting Recordings')}</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
+            <div className="text-sm text-slate-600 mb-3 break-all font-mono text-xs">
               {storageLocations?.recordings || t('Loading...')}
             </div>
             <button
               onClick={() => handleOpenFolder('recordings')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-2 px-3 py-2 text-sm border border-slate-300 rounded-md hover:bg-slate-100 transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
               {t('Open Folder')}
@@ -334,8 +334,8 @@ export function PreferenceSettings() {
           </div>
         </div>
 
-        <div className="mt-4 p-3 bg-blue-50 rounded-md">
-          <p className="text-xs text-blue-800">
+        <div className="mt-4 p-3 bg-indigo-50 rounded-md">
+          <p className="text-xs text-indigo-800">
             <strong>{t('Note:')}</strong> {t('Database and models are stored together in your application data directory for unified management.')}
           </p>
         </div>
