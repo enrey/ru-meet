@@ -1,9 +1,10 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ProgressIndicator } from './shared/ProgressIndicator';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import type { OnboardingContainerProps } from '@/types/onboarding';
+import { useI18n } from '@/lib/i18n';
 
 export function OnboardingContainer({
   title,
@@ -20,7 +21,17 @@ export function OnboardingContainer({
   canGoNext = true,
   canGoPrevious = true,
 }: OnboardingContainerProps) {
-  const { goToStep, goPrevious, goNext } = useOnboarding();
+  const { goToStep, goPrevious, goNext, isPreview, endPreview } = useOnboarding();
+  const { t } = useI18n();
+
+  React.useEffect(() => {
+    if (!isPreview) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') endPreview();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isPreview, endPreview]);
 
   const handlePrevious = () => {
     if (onPrevious) {
@@ -44,6 +55,17 @@ export function OnboardingContainer({
 
   return (
     <div className="fixed inset-0 bg-gray-50 flex items-center justify-center z-50 overflow-hidden">
+      {isPreview && (
+        <button
+          type="button"
+          onClick={endPreview}
+          aria-label={t('Close preview')}
+          title={t('Close preview')}
+          className="absolute right-4 top-4 z-10 grid h-9 w-9 place-items-center rounded-full text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900"
+        >
+          <X className="h-5 w-5" />
+        </button>
+      )}
       <div className={cn('w-full max-w-2xl h-full max-h-screen flex flex-col px-6 py-6', className)}>
         {/* Progress Indicator with Navigation - Fixed */}
         {step && !hideProgress && (

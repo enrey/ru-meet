@@ -1,3 +1,5 @@
+const themePalette = require('./theme-palette');
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
     darkMode: ['class'],
@@ -8,6 +10,7 @@ module.exports = {
   ],
   theme: {
   	extend: {
+  		...themePalette.themeExtend,
   		fontFamily: {
   			sans: [
   				'var(--font-source-sans-3)'
@@ -89,5 +92,6 @@ module.exports = {
     require("tailwindcss-animate"),
     require("@tailwindcss/typography"),
     require("@tailwindcss/container-queries"),
+    themePalette.plugin,
   ],
 }

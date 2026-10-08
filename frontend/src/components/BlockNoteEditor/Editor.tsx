@@ -7,6 +7,7 @@ import { BlockNoteView } from "@blocknote/shadcn";
 import "@blocknote/shadcn/style.css";
 import "@blocknote/core/fonts/inter.css";
 import { blockNoteDictionary } from "@/lib/i18n/blocknote";
+import { useTheme } from "@/lib/theme";
 
 interface EditorProps {
   initialContent?: Block[];
@@ -21,6 +22,7 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
     editable
   });
 
+  const theme = useTheme();
   const editor = useCreateBlockNote({
     initialContent: initialContent as PartialBlock[] | undefined,
     dictionary: blockNoteDictionary(),
@@ -49,5 +51,5 @@ export default function Editor({ initialContent, onChange, editable = true }: Ed
     };
   }, [editor, onChange]);
 
-  return <BlockNoteView editor={editor} editable={editable} theme="light" />;
+  return <BlockNoteView editor={editor} editable={editable} theme={theme} />;
 }

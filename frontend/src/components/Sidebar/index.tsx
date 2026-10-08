@@ -1,12 +1,10 @@
 'use client';
 
 import React from 'react';
-import { Home, Info as InfoIcon, Library, Loader2, Mic, PanelLeftClose, PanelLeftOpen, Settings, Square, Unplug, Upload } from 'lucide-react';
+import { Home, Library, Loader2, Mic, Moon, PanelLeftClose, PanelLeftOpen, Settings, Square, Sun, Unplug, Upload } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { VisuallyHidden } from '@/components/ui/visually-hidden';
 import { RecordingStatus, useRecordingState } from '@/contexts/RecordingStateContext';
 import { recordingService } from '@/services/recordingService';
 import { toast } from 'sonner';
@@ -14,7 +12,8 @@ import { useImportDialog } from '@/contexts/ImportDialogContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useTranscriptRecoveryDialog } from '@/contexts/TranscriptRecoveryContext';
 import { useI18n } from '@/lib/i18n';
-import { About } from '../About';
+import { useOnboarding } from '@/contexts/OnboardingContext';
+import { setTheme, useTheme } from '@/lib/theme';
 import Logo from '../Logo';
 
 interface NavItemProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -106,6 +105,8 @@ const Sidebar: React.FC = () => {
       stopPending.current = false;
     }
   };
+  const theme = useTheme();
+  const { startPreview: previewOnboarding } = useOnboarding();
   const { openImportDialog } = useImportDialog();
   const { betaFeatures } = useConfig();
   const { recoverableCount, openRecoveryDialog } = useTranscriptRecoveryDialog();
@@ -198,20 +199,16 @@ const Sidebar: React.FC = () => {
           icon={<Settings className="h-5 w-5" />}
           label={t('Settings')}
           active={pathname === '/settings'}
-          onClick={() => router.push('/settings')}
+          // Shift+click replays the first-run flow without touching saved setup.
+          onClick={(event) => (event.shiftKey ? previewOnboarding() : router.push('/settings'))}
         />
 
-        <Dialog aria-describedby={undefined}>
-          <DialogTrigger asChild>
-            <NavItem collapsed={isCollapsed} icon={<InfoIcon className="h-5 w-5" />} label={t('About')} />
-          </DialogTrigger>
-          <DialogContent>
-            <VisuallyHidden>
-              <DialogTitle>{t('About Ru-Meet')}</DialogTitle>
-            </VisuallyHidden>
-            <About />
-          </DialogContent>
-        </Dialog>
+        <NavItem
+          collapsed={isCollapsed}
+          icon={theme === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+          label={theme === 'dark' ? t('Light theme') : t('Dark theme')}
+          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+        />
 
         <NavItem
           collapsed={isCollapsed}

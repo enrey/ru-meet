@@ -52,8 +52,8 @@ impl Default for OnboardingStatus {
             current_step: 1,
             transcription_provider: default_transcription_provider(),
             download_transcription: true,
-            download_summary: false,
-            download_diarization: false,
+            download_summary: true,
+            download_diarization: true,
             diarization_engine: default_diarization_engine(),
             model_status: ModelStatus {
                 parakeet: "not_downloaded".to_string(),

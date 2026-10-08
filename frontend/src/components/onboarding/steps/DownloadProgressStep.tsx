@@ -25,7 +25,7 @@ export function DownloadProgressStep() {
     goNext, goPrevious, transcriptionProvider, downloadTranscription, downloadSummary,
     downloadDiarization, diarizationEngine,
     selectedSummaryModel, recommendedSummaryModel, summaryModelDownloaded,
-    startBackgroundDownloads, completeOnboarding,
+    startBackgroundDownloads, completeOnboarding, isPreview,
   } = useOnboarding();
   const { t } = useI18n();
   const [transcription, setTranscription] = useState<Download>(waiting);
@@ -156,7 +156,7 @@ export function DownloadProgressStep() {
     }
     if (isMac) { goNext(); return; }
     setIsCompleting(true);
-    try { await completeOnboarding(); window.location.reload(); }
+    try { await completeOnboarding(); if (!isPreview) window.location.reload(); }
     catch (error) { toast.error(t('Failed to complete setup'), { description: String(error) }); setIsCompleting(false); }
   };
 

@@ -14,7 +14,7 @@ import { RecordingStateProvider } from '@/contexts/RecordingStateContext'
 import { OllamaDownloadProvider } from '@/contexts/OllamaDownloadContext'
 import { TranscriptProvider } from '@/contexts/TranscriptContext'
 import { ConfigProvider, useConfig } from '@/contexts/ConfigContext'
-import { OnboardingProvider } from '@/contexts/OnboardingContext'
+import { OnboardingProvider, useOnboarding } from '@/contexts/OnboardingContext'
 import { OnboardingFlow } from '@/components/onboarding'
 import { loadBetaFeatures } from '@/types/betaFeatures'
 import { DownloadProgressToastProvider } from '@/components/shared/DownloadProgressToast'
@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { I18nProvider, getLocale, translate as t } from '@/lib/i18n'
+import { THEME_INIT_SCRIPT, useTheme } from '@/lib/theme'
 
 
 
@@ -65,6 +66,12 @@ function ConditionalImportDialog({
   );
 }
 
+/** First-run flow replayed on demand (Shift+click on Settings). */
+function OnboardingPreview() {
+  const { isPreview } = useOnboarding();
+  return isPreview ? <OnboardingFlow onComplete={() => {}} /> : null;
+}
+
 // export { metadata } from './metadata'
 
 export default function RootLayout({
@@ -72,6 +79,7 @@ export default function RootLayout({
 }: {
   children: React.ReactNode
 }) {
+  const theme = useTheme()
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [onboardingCompleted, setOnboardingCompleted] = useState(false)
   const [databaseStartupError, setDatabaseStartupError] = useState<string | null>(null)
@@ -267,7 +275,10 @@ export default function RootLayout({
   }
 
   return (
-    <html lang={getLocale()}>
+    <html lang={getLocale()} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body className="font-sans antialiased">
         <I18nProvider>
         <RecordingStateProvider>
@@ -292,6 +303,7 @@ export default function RootLayout({
                                     <Sidebar />
                                     <MainContent>{children}</MainContent>
                                   </div>
+                                  <OnboardingPreview />
                                 </TranscriptRecoveryProvider>
                               )}
                               {/* Import audio overlay and dialog */}
@@ -349,7 +361,7 @@ export default function RootLayout({
           </RecordingStateProvider>
         </I18nProvider>
 
-        <Toaster position="bottom-center" richColors closeButton />
+        <Toaster position="bottom-center" richColors closeButton theme={theme} />
       </body>
     </html>
   )

@@ -5,6 +5,7 @@ import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { cn } from '@/lib/utils';
 import { DIARIZATION_MODELS } from '@/lib/diarization-models';
+import { getSummaryModelSizeLabel } from '@/lib/onboarding-summary-model';
 import { useI18n } from '@/lib/i18n';
 
 const ENGINES: Array<{ id: 'gigaam' | 'parakeet'; icon: typeof Languages; name: string; detail: string; size: string }> = [
@@ -12,11 +13,17 @@ const ENGINES: Array<{ id: 'gigaam' | 'parakeet'; icon: typeof Languages; name: 
   { id: 'parakeet', icon: Globe2, name: 'Parakeet TDT v3', detail: 'Multilingual speech', size: '~670 MB' },
 ];
 
+const SUMMARY_MODELS = [
+  { id: 'qwen3.5:4b', name: 'Qwen 3.5 4B', tier: 'High quality' },
+  { id: 'qwen3.5:2b', name: 'Qwen 3.5 2B', tier: 'Balanced' },
+];
+
 export function SetupOverviewStep() {
   const {
     goNext, goPrevious, transcriptionProvider, setTranscriptionProvider,
     downloadTranscription, setDownloadTranscription, downloadSummary, setDownloadSummary,
     downloadDiarization, setDownloadDiarization, diarizationEngine, setDiarizationEngine,
+    selectedSummaryModel, recommendedSummaryModel, selectSummaryModel,
   } = useOnboarding();
   const { t } = useI18n();
   const [isMac, setIsMac] = useState(false);
@@ -83,6 +90,15 @@ export function SetupOverviewStep() {
             </select>
           </label>}
           <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadSummary} onChange={(event) => setDownloadSummary(event.target.checked)} /><span>{t('Local summarization model')}<span className="block text-gray-500">{t('Optional; you can set up a model or external provider later')}</span></span></label>
+          {downloadSummary && <label className="block pl-6 text-sm text-gray-700">{t('Summarization model')}
+            <select value={selectedSummaryModel} onChange={(event) => selectSummaryModel(event.target.value)} className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-3 py-2">
+              {SUMMARY_MODELS.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name} ({t(model.tier)}) · {getSummaryModelSizeLabel(model.id)}{model.id === recommendedSummaryModel ? ` · ${t('Recommended')}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>}
         </fieldset>
         <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>{t('Back')}</Button><Button onClick={goNext} className="h-11 flex-1 bg-gray-900 text-white hover:bg-gray-800">{t('Continue')}</Button></div>
       </div>

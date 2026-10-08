@@ -8,7 +8,7 @@ import { useOnboarding } from '@/contexts/OnboardingContext';
 import { translate, useI18n } from '@/lib/i18n';
 
 export function PermissionsStep() {
-  const { setPermissionStatus, setPermissionsSkipped, permissions, completeOnboarding } = useOnboarding();
+  const { setPermissionStatus, setPermissionsSkipped, permissions, completeOnboarding, isPreview } = useOnboarding();
   const { t } = useI18n();
   const [isPending, setIsPending] = useState(false);
 
@@ -98,7 +98,7 @@ export function PermissionsStep() {
   const handleFinish = async () => {
     try {
       await completeOnboarding();
-      window.location.reload();
+      if (!isPreview) window.location.reload();
     } catch (error) {
       console.error('Failed to complete onboarding:', error);
     }

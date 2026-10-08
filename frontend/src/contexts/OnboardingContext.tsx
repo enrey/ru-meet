@@ -78,12 +78,18 @@ interface OnboardingContextType {
   setParakeetDownloaded: (value: boolean) => void;
   setSummaryModelDownloaded: (value: boolean) => void;
   setSelectedSummaryModel: (value: string) => void;
+  /** Selects a summary model and re-checks whether it is already on disk. */
+  selectSummaryModel: (value: string) => void;
   setDatabaseExists: (value: boolean) => void;
   setPermissionStatus: (permission: keyof OnboardingPermissions, status: PermissionStatus) => void;
   setPermissionsSkipped: (skipped: boolean) => void;
   completeOnboarding: () => Promise<void>;
   startBackgroundDownloads: (options: StartBackgroundDownloadsOptions) => Promise<void>;
   retryParakeetDownload: () => Promise<void>;
+  /** Replaying the flow after setup: nothing is saved or downloaded in the background. */
+  isPreview: boolean;
+  startPreview: () => void;
+  endPreview: () => void;
 }
 
 interface StartBackgroundDownloadsOptions {
@@ -99,7 +105,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   const [currentStep, setCurrentStep] = useState(1);
   const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider>('gigaam');
   const [downloadTranscription, setDownloadTranscription] = useState(true);
-  const [downloadSummary, setDownloadSummary] = useState(false);
+  const [downloadSummary, setDownloadSummary] = useState(true);
   const [downloadDiarization, setDownloadDiarization] = useState(true);
   const [diarizationEngine, setDiarizationEngine] = useState<DiarizationEngine>(DEFAULT_DIARIZATION_ENGINE);
   const [completed, setCompleted] = useState(false);
@@ -124,6 +130,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   const [recommendedSummaryModel, setRecommendedSummaryModel] = useState<string>('');
   const [databaseExists, setDatabaseExists] = useState(false);
   const [databaseReady, setDatabaseReady] = useState(false);
+  const [isPreview, setIsPreview] = useState(false);
   const [isBackgroundDownloading, setIsBackgroundDownloading] = useState(false);
 
   // Permissions state
@@ -162,6 +169,13 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       console.error('[OnboardingContext] Failed to initialize summary model:', error);
       return null;
     }
+  };
+
+  const selectSummaryModel = (modelName: string) => {
+    setSelectedSummaryModel(modelName);
+    invoke<boolean>('builtin_ai_is_model_ready', { modelName, refresh: true })
+      .then(setSummaryModelDownloaded)
+      .catch(() => setSummaryModelDownloaded(false));
   };
 
   const requestSummaryModelDownload = (modelName: string) => {
@@ -380,8 +394,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         console.log('[OnboardingContext] Loaded saved status:', status);
         setTranscriptionProvider(status.transcription_provider === 'parakeet' ? 'parakeet' : 'gigaam');
         setDownloadTranscription(status.download_transcription ?? true);
-        setDownloadSummary(status.download_summary ?? false);
-        setDownloadDiarization(status.download_diarization ?? false);
+        setDownloadSummary(status.download_summary ?? true);
+        setDownloadDiarization(status.download_diarization ?? true);
         setDiarizationEngine(
           status.diarization_engine && status.diarization_engine in DIARIZATION_MODELS
             ? status.diarization_engine
@@ -519,6 +533,10 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   };
 
   const completeOnboarding = async () => {
+    if (isPreview) {
+      setIsPreview(false);
+      return;
+    }
     try {
       // Set completion flag to prevent race conditions with auto-save
       isCompletingRef.current = true;
@@ -567,6 +585,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     includeSummary,
     summaryModel,
   }: StartBackgroundDownloadsOptions) => {
+    if (isPreview) return;
     console.log('[OnboardingContext] Starting background downloads:', {
       includeParakeet,
       includeSummary,
@@ -648,6 +667,17 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     setCurrentStep(Math.max(1, Math.min(step, 4)));
   }, []);
 
+  const startPreview = useCallback(() => {
+    // Show the choices a fresh install starts with, not the ones saved at setup.
+    setDownloadTranscription(true);
+    setDownloadSummary(true);
+    setDownloadDiarization(true);
+    setCurrentStep(1);
+    setIsPreview(true);
+  }, []);
+
+  const endPreview = useCallback(() => setIsPreview(false), []);
+
   const goNext = useCallback(() => {
     setCurrentStep((prev: number) => {
       const next = prev + 1;
@@ -697,12 +727,16 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         setParakeetDownloaded,
         setSummaryModelDownloaded,
         setSelectedSummaryModel,
+        selectSummaryModel,
         setDatabaseExists,
         setPermissionStatus,
         setPermissionsSkipped,
         completeOnboarding,
         startBackgroundDownloads,
         retryParakeetDownload,
+        isPreview,
+        startPreview,
+        endPreview,
       }}
     >
       {children}
