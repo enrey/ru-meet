@@ -294,7 +294,7 @@ Pill (`rounded-full`), `px-2.5 py-0.5`, 12px medium text, pastel fill per state 
 - **Summary panel:** BlockNote rich-text editor, full-width, `px-8 py-6`.
 
 ### Recording Activity Bar & Home
-- Activity bar on top of main content: 12px red pulsing dot (amber paused), semibold status, tabular timer, device/source info, rounded-full outline "Stop" button in red.
+- Activity bar: white top strip with hairline bottom border, `px-8 py-2`, holding one full-width 40px `rounded-lg` tinted row (`pl-2.5 pr-3`) so the state and its control read as one unit — indigo-50 with animated ((•)) echo icon while auto-record listens, red-50 with a pulsing 10px dot + tabular timer while recording, amber-50 when paused, slate-100 when off. Left: semibold 14px label + 12px slate-500 description. Right, inside the same tint: 12px "Вкл/Выкл" + 36×20 indigo switch, or ghost pause icon + white red-outline 28px "Стоп" button while recording.
 - Home = live transcript column, centered, `w-2/3 max-w-[750px]`, on Slate Canvas, with the draggable audio-status card.
 
 ### Onboarding

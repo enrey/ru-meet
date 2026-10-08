@@ -82,45 +82,47 @@ export function RecordingActivityBar() {
     : listening ? (preferences.pausedAfterManualStop ? t('Paused after manual stop (the sound detector restarts only after 5 seconds of silence)') : t('Waiting for sound'))
     : t('Off');
 
+  const tone = recording ? (state.isPaused ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600')
+    : busy ? 'bg-indigo-50 text-indigo-700'
+    : noSources ? 'bg-red-50 text-red-600'
+    : enabled ? 'bg-indigo-50/80 text-indigo-600' : 'bg-slate-100 text-slate-600';
+
   return (
-    <div className="shrink-0 px-8 pt-3 pb-1">
-      <div className={`flex min-h-10 flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl border px-4 py-1 ${
-        recording ? (state.isPaused ? 'border-amber-100 bg-amber-50 text-amber-700' : 'border-red-100 bg-red-50 text-red-600')
-        : busy ? 'border-indigo-100 bg-indigo-50 text-indigo-700'
-        : noSources ? 'border-red-100 bg-red-50 text-red-600'
-        : enabled ? 'border-indigo-100 bg-indigo-50/70 text-indigo-700' : 'border-slate-200 bg-slate-50 text-slate-600'
-      }`}>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-          {busy ? <Loader2 aria-hidden className="h-4 w-4 motion-safe:animate-spin" />
-            : recording ? <span aria-hidden className={`h-3 w-3 shrink-0 rounded-full ${state.isPaused ? 'bg-amber-500' : 'bg-red-500 motion-safe:animate-pulse'}`} />
-            : <svg aria-hidden viewBox="0 0 32 32" className={`h-7 w-7 shrink-0 ${noSources ? 'text-red-500' : listening ? 'text-indigo-600' : 'text-slate-400'}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+    <header className="shrink-0 border-b border-slate-200 bg-white px-8 py-2">
+      <div className={`flex min-h-10 flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-lg py-1 pl-2.5 pr-3 ${tone}`}>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <span className="inline-flex min-w-0 items-center gap-1.5 font-semibold">
+          {busy ? <Loader2 aria-hidden className="h-4 w-4 shrink-0 motion-safe:animate-spin" />
+            : recording ? <span aria-hidden className={`mx-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${state.isPaused ? 'bg-amber-500' : 'bg-red-500 motion-safe:animate-pulse'}`} />
+            : <svg aria-hidden viewBox="0 0 32 32" className={`h-5 w-5 shrink-0 ${noSources ? 'text-red-500' : listening ? 'text-indigo-600' : 'text-slate-400'}`} fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
                 <circle cx="16" cy="16" r="2.5" fill="currentColor" stroke="none" />
                 <g className={listening ? 'auto-record-echo auto-record-echo-inner' : ''}><path d="M10 11a7 7 0 0 0 0 10M22 11a7 7 0 0 1 0 10" /></g>
                 <g className={listening ? 'auto-record-echo auto-record-echo-outer' : ''}><path d="M6 7a13 13 0 0 0 0 18M26 7a13 13 0 0 1 0 18" /></g>
               </svg>}
-          <span className="font-semibold" role="status">{label}</span>
-          {recording && <><span aria-hidden className="text-slate-400">·</span><span className="tabular-nums text-slate-600">{duration}</span></>}
-          {modelLoading && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-slate-500" role="status">
-              <Loader2 aria-hidden className="h-3 w-3 motion-safe:animate-spin" />
-              {t('Loading speech recognition model… audio is already being recorded')}
-            </span>
-          )}
-          {!recording && !busy && <span className="text-xs text-slate-500">{autoDescription}</span>}
-        </div>
-        {recording ? <div className="flex shrink-0 items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={togglePause} disabled={actionPending} aria-label={state.isPaused ? t('Resume recording') : t('Pause recording')} title={state.isPaused ? t('Resume recording') : t('Pause recording')}>
-            {state.isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-          </Button>
-          <Button variant="outline" size="sm" onClick={stop} disabled={actionPending} className="rounded-full border-red-200 bg-transparent text-red-600 hover:bg-red-100 hover:text-red-700">
-            <Square aria-hidden className="h-3 w-3 fill-current" /> {t('Stop')}
-          </Button>
-        </div> : !busy && <label className="flex min-h-9 shrink-0 cursor-pointer items-center gap-3 text-sm">
-          <span>{preferences ? (enabled ? t('On') : t('Off')) : '—'}</span>
-          {saving && <Loader2 aria-hidden className="h-3 w-3 motion-safe:animate-spin" />}
-          <Switch checked={!!enabled} disabled={!preferences?.autoRecordSupported || saving} onCheckedChange={setEnabled} aria-label={t('Automatic recording')} className="data-[state=checked]:bg-indigo-600" />
-        </label>}
+          <span className="truncate" role="status">{label}</span>
+          {recording && <span className="font-medium tabular-nums opacity-80">{duration}</span>}
+        </span>
+        {modelLoading && (
+          <span className="inline-flex items-center gap-1.5 text-xs text-slate-500" role="status">
+            <Loader2 aria-hidden className="h-3 w-3 motion-safe:animate-spin" />
+            {t('Loading speech recognition model… audio is already being recorded')}
+          </span>
+        )}
+        {!recording && !busy && <span className="translate-y-[1.5px] text-xs text-slate-500">{autoDescription}</span>}
       </div>
-    </div>
+      {recording ? <div className="flex shrink-0 items-center gap-2">
+        <Button variant="ghost" size="sm" onClick={togglePause} disabled={actionPending} aria-label={state.isPaused ? t('Resume recording') : t('Pause recording')} title={state.isPaused ? t('Resume recording') : t('Pause recording')} className="h-7 w-7 p-0 hover:bg-white/60">
+          {state.isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+        </Button>
+        <Button variant="outline" size="sm" onClick={stop} disabled={actionPending} className="h-7 rounded-md border-red-200 bg-white text-red-600 hover:bg-red-100 hover:text-red-700">
+          <Square aria-hidden className="h-3 w-3 fill-current" /> {t('Stop')}
+        </Button>
+      </div> : !busy && <label className="flex shrink-0 cursor-pointer items-center gap-3">
+        <span className="text-xs font-medium text-slate-500">{preferences ? (enabled ? t('On') : t('Off')) : '—'}</span>
+        {saving && <Loader2 aria-hidden className="h-3 w-3 text-slate-400 motion-safe:animate-spin" />}
+        <Switch checked={!!enabled} disabled={!preferences?.autoRecordSupported || saving} onCheckedChange={setEnabled} aria-label={t('Automatic recording')} />
+      </label>}
+      </div>
+    </header>
   );
 }

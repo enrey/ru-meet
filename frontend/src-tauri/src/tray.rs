@@ -1,6 +1,6 @@
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime,
 };
 
@@ -32,7 +32,15 @@ pub fn create_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .menu(&menu)
         .tooltip(PRODUCT_NAME)
         .icon(app.default_window_icon().unwrap().clone())
+        // Windows: a left-click menu would swallow the double click that
+        // restores the window, so the menu stays on the right button there.
+        .show_menu_on_left_click(!cfg!(target_os = "windows"))
         .on_menu_event(|app, event| handle_menu_event(app, event.id.as_ref()))
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } = event {
+                focus_main_window(tray.app_handle());
+            }
+        })
         .build(app)?;
 
     // Update tray menu with actual recording state after creation
