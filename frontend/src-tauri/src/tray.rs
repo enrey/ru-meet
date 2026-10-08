@@ -272,14 +272,22 @@ pub fn refresh_tray_indicator<R: Runtime>(app: &AppHandle<R>) {
         *last = Some(indicator);
     }
 
-    let Some(tray) = app.tray_by_id("main-tray") else {
-        return;
-    };
     if let Some(base) = app.default_window_icon() {
         let rgba = crate::tray_badge::compose(base.rgba(), base.width(), base.height(), indicator);
         let side = crate::tray_badge::SIZE;
-        let _ = tray.set_icon(Some(tauri::image::Image::new_owned(rgba, side, side)));
+        let icon = tauri::image::Image::new_owned(rgba, side, side);
+        // The window icon is what the Windows taskbar button shows; keep it in
+        // step with the tray. (No-op on macOS, where windows have no icon.)
+        for window in app.webview_windows().values() {
+            let _ = window.set_icon(icon.clone());
+        }
+        if let Some(tray) = app.tray_by_id("main-tray") {
+            let _ = tray.set_icon(Some(icon));
+        }
     }
+    let Some(tray) = app.tray_by_id("main-tray") else {
+        return;
+    };
     let status = match indicator {
         TrayIndicator::Idle => None,
         TrayIndicator::Listening => Some(tr("automatic recording is waiting for speech", "автозапись ждёт речь")),
