@@ -22,7 +22,7 @@ export const TranscriptSearchBar = forwardRef<HTMLInputElement, TranscriptSearch
 
     return (
       <div className="flex min-w-0 items-center gap-2">
-        <div className="flex h-8 w-72 min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100">
+        <div className="flex h-8 w-64 min-w-0 items-center gap-2 rounded-lg border border-transparent bg-slate-100 px-2.5 transition-colors focus-within:border-indigo-300 focus-within:bg-white focus-within:ring-2 focus-within:ring-indigo-100">
           {searching ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-400" /> : <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
           <input
             ref={ref}
@@ -48,7 +48,7 @@ export const TranscriptSearchBar = forwardRef<HTMLInputElement, TranscriptSearch
               <X className="h-3.5 w-3.5" />
             </button>
           ) : (
-            <kbd className="rounded border border-slate-200 bg-slate-50 px-1 text-[10px] text-slate-500">Ctrl F</kbd>
+            <kbd className="rounded bg-white px-1 text-[10px] text-slate-400 shadow-sm">Ctrl F</kbd>
           )}
         </div>
         {hasQuery && !searching && (

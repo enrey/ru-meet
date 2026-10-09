@@ -18,6 +18,15 @@ pub(crate) fn paused_after_manual_stop() -> bool {
     PAUSED_AFTER_MANUAL_STOP.load(Ordering::Relaxed)
 }
 
+/// Set while the in-app meeting player plays; see `set_meeting_playback_active`.
+static MEETING_PLAYBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_meeting_playback_active(active: bool) {
+    if MEETING_PLAYBACK_ACTIVE.swap(active, Ordering::Relaxed) != active {
+        log::info!("In-app meeting playback {}", if active { "started" } else { "stopped" });
+    }
+}
+
 #[derive(Default)]
 struct Detection {
     first_seen: Option<Instant>,
@@ -128,6 +137,9 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
             } else {
                 false
             };
+            // Our own playback never starts a recording; one already running
+            // is left to end on its own signals.
+            let active = active && (owned.is_some() || !MEETING_PLAYBACK_ACTIVE.load(Ordering::Relaxed));
             let now = Instant::now();
             detection.observe(active, now);
             let (recent_microphone, recent_output) =

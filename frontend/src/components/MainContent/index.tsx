@@ -3,6 +3,8 @@
 import React from 'react';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { RecordingActivityBar } from '@/components/RecordingActivityBar';
+import { DockedMeetingPlayer } from '@/components/DockedMeetingPlayer';
+import { MeetingPlayerProvider } from '@/contexts/MeetingPlaybackContext';
 
 interface MainContentProps {
   children: React.ReactNode;
@@ -17,10 +19,14 @@ const MainContent: React.FC<MainContentProps> = ({ children }) => {
         isCollapsed ? 'ml-16' : 'ml-64'
       }`}
     >
-      <RecordingActivityBar />
-      <div className="pl-8 flex-1 min-h-0 min-w-0 w-full max-w-full overflow-hidden">
-        {children}
-      </div>
+      {/* The meeting player outlives its page, so it is owned here. */}
+      <MeetingPlayerProvider>
+        <RecordingActivityBar />
+        <DockedMeetingPlayer />
+        <div className="pl-8 flex-1 min-h-0 min-w-0 w-full max-w-full overflow-hidden">
+          {children}
+        </div>
+      </MeetingPlayerProvider>
     </main>
   );
 };

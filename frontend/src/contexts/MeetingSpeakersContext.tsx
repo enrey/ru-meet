@@ -27,6 +27,8 @@ interface MeetingSpeakersValue {
   colorFor: (speaker: string) => string | undefined;
   /** "Speaker 3" → "Спикер 3"; names the user typed are shown as is. */
   displayName: (speaker: string) => string;
+  /** Who speaks at `time`, else who speaks next; undefined past the last turn. */
+  speakerAt: (time: number) => string | undefined;
   /** Validate a typed name; renames unless it would merge two speakers. */
   requestRename: (from: string, typed: string) => Promise<SpeakerRenameResult>;
   /** Rename (or merge) without further checks, after the user confirmed. */
@@ -108,6 +110,16 @@ export function MeetingSpeakersProvider({
     return match ? t('Speaker {number}', { number: match[1] }) : speaker;
   }, [t]);
 
+  const speakerAt = useCallback((time: number) => {
+    let next: SpeakerTurn | undefined;
+    for (const turn of turns) {
+      if (!turn.speaker.trim()) continue;
+      if (turn.start <= time && time < turn.end) return turn.speaker;
+      if (turn.start > time && (!next || turn.start < next.start)) next = turn;
+    }
+    return next?.speaker;
+  }, [turns]);
+
   const commitRename = useCallback(async (from: string, to: string) => {
     try {
       const merged = await invoke<boolean>('rename_meeting_speaker', { meetingId, oldName: from, newName: to });
@@ -136,8 +148,8 @@ export function MeetingSpeakersProvider({
   }, [speakers, displayName, commitRename, t]);
 
   const value = useMemo<MeetingSpeakersValue>(
-    () => ({ turns, inProgress, speakers, colorFor, displayName, requestRename, commitRename }),
-    [turns, inProgress, speakers, colorFor, displayName, requestRename, commitRename],
+    () => ({ turns, inProgress, speakers, colorFor, displayName, speakerAt, requestRename, commitRename }),
+    [turns, inProgress, speakers, colorFor, displayName, speakerAt, requestRename, commitRename],
   );
 
   return <MeetingSpeakersContext.Provider value={value}>{children}</MeetingSpeakersContext.Provider>;

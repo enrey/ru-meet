@@ -10,8 +10,8 @@ export type MeetingSummaryState = 'none' | 'processing' | 'ready' | 'error';
 export type MeetingDetailsTab = 'summary' | 'transcript';
 
 const TABS: { value: MeetingDetailsTab; label: string }[] = [
-  { value: 'summary', label: 'Summary' },
   { value: 'transcript', label: 'Transcript' },
+  { value: 'summary', label: 'Summary' },
 ];
 
 interface MeetingHeaderProps {
@@ -22,10 +22,6 @@ interface MeetingHeaderProps {
   summaryState: MeetingSummaryState;
   /** Persist a new title; rejecting keeps the editor open. */
   onRename: (title: string) => Promise<void>;
-  activeTab: MeetingDetailsTab;
-  onTabChange: (tab: MeetingDetailsTab) => void;
-  /** Tools for the active tab, right-aligned in the tab row (e.g. search). */
-  tabTools?: ReactNode;
   /** Meeting actions, right-aligned next to the title. */
   children?: ReactNode;
 }
@@ -72,9 +68,6 @@ export function MeetingHeader({
   speakerCount,
   summaryState,
   onRename,
-  activeTab,
-  onTabChange,
-  tabTools,
   children,
 }: MeetingHeaderProps) {
   const router = useRouter();
@@ -136,7 +129,7 @@ export function MeetingHeader({
 
   const created = createdAt ? new Date(createdAt) : null;
   const date = created && !Number.isNaN(created.getTime())
-    ? new Intl.DateTimeFormat(getIntlLocale(), { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(created)
+    ? new Intl.DateTimeFormat(getIntlLocale(), { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(created)
     : null;
   const facts = [
     date,
@@ -145,67 +138,83 @@ export function MeetingHeader({
   ].filter((fact): fact is string => Boolean(fact));
 
   return (
-    <header className="@container shrink-0 border-b border-slate-200 bg-white px-8 pt-2">
-      <button
-        type="button"
-        onClick={() => router.push('/meetings')}
-        title={`${t('Back to meetings')} (Alt+←)`}
-        className="-ml-2 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" />
-        {t('Meetings')}
-      </button>
-
-      <div className="mt-0.5 flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          {editing ? (
-            <input
-              autoFocus
-              value={draft}
-              disabled={saving}
-              aria-label={t('Rename meeting')}
-              onChange={(event) => setDraft(event.target.value)}
-              onFocus={(event) => event.currentTarget.select()}
-              onBlur={() => void commit()}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void commit();
-                } else if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setDraft(title);
-                  setEditing(false);
-                }
-              }}
-              className="-ml-1.5 w-full rounded-md border border-indigo-300 bg-white px-1.5 py-0.5 text-xl font-semibold text-slate-900 outline-none ring-2 ring-indigo-100"
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              title={t('Rename meeting')}
-              className="group -ml-1.5 flex max-w-full items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-slate-50"
-            >
-              <h1 className="line-clamp-2 break-words text-xl font-semibold text-slate-900" title={title}>{title}</h1>
-              <Pencil className="h-4 w-4 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
-            </button>
-          )}
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-500">
-            {facts.map((fact, index) => (
-              <span key={fact} className="inline-flex items-center gap-2 tabular-nums">
-                {index > 0 && <span aria-hidden className="text-slate-300">·</span>}
-                {fact}
-              </span>
-            ))}
-            {facts.length > 0 && <span aria-hidden className="text-slate-300">·</span>}
-            <SummaryChip state={summaryState} t={t} />
-          </div>
-        </div>
-        {children}
+    <header className="@container flex shrink-0 items-center gap-4 border-b border-slate-100 bg-white px-8 py-3">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        <button
+          type="button"
+          onClick={() => router.push('/meetings')}
+          title={`${t('Back to meetings')} (Alt+←)`}
+          className="-ml-2 inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-sm text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('Meetings')}
+        </button>
+        <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-slate-300" />
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            disabled={saving}
+            aria-label={t('Rename meeting')}
+            onChange={(event) => setDraft(event.target.value)}
+            onFocus={(event) => event.currentTarget.select()}
+            onBlur={() => void commit()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void commit();
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                setDraft(title);
+                setEditing(false);
+              }
+            }}
+            className="min-w-0 flex-1 rounded-md border border-indigo-300 bg-white px-1.5 py-0.5 text-lg font-semibold text-slate-900 outline-none ring-2 ring-indigo-100"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            title={t('Rename meeting')}
+            className="group flex min-w-0 items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-slate-50"
+          >
+            <h1 className="truncate text-lg font-semibold tracking-tight text-slate-900" title={title}>{title}</h1>
+            <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+          </button>
+        )}
+        <span className="shrink-0"><SummaryChip state={summaryState} t={t} /></span>
       </div>
+      {facts.length > 0 && (
+        <div className="hidden shrink-0 items-center gap-2 text-xs tabular-nums text-slate-400 @[64rem]:flex">
+          {facts.map((fact, index) => (
+            <span key={fact} className="inline-flex items-center gap-2">
+              {index > 0 && <span aria-hidden>·</span>}
+              {fact}
+            </span>
+          ))}
+        </div>
+      )}
+      {children}
+    </header>
+  );
+}
 
-      <div className="mt-3 flex items-end justify-between gap-4">
-      <div role="tablist" aria-label={t('Meeting sections')} className="flex gap-6">
+/** Section tabs of a meeting; `tools` sit right-aligned in the same row. */
+export function MeetingTabs({
+  activeTab,
+  onTabChange,
+  transcriptCount,
+  tools,
+}: {
+  activeTab: MeetingDetailsTab;
+  onTabChange: (tab: MeetingDetailsTab) => void;
+  transcriptCount?: number;
+  tools?: ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex shrink-0 items-center justify-between gap-4 px-8 py-3">
+      <div role="tablist" aria-label={t('Meeting sections')} className="flex items-center gap-1">
         {TABS.map(({ value, label }) => {
           const selected = activeTab === value;
           return (
@@ -217,18 +226,22 @@ export function MeetingHeader({
               aria-selected={selected}
               aria-controls={`meeting-panel-${value}`}
               onClick={() => onTabChange(value)}
-              className={`-mb-px border-b-2 pb-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:text-indigo-700 ${
-                selected ? 'border-indigo-500 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800'
+              className={`flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
+                selected ? 'bg-slate-100 font-semibold text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
               {t(label)}
+              {value === 'transcript' && Boolean(transcriptCount) && (
+                <span className={`rounded-full px-1.5 font-mono text-[11px] tabular-nums ${selected ? 'bg-indigo-600/10 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}>
+                  {transcriptCount}
+                </span>
+              )}
             </button>
           );
         })}
       </div>
-      {/* Fixed height whether or not the tab has tools, so the tab labels don't jump. */}
-      <div className="mb-2 flex h-8 min-w-0 items-center justify-end">{tabTools}</div>
-      </div>
-    </header>
+      {/* Fixed height whether or not the tab has tools, so the tabs don't jump. */}
+      <div className="flex h-8 min-w-0 items-center justify-end">{tools}</div>
+    </div>
   );
 }

@@ -176,6 +176,11 @@ export function DiarizationSettings() {
                       <div className="flex flex-wrap items-baseline gap-x-2">
                         <span className="text-sm font-semibold text-slate-900">{model.name}</span>
                         <span className="text-xs font-medium text-slate-500">{model.size}</span>
+                        {model.recommended && (
+                          <span className="self-center rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                            {t('Recommended')}
+                          </span>
+                        )}
                       </div>
                       <p className="truncate text-xs leading-4 text-slate-600" title={t(model.description)}>
                         {t(model.description)}

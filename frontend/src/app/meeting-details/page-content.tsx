@@ -6,9 +6,11 @@ import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { translate } from '@/lib/i18n';
-import { TranscriptPanel } from '@/components/MeetingDetails/TranscriptPanel';
-import { SpeakerTimeline } from '@/components/MeetingDetails/SpeakerTimeline';
-import { MeetingHeader, type MeetingDetailsTab, type MeetingSummaryState } from '@/components/MeetingDetails/MeetingHeader';
+import { MeetingTranscript, type TranscriptScrollTarget } from '@/components/MeetingDetails/MeetingTranscript';
+import { SpeakersRail } from '@/components/MeetingDetails/SpeakersRail';
+import { MeetingPlayerBar } from '@/components/MeetingDetails/MeetingPlayerBar';
+import { MeetingHeader, MeetingTabs, type MeetingDetailsTab, type MeetingSummaryState } from '@/components/MeetingDetails/MeetingHeader';
+import { MeetingPlaybackProvider } from '@/contexts/MeetingPlaybackContext';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
 import { MeetingActionBar } from '@/components/MeetingDetails/MeetingActionBar';
 import { MeetingSpeakersProvider } from '@/contexts/MeetingSpeakersContext';
@@ -83,7 +85,7 @@ export default function PageContent({
   const [activeTab, setActiveTab] = useState<MeetingDetailsTab>('transcript');
   // Kept on the transcript when the meeting was opened from a transcript search.
   const openedFromSearch = initialSearchQuery.trim().length > 0;
-  const [transcriptJump, setTranscriptJump] = useState<{ id: string; request: number } | null>(null);
+  const [transcriptJump, setTranscriptJump] = useState<TranscriptScrollTarget | null>(null);
 
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const autoSwitchedSummaryMeetingIdsRef = useRef(new Set<string>());
@@ -105,6 +107,34 @@ export default function PageContent({
     setActiveTab('transcript');
     setTranscriptJump((current) => ({ id, request: (current?.request ?? 0) + 1 }));
   }, []);
+
+  // Bring the line at `time` into view after the player or the speaker
+  // timeline moved there. The playing line is tinted already, so the line is
+  // not marked again.
+  const revealTime = useCallback(async (time: number, speaker?: string) => {
+    const loaded = segments ?? [];
+    const last = loaded[loaded.length - 1];
+    if (last && loaded[0].timestamp <= time && (!hasMore || time <= (last.endTime ?? last.timestamp))) {
+      let id = loaded[0].id;
+      for (const segment of loaded) {
+        if (segment.timestamp > time) break;
+        id = segment.id;
+      }
+      setTranscriptJump((current) => ({ id, request: (current?.request ?? 0) + 1, quiet: true }));
+      return;
+    }
+    if (!speaker || !onJumpToSpeakerTime) return;
+    try {
+      const id = await onJumpToSpeakerTime(speaker, time);
+      if (id) {
+        setTranscriptJump((current) => ({ id, request: (current?.request ?? 0) + 1, quiet: true }));
+      } else {
+        toast.info(translate('No transcript phrase was found at this time'));
+      }
+    } catch (error) {
+      toast.error(translate('Could not jump to transcript'), { description: String(error) });
+    }
+  }, [segments, hasMore, onJumpToSpeakerTime]);
   const transcriptSearch = useTranscriptSearch({
     meetingId: meeting.id,
     initialQuery: initialSearchQuery,
@@ -244,11 +274,12 @@ export default function PageContent({
 
   return (
     <MeetingSpeakersProvider meetingId={meeting.id} onSpeakerRenamed={onSpeakerRenamed}>
+    <MeetingPlaybackProvider meetingId={meeting.id} title={meetingData.meetingTitle} fallbackDuration={listItem?.durationSeconds ?? undefined}>
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="-ml-8 flex flex-col h-full min-w-0 bg-slate-50"
+      className="@container -ml-8 flex h-full min-w-0 flex-col bg-white"
     >
       <MeetingHeader
         title={meetingData.meetingTitle}
@@ -257,23 +288,6 @@ export default function PageContent({
         speakerCount={listItem?.speakerCount}
         summaryState={summaryState}
         onRename={handleRenameMeeting}
-        activeTab={activeTab}
-        onTabChange={(tab) => {
-          manuallySelectedTabMeetingIdsRef.current.add(meeting.id);
-          setActiveTab(tab);
-        }}
-        tabTools={activeTab === 'transcript' ? (
-            <TranscriptSearchBar
-              ref={searchInputRef}
-              query={transcriptSearch.query}
-              onQueryChange={transcriptSearch.setQuery}
-              matchCount={transcriptSearch.matchCount}
-              position={transcriptSearch.position}
-              searching={transcriptSearch.searching}
-              onNext={transcriptSearch.next}
-              onPrevious={transcriptSearch.previous}
-            />
-        ) : undefined}
       >
         <MeetingActionBar
           meetingId={meeting.id}
@@ -303,75 +317,79 @@ export default function PageContent({
           onTemplateSelect={templates.handleTemplateSelection}
         />
       </MeetingHeader>
-      {/* Both panels stay mounted so unsaved summary edits survive switching tabs. */}
-      <div
-        id="meeting-panel-transcript"
-        role="tabpanel"
-        aria-labelledby="meeting-tab-transcript"
-        className={`${activeTab === 'transcript' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col bg-white`}
-      >
-        <SpeakerTimeline
-          onSelectTurn={async (speaker, time) => {
-            if (!onJumpToSpeakerTime) return;
-            try {
-              const id = await onJumpToSpeakerTime(speaker, time);
-              if (id) {
-                setActiveTab('transcript');
-                setTranscriptJump((current) => ({ id, request: (current?.request ?? 0) + 1 }));
-              } else {
-                toast.info(translate('No transcript phrase was found at this time'));
-              }
-            } catch (error) {
-              toast.error(translate('Could not jump to transcript'), { description: String(error) });
-            }
-          }}
-        />
-        <div className="min-h-0 flex-1">
-          <TranscriptPanel
-            transcripts={meetingData.transcripts}
-            isRecording={isRecording}
-            disableAutoScroll={true}
-            usePagination={true}
-            segments={segments}
-            hasMore={hasMore}
-            isLoadingMore={isLoadingMore}
-            isLoadingPrevious={isLoadingPrevious}
-            hasPrevious={hasPrevious}
-            totalCount={totalCount}
-            loadedCount={loadedCount}
-            onLoadMore={onLoadMore}
-            onLoadPrevious={onLoadPrevious}
-            scrollTarget={transcriptJump}
-            meetingId={meeting.id}
-            highlightQuery={transcriptSearch.query}
+      <MeetingPlayerBar onSeek={(time, speaker) => void revealTime(time, speaker)} />
+      <div className="flex min-h-0 flex-1">
+        <section className="flex min-w-0 flex-1 flex-col">
+          <MeetingTabs
+            activeTab={activeTab}
+            onTabChange={(tab) => {
+              manuallySelectedTabMeetingIdsRef.current.add(meeting.id);
+              setActiveTab(tab);
+            }}
+            transcriptCount={totalCount}
+            tools={activeTab === 'transcript' ? (
+              <TranscriptSearchBar
+                ref={searchInputRef}
+                query={transcriptSearch.query}
+                onQueryChange={transcriptSearch.setQuery}
+                matchCount={transcriptSearch.matchCount}
+                position={transcriptSearch.position}
+                searching={transcriptSearch.searching}
+                onNext={transcriptSearch.next}
+                onPrevious={transcriptSearch.previous}
+              />
+            ) : undefined}
           />
-        </div>
-      </div>
-      <div
-        id="meeting-panel-summary"
-        role="tabpanel"
-        aria-labelledby="meeting-tab-summary"
-        className={`${activeTab === 'summary' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col bg-white`}
-      >
-        <SummaryPanel
-          meeting={meeting}
-          meetingTitle={meetingData.meetingTitle}
-          summaryRef={meetingData.blockNoteSummaryRef}
-          aiSummary={meetingData.aiSummary}
-          summaryStatus={summaryGeneration.summaryStatus}
-          modelConfig={modelConfig}
-          onGenerateSummary={summaryGeneration.handleGenerateSummary}
-          customPrompt={customPrompt}
-          onPromptChange={setCustomPrompt}
-          onSaveSummary={meetingData.handleSaveSummary}
-          onSummaryChange={meetingData.handleSummaryChange}
-          onDirtyChange={meetingData.setIsSummaryDirty}
-          summaryError={summaryGeneration.summaryError}
-          onRegenerateSummary={summaryGeneration.handleRegenerateSummary}
-          getSummaryStatusMessage={summaryGeneration.getSummaryStatusMessage}
-        />
+          {/* Both panels stay mounted so unsaved summary edits survive switching tabs. */}
+          <div
+            id="meeting-panel-transcript"
+            role="tabpanel"
+            aria-labelledby="meeting-tab-transcript"
+            className={`${activeTab === 'transcript' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col`}
+          >
+            <MeetingTranscript
+              segments={segments ?? []}
+              hasMore={hasMore}
+              isLoadingMore={isLoadingMore}
+              hasPrevious={hasPrevious}
+              isLoadingPrevious={isLoadingPrevious}
+              onLoadMore={onLoadMore}
+              onLoadPrevious={onLoadPrevious}
+              scrollTarget={transcriptJump}
+              highlightQuery={transcriptSearch.query}
+            />
+          </div>
+          <div
+            id="meeting-panel-summary"
+            role="tabpanel"
+            aria-labelledby="meeting-tab-summary"
+            className={`${activeTab === 'summary' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col`}
+          >
+            <SummaryPanel
+              meeting={meeting}
+              meetingTitle={meetingData.meetingTitle}
+              summaryRef={meetingData.blockNoteSummaryRef}
+              aiSummary={meetingData.aiSummary}
+              summaryStatus={summaryGeneration.summaryStatus}
+              modelConfig={modelConfig}
+              onGenerateSummary={summaryGeneration.handleGenerateSummary}
+              customPrompt={customPrompt}
+              onPromptChange={setCustomPrompt}
+              onSaveSummary={meetingData.handleSaveSummary}
+              onSummaryChange={meetingData.handleSummaryChange}
+              onDirtyChange={meetingData.setIsSummaryDirty}
+              summaryError={summaryGeneration.summaryError}
+              onRegenerateSummary={summaryGeneration.handleRegenerateSummary}
+              getSummaryStatusMessage={summaryGeneration.getSummaryStatusMessage}
+            />
+          </div>
+        </section>
+        {activeTab === 'transcript' && (
+          <SpeakersRail onSelectTime={(speaker, time) => void revealTime(time, speaker)} />
+        )}
       </div>
     </motion.div>
+    </MeetingPlaybackProvider>
     </MeetingSpeakersProvider>
   );
 }

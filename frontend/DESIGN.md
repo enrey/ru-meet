@@ -160,7 +160,7 @@ Notion, Apple Notes) than a marketing web page. Surfaces are crisp white panels 
 almost-white cool-slate canvas, separated by hairline borders rather than shadows. Neutrals are cool
 (one slate family throughout), whitespace is moderate and disciplined, and the interface leans
 information-dense where it matters: the meeting library is a real data table, the meeting page stacks
-a header, a speaker timeline and a long transcript.
+a header, an audio player, a long transcript and a speakers column.
 
 Color is used sparingly and with intent. **Indigo** marks "where you are" (active navigation, selected
 tab, selected row, focus halos). A single saturated **recording red** is reserved for the act of
@@ -206,7 +206,7 @@ chips communicate processing state. A full **dark theme** mirrors every surface 
 
 ### Speaker Palette (diarization)
 Ordered, cycling: Indigo `#6366f1`, Cyan `#06b6d4`, Amber `#f59e0b`, Pink `#ec4899`, Emerald `#10b981`, Violet `#8b5cf6`.
-Used for speaker dots (10px circles) and bars on the speaker timeline.
+Used for speaker dots and avatars, the talk-time bar and the vertical speaker timeline.
 
 ### Dark Theme Mapping
 - Canvas and panels → **Midnight Slate** `#0f172a`; raised popovers/menus → `#1e293b`; subtle fills → `#172033`.
@@ -286,11 +286,13 @@ Columns: Title (flex) · Date 130px · Duration 120px · Speakers 90px · Status
 ### Status Chips
 Pill (`rounded-full`), `px-2.5 py-0.5`, 12px medium text, pastel fill per state (see Functional States). Ready chips start with a 6px dot in currentColor; processing chips start with a 12px spinner.
 
-### Meeting Page (header + timeline + transcript/summary)
-- **Header:** white, bottom border, `px-8`. "← Back to meetings" ghost link (12px), editable 20px title with pencil on hover, metadata line (date · duration · speakers · status chip) separated by slate-300 "·", then tabs row with right-aligned tab tools (search, action bar). Action buttons collapse to icons below container widths 40/60rem.
-- **Speaker timeline:** white band, title 14px semibold; rows = 180px speaker label column + track. Track is a 24px slate-100 `rounded-md` lane; turns are 16px `rounded-sm` bars in the speaker color, hover 75% opacity. A 1px resizable divider below grows to 4px indigo on hover.
-- **Speaker name:** 10px color dot + 12px semibold label; click opens a 288px popover to rename/merge.
-- **Transcript segment:** 56px mono timestamp column (play icon appears when audio exists; active = indigo-600), text 16px relaxed. Highlighted segment: indigo-50 fill + 2px indigo-400 ring with offset. Live (recording) segments sit in a slate-100 bordered `rounded-lg` bubble.
+### Meeting Page (header + player + transcript/summary + speakers column)
+- **Header:** one white row, `px-8 py-3`, slate-100 bottom border: "← Meetings" ghost link, 4px slate-300 dot, editable 18px semibold title (truncates, pencil on hover), status chip; date · duration · speakers in 12px slate-400 on the right from 64rem; then actions. Visible actions are only Folder (ghost), Save (only while the summary has unsaved edits), the indigo summary button and "⋯"; diarization and reading the summary aloud start from "⋯" and show a visible stop control while they run.
+- **Player:** slim bar under the header, shown when the recording is playable: ±10 s buttons, 32px indigo round play button, mono `current / total`, a 3px scrubber (knob on hover/drag), speed segmented control (1x–2x) in a slate-100 pill, volume from 56rem. Space toggles playback outside inputs. Once played, the recording keeps playing when the page is left: the same controls dock under the recording activity bar on every other page, with the meeting title (opens the meeting) and a small slate-400 close cross in the top-right corner that stops and unloads it.
+- **Tabs row:** segmented tabs (Transcript first, with a mono count badge; active = slate-100 fill + indigo-700 text), search field on the right (slate-100 fill, no border until focused).
+- **Transcript:** consecutive lines of one speaker form a turn: 28px round avatar (speaker number or initials on a 15% speaker-color tint), speaker name + mono time, 15px relaxed text. Hovered turn gets a slate-50 fill and play/copy icons. The playing turn is tinted indigo-50/70 with a solid avatar and a small pulsing wave; the playing line inside it gets indigo-100. Clicking a line plays from it.
+- **Speakers column (transcript tab only, 300px, from 52rem):** borderless on white with a slate-100 left border. Title + count, a 4px stacked talk-time bar, then a 4px vertical timeline of all turns (top = start) with an indigo playback dot and a hover tooltip, next to the speaker list (color dot, name, `minutes · share` in slate-400). Clicking a speaker moves to their next turn; the pencil renames.
+- **Speaker name:** optional 10px color dot + label; click opens a 288px popover to rename/merge.
 - **Summary panel:** BlockNote rich-text editor, full-width, `px-8 py-6`.
 
 ### Recording Activity Bar & Home
@@ -344,7 +346,7 @@ Generate as **desktop** screens (1100–1440px wide), light theme first, then a 
 
 ### Screens to Recreate (priority order)
 1. **Meeting Library** (`/meetings`) — title + count, Import / New recording buttons, search + segmented filter, grouped data table.
-2. **Meeting Details** (`/meeting-details`) — header with editable title & metadata, tabs (Summary / Transcript), speaker timeline, transcript with timestamps & speakers, action bar.
+2. **Meeting Details** (`/meeting-details`) — one-row header with editable title, metadata and actions, slim audio player, tabs (Transcript / Summary), transcript as speaker turns, right speakers column with a vertical timeline.
 3. **Home / Live Recording** (`/`) — activity bar, centered live transcript, floating audio-status card.
 4. **Settings** (`/settings`) — big title, underline tabs with icons, stacked form sections.
 5. **Onboarding** — welcome, permissions, model download steps.
@@ -353,7 +355,7 @@ Generate as **desktop** screens (1100–1440px wide), light theme first, then a 
 ### Component Prompts
 - *Sidebar:* "A 256px white left sidebar with a thin right border. Top: 40px rounded app icon, 'Ru-Meet' in 18px semibold and a grey version number. Nav items 44px tall, 12px rounded corners, 20px line icons and 14px medium labels: 'Главная' (active: very light indigo background, indigo text), 'Встречи' with a grey count '24' on the right. Below them, a full-width solid red (#ef4444) button 'Начать запись' with a microphone icon. At the bottom: Settings, theme toggle, collapse."
 - *Library table:* "A white card with 12px corners, slate-200 border and a soft small shadow. Header band in pale slate with uppercase 11px bold grey labels: Название, Дата, Длительность, Спикеры, Статус. Rows 68px tall separated by very light lines; each starts with a 36px rounded indigo-tinted square containing a waveform icon, a bold 14px meeting title and a grey 12px preview line. Status shown as small pastel pills: green 'Готово' with a dot, amber 'Обработка' with spinner. Sticky date group headers 'Сегодня', 'Вчера' with count pills. Selected row has a light indigo fill and a 4px indigo bar on the left edge."
-- *Speaker timeline:* "A horizontal timeline: a 180px column of speaker names with colored dots, and next to each a 24px light-grey rounded lane with thin colored bars (indigo, cyan, amber, pink) marking when each person spoke. Small grey time ticks above."
+- *Speakers column:* "A light 300px right column on white: a 4px rounded bar split into speaker colors by talk time, then a 4px vertical line of thin colored segments (one per speech turn, indigo dot at the playback position) beside a borderless list of speakers — color dot, name, and muted `28 min · 36%`."
 - *Transcript:* "Transcript lines with a grey monospace timestamp column (00:12:34) on the left, a small colored speaker dot and bold speaker name, and 16px relaxed dark-grey text. One line highlighted with a pale indigo fill and indigo ring."
 
 ### Incremental Iteration

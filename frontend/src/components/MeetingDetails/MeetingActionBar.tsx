@@ -20,6 +20,7 @@ import {
   Square,
   Trash2,
   UsersRound,
+  Volume2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -220,47 +221,44 @@ export function MeetingActionBar({
         }}
       />
 
-      <Button variant="outline" size="sm" onClick={onOpenMeetingFolder} title={t('Open Recording Folder')}>
+      <Button variant="ghost" size="sm" className="text-slate-600" onClick={onOpenMeetingFolder} title={t('Open Recording Folder')}>
         <FolderOpen />
-        <span className="hidden @[60rem]:inline">{t('Open Folder')}</span>
+        <span className="hidden @[60rem]:inline">{t('Folder')}</span>
       </Button>
 
-      {hasFolder && (
+      {/* Running jobs stay in view so they can be stopped; starting them lives in the menu. */}
+      {isDiarizing && (
         <Button
           size="sm"
-          variant={isDiarizing ? 'destructive' : 'outline'}
-          onClick={isDiarizing ? handleStopDiarization : handleDiarize}
-          disabled={isStartingDiarization || isCancellingDiarization}
-          title={isDiarizing ? t('Stop speaker diarization') : t('Identify speakers in this recording')}
+          variant="destructive"
+          onClick={handleStopDiarization}
+          disabled={isCancellingDiarization}
+          title={t('Stop speaker diarization')}
         >
-          {isDiarizing ? <Square /> : <UsersRound />}
-          <span className="hidden @[60rem]:inline">
-            {isDiarizing ? (isCancellingDiarization ? t('Stopping…') : t('Stop')) : t('Diarize')}
-          </span>
+          <Square />
+          <span className="hidden @[60rem]:inline">{isCancellingDiarization ? t('Stopping…') : t('Stop')}</span>
         </Button>
       )}
 
-      {hasSummary && speech.isAvailable && (
+      {speech.isActive && (
         <>
-          <Button variant="outline" size="sm" onClick={toggleSpeech} disabled={isGenerating} title={speechTitle}>
-            {speech.isBuffering && speech.isActive && !speech.isPaused
+          <Button variant="outline" size="sm" onClick={toggleSpeech} title={speechTitle}>
+            {speech.isBuffering && !speech.isPaused
               ? <Loader2 className="animate-spin" />
-              : speech.isActive && !speech.isPaused ? <Pause /> : <Play />}
+              : speech.isPaused ? <Play /> : <Pause />}
             <span>{speechLabel}</span>
           </Button>
-          {speech.isActive && (
-            <Button variant="outline" size="sm" onClick={speech.stop} title={t('Stop reading')} aria-label={t('Stop reading')}>
-              <Square fill="currentColor" />
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={speech.stop} title={t('Stop reading')} aria-label={t('Stop reading')}>
+            <Square fill="currentColor" />
+          </Button>
         </>
       )}
 
-      {hasSummary && !isGenerating && (
+      {hasSummary && (isSummaryDirty || isSaving) && (
         <Button
           variant="outline"
           size="sm"
-          className={isSummaryDirty ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100' : ''}
+          className="border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
           onClick={() => void onSaveAll()}
           disabled={isSaving}
           title={isSaving ? t('Saving') : t('Save Changes')}
@@ -301,12 +299,25 @@ export function MeetingActionBar({
         <DropdownMenu>
           <PopoverAnchor asChild>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" title={t('More actions')} aria-label={t('More actions')}>
+              <Button variant="ghost" size="sm" className="text-slate-600" title={t('More actions')} aria-label={t('More actions')}>
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
           </PopoverAnchor>
           <DropdownMenuContent align="end" className="w-64">
+            {hasFolder && !isDiarizing && (
+              <DropdownMenuItem onSelect={() => void handleDiarize()} disabled={isStartingDiarization}>
+                <UsersRound className="h-4 w-4" />
+                {t('Identify speakers')}
+              </DropdownMenuItem>
+            )}
+            {hasSummary && speech.isAvailable && !speech.isActive && (
+              <DropdownMenuItem onSelect={toggleSpeech} disabled={isGenerating}>
+                <Volume2 className="h-4 w-4" />
+                {t('Read the summary aloud')}
+              </DropdownMenuItem>
+            )}
+            {((hasFolder && !isDiarizing) || (hasSummary && speech.isAvailable && !speech.isActive)) && <DropdownMenuSeparator />}
             <DropdownMenuItem onSelect={onCopyTranscript} disabled={!hasTranscripts}>
               <Copy className="h-4 w-4" />
               {t('Copy Transcript')}

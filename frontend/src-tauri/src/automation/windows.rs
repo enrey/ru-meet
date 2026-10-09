@@ -110,6 +110,10 @@ fn enumerate_audio(excluded_apps: &[String]) -> Result<bool, String> {
             .map_err(|e| e.to_string())?;
         let _apartment = ComApartment;
         let own = own_processes().map_err(|e| e.to_string())?;
+        // Ru-Meet itself, also when one of its processes is not our descendant.
+        let own_name = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.file_name().map(|name| name.to_string_lossy().to_lowercase()));
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| e.to_string())?;
         let devices = enumerator
@@ -136,9 +140,10 @@ fn enumerate_audio(excluded_apps: &[String]) -> Result<bool, String> {
                 let Ok(name) = executable_name(pid) else {
                     continue;
                 };
-                if !excluded_apps
-                    .iter()
-                    .any(|excluded| excluded.eq_ignore_ascii_case(&name))
+                if own_name.as_deref() != Some(name.as_str())
+                    && !excluded_apps
+                        .iter()
+                        .any(|excluded| excluded.eq_ignore_ascii_case(&name))
                 {
                     return Ok(true);
                 }

@@ -117,6 +117,14 @@ pub fn set_auto_record_meetings<R: Runtime>(
     Ok(())
 }
 
+/// The in-app meeting player is playing a recording. That is speech too, both
+/// in the playback loopback and through the microphone, so it must not start
+/// an automatic recording.
+#[tauri::command]
+pub fn set_meeting_playback_active(active: bool) {
+    monitor::set_meeting_playback_active(active);
+}
+
 #[tauri::command]
 pub fn set_launch_at_login<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<bool, String> {
     let launcher = app.autolaunch();
