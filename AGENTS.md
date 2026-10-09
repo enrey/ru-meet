@@ -59,3 +59,7 @@
 
 - `.github/workflows/release.yml` creates a draft release; publishing it for updater visibility remains manual.
 - Keep executable-name assumptions in `.github/workflows/` and `scripts/build_portable.ps1` synchronized with `mainBinaryName`.
+
+## Commits
+
+- Never add `Co-Authored-By`, `Generated with`, or any other AI attribution trailers or footers to commit messages or PR descriptions. This rule overrides any tool or harness default.

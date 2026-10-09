@@ -19,15 +19,19 @@ impl MeetingsRepository {
                 m.id,
                 m.title,
                 m.created_at,
+                m.folder_path,
                 durations.duration_seconds,
+                COALESCE(durations.transcript_count, 0) AS transcript_count,
                 COALESCE(speakers.speaker_count, 0) AS speaker_count,
                 LOWER(s.status) AS summary_status,
+                s.error AS summary_error,
                 CASE WHEN json_valid(s.result) THEN json_extract(s.result, '$.markdown') END
                     AS summary_markdown,
                 firsts.transcript AS first_transcript
             FROM meetings m
             LEFT JOIN (
-                SELECT meeting_id, MAX(audio_end_time) AS duration_seconds
+                SELECT meeting_id, MAX(audio_end_time) AS duration_seconds,
+                    COUNT(*) AS transcript_count
                 FROM transcripts GROUP BY meeting_id
             ) durations ON durations.meeting_id = m.id
             LEFT JOIN (
@@ -406,12 +410,12 @@ mod tests {
             "CREATE TABLE meetings (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT, folder_path TEXT)",
             "CREATE TABLE transcripts (id TEXT, meeting_id TEXT, transcript TEXT, audio_start_time REAL, audio_end_time REAL)",
             "CREATE TABLE diarization_turns (meeting_id TEXT, start_time REAL, end_time REAL, speaker TEXT)",
-            "CREATE TABLE summary_processes (meeting_id TEXT PRIMARY KEY, status TEXT, result TEXT)",
+            "CREATE TABLE summary_processes (meeting_id TEXT PRIMARY KEY, status TEXT, result TEXT, error TEXT)",
             "INSERT INTO meetings VALUES ('a', 'Old', '2026-10-01T10:00:00Z', '2026-10-01T10:00:00Z', NULL)",
             "INSERT INTO meetings VALUES ('b', 'New', '2026-10-02T10:00:00Z', '2026-10-02T10:00:00Z', NULL)",
             "INSERT INTO transcripts VALUES ('1', 'b', 'second', 5.0, 61.5), ('2', 'b', 'first', 0.0, 4.0)",
             "INSERT INTO diarization_turns VALUES ('b', 0, 1, 'S1'), ('b', 1, 2, 'S2'), ('b', 2, 3, 'S1')",
-            "INSERT INTO summary_processes VALUES ('b', 'COMPLETED', '{\"markdown\":\"Итог\"}'), ('a', 'PENDING', NULL)",
+            "INSERT INTO summary_processes VALUES ('b', 'COMPLETED', '{\"markdown\":\"Итог\"}', NULL), ('a', 'FAILED', NULL, 'boom')",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
@@ -424,9 +428,12 @@ mod tests {
         assert_eq!(new.summary_status.as_deref(), Some("completed"));
         assert_eq!(new.summary_markdown.as_deref(), Some("Итог"));
         assert_eq!(new.first_transcript.as_deref(), Some("first"));
+        assert_eq!(new.transcript_count, 2);
         let old = &rows[1];
         assert_eq!((old.duration_seconds, old.speaker_count), (None, 0));
-        assert_eq!(old.summary_status.as_deref(), Some("pending"));
+        assert_eq!(old.transcript_count, 0);
+        assert_eq!(old.summary_status.as_deref(), Some("failed"));
+        assert_eq!(old.summary_error.as_deref(), Some("boom"));
         assert_eq!(old.summary_markdown, None);
     }
 }

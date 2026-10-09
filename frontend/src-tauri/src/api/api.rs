@@ -8,7 +8,8 @@ use crate::{
     database::{
         models::{DateTimeUtc, MeetingModel},
         repositories::{
-            meeting::{meeting_preview, MeetingsRepository}, setting::SettingsRepository,
+            meeting::{meeting_preview, MeetingsRepository},
+            setting::SettingsRepository,
             transcript::TranscriptsRepository,
         },
     },
@@ -41,6 +42,105 @@ pub struct MeetingListItem {
     pub summary_status: Option<String>,
     pub has_summary: bool,
     pub preview: Option<String>,
+    /// Where each processing step of the meeting stands.
+    pub stages: MeetingStages,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StageState {
+    /// Not done (or not applicable).
+    None,
+    Running,
+    Done,
+    Failed,
+}
+
+/// One processing step of a meeting, with what went wrong when it failed.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingStage {
+    pub state: StageState,
+    pub error: Option<String>,
+}
+
+impl MeetingStage {
+    fn new(state: StageState) -> Self {
+        Self { state, error: None }
+    }
+
+    fn failed(error: Option<String>) -> Self {
+        Self {
+            state: StageState::Failed,
+            error,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingStages {
+    pub transcript: MeetingStage,
+    pub speakers: MeetingStage,
+    pub summary: MeetingStage,
+    /// The summary read aloud.
+    pub speech: MeetingStage,
+}
+
+fn meeting_stages<R: Runtime>(
+    app: &AppHandle<R>,
+    row: &crate::database::models::MeetingListRow,
+    has_summary: bool,
+) -> MeetingStages {
+    let transcript = MeetingStage::new(if row.transcript_count > 0 {
+        StageState::Done
+    } else {
+        StageState::None
+    });
+
+    // A run in this session says more than the stored turns: it may be
+    // redoing them, or have failed.
+    let speakers = match crate::audio::diarization::meeting_job(&row.id) {
+        Some(job) if job.in_progress => MeetingStage::new(StageState::Running),
+        Some(job) if job.message == crate::audio::diarization::DIARIZATION_FAILED => {
+            MeetingStage::failed(None)
+        }
+        _ if row.speaker_count > 0 => MeetingStage::new(StageState::Done),
+        _ => MeetingStage::new(StageState::None),
+    };
+
+    let summary = match row.summary_status.as_deref() {
+        Some("pending" | "processing" | "summarizing" | "regenerating") => {
+            MeetingStage::new(StageState::Running)
+        }
+        Some("failed" | "error") => MeetingStage::failed(row.summary_error.clone()),
+        _ if has_summary => MeetingStage::new(StageState::Done),
+        _ => MeetingStage::new(StageState::None),
+    };
+
+    use crate::audio::tts::summary_audio::{listed_reading, ListedReading};
+    let speech = if !has_summary {
+        MeetingStage::new(StageState::None)
+    } else {
+        match listed_reading(
+            app,
+            &row.id,
+            row.folder_path.as_deref(),
+            row.summary_markdown.as_deref(),
+        ) {
+            ListedReading::None => MeetingStage::new(StageState::None),
+            ListedReading::Preparing => MeetingStage::new(StageState::Running),
+            ListedReading::Ready => MeetingStage::new(StageState::Done),
+            ListedReading::Failed(message) => MeetingStage::failed(Some(message)),
+        }
+    };
+
+    MeetingStages {
+        transcript,
+        speakers,
+        summary,
+        speech,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -349,7 +449,7 @@ async fn make_api_request<R: Runtime, T: for<'de> Deserialize<'de>>(
 
 #[tauri::command]
 pub async fn api_get_meetings<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     auth_token: Option<String>,
 ) -> Result<Vec<MeetingListItem>, String> {
@@ -367,11 +467,15 @@ pub async fn api_get_meetings<R: Runtime>(
                 .into_iter()
                 .map(|row| {
                     let has_summary = row.summary_status.as_deref() == Some("completed")
-                        && row.summary_markdown.as_deref().is_some_and(|m| !m.trim().is_empty());
+                        && row
+                            .summary_markdown
+                            .as_deref()
+                            .is_some_and(|m| !m.trim().is_empty());
                     let preview = meeting_preview(
                         row.summary_markdown.as_deref(),
                         row.first_transcript.as_deref(),
                     );
+                    let stages = meeting_stages(&app, &row, has_summary);
                     MeetingListItem {
                         id: row.id,
                         title: row.title,
@@ -381,6 +485,7 @@ pub async fn api_get_meetings<R: Runtime>(
                         summary_status: row.summary_status,
                         has_summary,
                         preview,
+                        stages,
                     }
                 })
                 .collect();

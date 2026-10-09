@@ -21,8 +21,11 @@ pub struct MeetingListRow {
     pub duration_seconds: Option<f64>,
     pub speaker_count: i64,
     pub summary_status: Option<String>,
+    pub summary_error: Option<String>,
     pub summary_markdown: Option<String>,
     pub first_transcript: Option<String>,
+    pub transcript_count: i64,
+    pub folder_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]

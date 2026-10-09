@@ -26,9 +26,9 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 const FILE_STEM: &str = "summary-speech";
 const TIMINGS_FILE: &str = "summary-speech.json";
 /// Bumped when the stitching or the timings change, so old files are redone.
-const FORMAT_VERSION: u32 = 1;
-const SENTENCE_GAP_SECONDS: f32 = 0.12;
-const PARAGRAPH_GAP_SECONDS: f32 = 0.45;
+const FORMAT_VERSION: u32 = 2;
+const SENTENCE_GAP_SECONDS: f32 = 0.35;
+const PARAGRAPH_GAP_SECONDS: f32 = 0.8;
 
 /// One spoken word and when it is heard. Times are estimated: the model gives
 /// no alignment, so each sentence's speech is shared between its words by
@@ -157,11 +157,77 @@ async fn speech_folder<R: Runtime>(
             .await
             .context("Could not look up the meeting folder")?
             .flatten();
+    folder_for(app, folder.as_deref(), meeting_id)
+}
+
+fn folder_for<R: Runtime>(
+    app: &AppHandle<R>,
+    folder: Option<&str>,
+    meeting_id: &str,
+) -> Result<PathBuf> {
     if let Some(folder) = folder.map(PathBuf::from).filter(|folder| folder.is_dir()) {
         return Ok(folder);
     }
     let digest = format!("{:x}", md5::compute(meeting_id.as_bytes()));
     Ok(data_root(app)?.join("summary-speech").join(digest))
+}
+
+/// A meeting's reading as the library lists it.
+pub enum ListedReading {
+    /// Not prepared, outdated, or reading aloud is off.
+    None,
+    Preparing,
+    Ready,
+    Failed(String),
+}
+
+/// The reading's state for the meeting list, from what the list query already
+/// loaded: no database access, one small file read. An outdated reading whose
+/// sentences are all cached is put together again on the spot.
+pub fn listed_reading<R: Runtime>(
+    app: &AppHandle<R>,
+    meeting_id: &str,
+    folder: Option<&str>,
+    markdown: Option<&str>,
+) -> ListedReading {
+    let job = JOBS
+        .lock()
+        .ok()
+        .and_then(|jobs| match jobs.get(meeting_id) {
+            Some(Job::Running { .. }) => Some(ListedReading::Preparing),
+            Some(Job::Failed(message)) => Some(ListedReading::Failed(message.clone())),
+            None => None,
+        });
+    if let Some(state) = job {
+        return state;
+    }
+    let Some(markdown) = markdown.filter(|markdown| !markdown.trim().is_empty()) else {
+        return ListedReading::None;
+    };
+    let Ok(folder) = folder_for(app, folder, meeting_id) else {
+        return ListedReading::None;
+    };
+    // Cheapest check first: most meetings were never read aloud.
+    let Some(timings) = read_timings(&folder) else {
+        return ListedReading::None;
+    };
+    if !can_speak(app) {
+        return ListedReading::None;
+    }
+    let chunks = text::summary_to_chunks(markdown);
+    let variant = speaking_variant(app);
+    if timings.digest == digest(variant.id(), &chunks) && folder.join(&timings.audio).is_file() {
+        return ListedReading::Ready;
+    }
+    let cached = !chunks.is_empty()
+        && chunks.iter().all(|(_, chunk)| {
+            sentence_path(app, variant.id(), chunk).is_ok_and(|path| path.is_file())
+        });
+    if cached {
+        prepare(app, meeting_id.to_string());
+        return ListedReading::Preparing;
+    }
+    ListedReading::None
 }
 
 fn digest(variant: &str, chunks: &[(usize, String)]) -> String {
@@ -223,13 +289,27 @@ async fn summary_audio<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Resu
     if chunks.is_empty() {
         return Ok(SummaryAudio::NoSummary);
     }
-    let wanted = digest(speaking_variant(app).id(), &chunks);
+    let variant = speaking_variant(app);
+    let wanted = digest(variant.id(), &chunks);
     let folder = speech_folder(app, &pool, meeting_id).await?;
-    let Some(timings) = read_timings(&folder) else {
+    let timings = read_timings(&folder);
+    let audio = timings.as_ref().map(|timings| folder.join(&timings.audio));
+    let (Some(timings), Some(audio)) = (timings, audio) else {
         return Ok(SummaryAudio::NotPrepared { stale: false });
     };
-    let audio = folder.join(&timings.audio);
     if timings.digest != wanted || !audio.is_file() {
+        // Every sentence is already synthesized (say, only the stitching
+        // changed): putting the reading together again costs nothing.
+        let cached = chunks.iter().all(|(_, chunk)| {
+            sentence_path(app, variant.id(), chunk).is_ok_and(|path| path.is_file())
+        });
+        if cached {
+            prepare(app, meeting_id.to_string());
+            return Ok(SummaryAudio::Preparing {
+                done: 0,
+                total: chunks.len(),
+            });
+        }
         return Ok(SummaryAudio::NotPrepared { stale: true });
     }
     app.asset_protocol_scope().allow_file(&audio)?;

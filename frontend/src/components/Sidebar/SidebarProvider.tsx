@@ -23,6 +23,24 @@ export interface MeetingListItem extends CurrentMeeting {
   summaryStatus: string | null;
   hasSummary: boolean;
   preview: string | null;
+  /** Where each processing step of the meeting stands. */
+  stages: MeetingStages;
+}
+
+export type StageState = 'none' | 'running' | 'done' | 'failed';
+
+export interface MeetingStage {
+  state: StageState;
+  /** What went wrong, when known. */
+  error: string | null;
+}
+
+export interface MeetingStages {
+  transcript: MeetingStage;
+  speakers: MeetingStage;
+  summary: MeetingStage;
+  /** The summary read aloud. */
+  speech: MeetingStage;
 }
 
 // Search result type for transcript search

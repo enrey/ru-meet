@@ -517,6 +517,14 @@ pub fn get_diarization_model_statuses() -> Result<Vec<DiarizationModelStatus>, S
     ])
 }
 
+/// The last diarization run of a meeting in this session, if any.
+pub fn meeting_job(meeting_id: &str) -> Option<DiarizationJobStatus> {
+    MEETING_JOBS.lock().ok()?.get(meeting_id).cloned()
+}
+
+/// Message a failed run leaves in its status.
+pub const DIARIZATION_FAILED: &str = "Speaker diarization failed";
+
 #[tauri::command]
 pub fn get_diarization_status(meeting_id: Option<String>) -> Result<DiarizationJobStatus, String> {
     if let Some(meeting_id) = meeting_id {
@@ -843,7 +851,7 @@ fn finish_failed_diarization<R: Runtime>(
     if let Ok(mut status) = JOB_STATUS.lock() {
         *status = DiarizationJobStatus {
             in_progress: false,
-            message: "Speaker diarization failed".into(),
+            message: DIARIZATION_FAILED.into(),
             meeting_id: None,
         };
     }
@@ -887,7 +895,7 @@ fn finish_cancelled_rerun<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) {
 
 fn emit_rerun_error<R: Runtime>(app: &AppHandle<R>, meeting_id: &str, error: String) {
     log::warn!("Diarization failed: {error}");
-    set_meeting_job_status(meeting_id, false, "Speaker diarization failed");
+    set_meeting_job_status(meeting_id, false, DIARIZATION_FAILED);
     let _ = app.emit(
         "diarization-rerun-error",
         serde_json::json!({"meetingId": meeting_id}),
@@ -1136,7 +1144,7 @@ pub async fn run_diarization_task<R: Runtime>(
             if let Ok(mut status) = JOB_STATUS.lock() {
                 *status = DiarizationJobStatus {
                     in_progress: false,
-                    message: "Speaker diarization failed".into(),
+                    message: DIARIZATION_FAILED.into(),
                     meeting_id: None,
                 };
             }
@@ -1148,7 +1156,7 @@ pub async fn run_diarization_task<R: Runtime>(
             if let Ok(mut status) = JOB_STATUS.lock() {
                 *status = DiarizationJobStatus {
                     in_progress: false,
-                    message: "Speaker diarization failed".into(),
+                    message: DIARIZATION_FAILED.into(),
                     meeting_id: None,
                 };
             }

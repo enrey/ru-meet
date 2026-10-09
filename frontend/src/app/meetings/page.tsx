@@ -4,8 +4,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
-import { AudioLines, Loader2, Mic, Pencil, Search, Trash2, Upload, UsersRound, X } from 'lucide-react';
-import { useSidebar, type MeetingListItem } from '@/components/Sidebar/SidebarProvider';
+import { AudioLines, FileText, Loader2, Mic, Pencil, Search, Sparkles, Trash2, Upload, UsersRound, Volume2, X, type LucideIcon } from 'lucide-react';
+import { useSidebar, type MeetingListItem, type MeetingStages, type StageState } from '@/components/Sidebar/SidebarProvider';
 import { ConfirmationModal } from '@/components/ConfirmationModel/confirmation-modal';
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from '@/components/ui/dialog';
 import { VisuallyHidden } from '@/components/ui/visually-hidden';
@@ -23,6 +23,7 @@ const FILTERS: { value: SummaryFilter; label: string }[] = [
 ];
 
 const SEARCH_DEBOUNCE_MS = 250;
+const RUNNING_REFRESH_MS = 3000;
 const ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_130px_120px_90px_130px_76px] items-center gap-4 px-5';
 
 /** Row icon tint follows the summary state, so the list also scans by colour. */
@@ -77,35 +78,68 @@ function formatDuration(seconds: number | null, t: TranslateFn): string {
   return hours > 0 ? t('{hours} h {minutes} min', { hours, minutes }) : t('{minutes} min', { minutes });
 }
 
-function StatusChip({ meeting, t }: { meeting: MeetingListItem; t: TranslateFn }) {
-  const status = meeting.summaryStatus;
-  if (status === 'pending' || status === 'processing') {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        {t('Processing')}
-      </span>
-    );
-  }
-  if (meeting.hasSummary) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
-        <span className="h-1.5 w-1.5 rounded-full bg-current" />
-        {t('Summary')}
-      </span>
-    );
-  }
-  if (status === 'failed' || status === 'error') {
-    return (
-      <span className="inline-flex items-center rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700">
-        {t('Error')}
-      </span>
-    );
-  }
+type StageKey = keyof MeetingStages;
+
+const STAGES: { key: StageKey; icon: LucideIcon; label: Record<Exclude<StageState, 'none'>, string> }[] = [
+  {
+    key: 'transcript',
+    icon: FileText,
+    label: { done: 'Transcript ready', running: 'Transcribing…', failed: 'Transcription failed' },
+  },
+  {
+    key: 'speakers',
+    icon: UsersRound,
+    label: { done: 'Speakers identified', running: 'Identifying speakers…', failed: 'Speaker identification failed' },
+  },
+  {
+    key: 'summary',
+    icon: Sparkles,
+    label: { done: 'Summary ready', running: 'Generating summary…', failed: 'Summary failed' },
+  },
+  {
+    key: 'speech',
+    icon: Volume2,
+    label: { done: 'Summary read aloud', running: 'Reading the summary aloud…', failed: 'Reading aloud failed' },
+  },
+];
+
+const STAGE_TONE: Record<Exclude<StageState, 'none'>, string> = {
+  done: 'text-slate-500',
+  running: 'text-amber-500 animate-pulse',
+  failed: 'text-red-500',
+};
+
+/**
+ * The meeting's processing steps as a row of small icons: only the ones done,
+ * under way or failed, in pipeline order, with details on hover. A transcript
+ * is the norm, so its icon appears only while it is missing or not done.
+ */
+function StageIcons({ meeting, t }: { meeting: MeetingListItem; t: TranslateFn }) {
+  const shown = STAGES.filter(({ key }) => {
+    const state = meeting.stages?.[key]?.state ?? 'none';
+    if (key === 'transcript') return state !== 'done';
+    return state !== 'none';
+  });
+
+  if (!shown.length) return <span className="text-sm text-slate-400">—</span>;
   return (
-    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
-      {t('Transcript')}
-    </span>
+    <div className="flex items-center gap-2">
+      {shown.map(({ key, icon: Icon, label }) => {
+        const stage = meeting.stages[key];
+        const state = stage.state;
+        const title = state === 'none'
+          ? t('No transcript')
+          : stage.error ? `${t(label[state])}: ${stage.error}` : t(label[state]);
+        return (
+          <span key={key} title={title} aria-label={title} className="relative inline-flex">
+            <Icon className={`h-4 w-4 ${state === 'none' ? 'text-slate-300' : STAGE_TONE[state]}`} />
+            {state === 'failed' && (
+              <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-500 ring-1 ring-white" />
+            )}
+          </span>
+        );
+      })}
+    </div>
   );
 }
 
@@ -137,6 +171,15 @@ export default function MeetingsLibraryPage() {
   useEffect(() => {
     void refetchMeetings();
   }, [refetchMeetings]);
+
+  // ...and while any step is under way, until it is not.
+  const anyRunning = meetings.some((meeting) =>
+    Object.values(meeting.stages ?? {}).some((stage) => stage.state === 'running'));
+  useEffect(() => {
+    if (!anyRunning) return;
+    const timer = setInterval(() => void refetchMeetings(), RUNNING_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [anyRunning, refetchMeetings]);
 
   useEffect(() => {
     const handle = setTimeout(() => void searchTranscripts(query), SEARCH_DEBOUNCE_MS);
@@ -377,7 +420,7 @@ export default function MeetingsLibraryPage() {
                         )}
                       </div>
                       <div>
-                        <StatusChip meeting={meeting} t={t} />
+                        <StageIcons meeting={meeting} t={t} />
                       </div>
                       <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                         <button

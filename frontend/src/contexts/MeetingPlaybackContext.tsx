@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 
-export const PLAYBACK_RATES = [1, 1.25, 1.5, 2] as const;
+export const PLAYBACK_RATES = [0.9, 1, 1.25, 1.5, 2] as const;
 
 /** What the player bars show and drive. */
 export interface PlaybackControls {
