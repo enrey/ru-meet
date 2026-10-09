@@ -82,3 +82,9 @@ target/
 
 frontend/src-tauri/binaries/
 AGENTS.override.md
+
+# Agent skills and design screenshots
+/.agents/
+/.claude/
+/skills-lock.json
+/frontend/.stitch-screens/
