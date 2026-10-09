@@ -24,10 +24,16 @@ export interface PlaybackControls {
   skip: (seconds: number) => void;
   setRate: (rate: number) => void;
   setVolume: (volume: number) => void;
+  /** The exact position right now, for animations finer than `currentTime`'s ticks. */
+  getTime: () => number;
 }
+
+/** What a meeting can play: its recording, or its summary read aloud. */
+export type PlaybackTrack = 'recording' | 'summary';
 
 interface PlaybackSession {
   meetingId: string;
+  track: PlaybackTrack;
   title: string;
   /** Webview URL of the recording. */
   source: string;
@@ -41,7 +47,7 @@ interface PlayerValue extends PlaybackControls {
   /** Meeting whose page is open, if any; that page shows its own player. */
   visibleMeetingId: string | null;
   setVisibleMeetingId: (meetingId: string | null) => void;
-  /** Load a meeting's recording, paused at its start. */
+  /** Load a track, paused where it was last left (or at its start). */
   open: (session: PlaybackSession) => void;
   setTitle: (meetingId: string, title: string) => void;
   /** Stop and unload. */
@@ -56,8 +62,9 @@ export function useMeetingPlayer(): PlayerValue | null {
 }
 
 /**
- * One `Audio` element for the whole app, so a recording keeps playing while
- * the user leaves its meeting page. Mounted once, above the routed pages.
+ * One `Audio` element for the whole app, so a recording or a summary reading
+ * keeps playing while the user leaves its meeting page, and only one of them
+ * ever plays. Mounted once, above the routed pages.
  */
 export function MeetingPlayerProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -114,18 +121,25 @@ export function MeetingPlayerProvider({ children }: { children: ReactNode }) {
   // earlier in the same event handler.
   const sessionRef = useRef<PlaybackSession | null>(null);
   const durationRef = useRef(0);
+  // Where each track was left, so switching between the recording and the
+  // reading resumes both where they were.
+  const positionsRef = useRef(new Map<string, number>());
 
   const open = useCallback((next: PlaybackSession) => {
     const element = audio();
+    const previous = sessionRef.current;
+    if (previous) positionsRef.current.set(`${previous.meetingId}:${previous.track}`, element.currentTime);
     element.pause();
     element.src = next.source;
     element.playbackRate = rate;
     element.volume = volume;
+    const resume = positionsRef.current.get(`${next.meetingId}:${next.track}`) ?? 0;
+    if (resume > 0) element.currentTime = resume;
     sessionRef.current = next;
     durationRef.current = next.fallbackDuration ?? 0;
     setSession(next);
     setStarted(false);
-    setCurrentTime(0);
+    setCurrentTime(resume);
     setMediaDuration(0);
   }, [audio, rate, volume]);
 
@@ -185,6 +199,8 @@ export function MeetingPlayerProvider({ children }: { children: ReactNode }) {
     setVolumeState(value);
   }, [audio]);
 
+  const getTime = useCallback(() => audio().currentTime, [audio]);
+
   const value = useMemo<PlayerValue>(() => ({
     session,
     started,
@@ -206,33 +222,108 @@ export function MeetingPlayerProvider({ children }: { children: ReactNode }) {
     skip,
     setRate,
     setVolume,
-  }), [session, started, visibleMeetingId, open, setTitle, close, isPlaying, currentTime, duration, rate, volume, play, pause, toggle, seek, skip, setRate, setVolume]);
+    getTime,
+  }), [session, started, visibleMeetingId, open, setTitle, close, isPlaying, currentTime, duration, rate, volume, play, pause, toggle, seek, skip, setRate, setVolume, getTime]);
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
 }
 
 const ScopeContext = createContext<PlaybackControls | null>(null);
 
-/** The player as seen by the open meeting page; null outside a meeting page. */
+/** The recording as seen by the open meeting page; null outside a meeting page. */
 export function useMeetingPlayback(): PlaybackControls | null {
   return useContext(ScopeContext);
 }
 
 /**
- * The app-wide player from the point of view of one meeting page. While
- * another meeting's recording is loaded the page shows its own recording as
- * stopped; playing or seeking here switches the player to this meeting.
+ * One track of one meeting as seen by its page. While something else is
+ * loaded in the app-wide player the track shows as stopped, and playing or
+ * seeking it switches the player over (resuming where the track was left).
+ */
+export function useTrackPlayback({
+  meetingId,
+  track,
+  title,
+  source,
+  fallbackDuration,
+}: {
+  meetingId: string;
+  track: PlaybackTrack;
+  title: string;
+  /** Webview URL of the audio; null while there is none. */
+  source: string | null;
+  /** Shown before the audio's own metadata has loaded. */
+  fallbackDuration?: number;
+}): PlaybackControls | null {
+  const player = useMeetingPlayer();
+  const owns = Boolean(player?.session && player.session.meetingId === meetingId && player.session.track === track);
+
+  // A new file under a loaded track (a summary read again): load it.
+  const openPlayer = player?.open;
+  const loadedSource = owns ? player?.session?.source : undefined;
+  useEffect(() => {
+    if (loadedSource && source && loadedSource !== source) {
+      openPlayer?.({ meetingId, track, title, source, fallbackDuration });
+    }
+  }, [loadedSource, source, openPlayer, meetingId, track, title, fallbackDuration]);
+
+  return useMemo<PlaybackControls | null>(() => {
+    if (!player) return null;
+    if (owns) return player;
+    // Something else is loaded: act on this track only once asked to.
+    const take = () => {
+      if (source) player.open({ meetingId, track, title, source, fallbackDuration });
+    };
+    return {
+      isAvailable: Boolean(source),
+      isPlaying: false,
+      currentTime: 0,
+      duration: fallbackDuration ?? 0,
+      rate: player.rate,
+      volume: player.volume,
+      play: (time) => {
+        take();
+        player.play(time);
+      },
+      pause: () => undefined,
+      toggle: () => {
+        take();
+        player.play();
+      },
+      seek: (time) => {
+        take();
+        player.seek(time);
+      },
+      skip: (seconds) => {
+        take();
+        player.skip(seconds);
+      },
+      setRate: player.setRate,
+      setVolume: player.setVolume,
+      getTime: () => 0,
+    };
+  }, [player, owns, source, meetingId, track, title, fallbackDuration]);
+}
+
+/**
+ * The app-wide player from the point of view of one meeting page: provides
+ * the meeting's recording to `useMeetingPlayback`. An idle player is taken
+ * over right away, so the bar shows the real length and seeking works before
+ * the first play.
  */
 export function MeetingPlaybackProvider({
   meetingId,
   title,
   fallbackDuration,
+  spaceToggle = true,
   children,
 }: {
   meetingId: string;
   title: string;
   /** Shown before the recording's own metadata has loaded. */
   fallbackDuration?: number;
+  /** Space plays and pauses the recording; off when the page's player decides what Space drives. */
+  spaceToggle?: boolean;
   children: ReactNode;
 }) {
   const player = useMeetingPlayer();
@@ -262,14 +353,11 @@ export function MeetingPlaybackProvider({
     return () => setVisibleMeetingId?.(null);
   }, [meetingId, setVisibleMeetingId]);
 
-  const owns = Boolean(player?.session && player.session.meetingId === meetingId);
-
-  // Take over an idle player right away, so the bar shows the real length
-  // and seeking works before the first play.
+  const owns = Boolean(player?.session && player.session.meetingId === meetingId && player.session.track === 'recording');
   const openPlayer = player?.open;
   const idle = !player?.session || !player.started;
   useEffect(() => {
-    if (source && idle && !owns) openPlayer?.({ meetingId, title, source, fallbackDuration });
+    if (source && idle && !owns) openPlayer?.({ meetingId, track: 'recording', title, source, fallbackDuration });
   }, [source, idle, owns, openPlayer, meetingId, title, fallbackDuration]);
 
   const setTitle = player?.setTitle;
@@ -277,43 +365,9 @@ export function MeetingPlaybackProvider({
     setTitle?.(meetingId, title);
   }, [setTitle, meetingId, title]);
 
-  const value = useMemo<PlaybackControls | null>(() => {
-    if (!player) return null;
-    if (owns) return player;
-    // Another meeting is loaded: act on this one only once asked to.
-    const take = () => {
-      if (source) player.open({ meetingId, title, source, fallbackDuration });
-    };
-    return {
-      isAvailable: Boolean(source),
-      isPlaying: false,
-      currentTime: 0,
-      duration: fallbackDuration ?? 0,
-      rate: player.rate,
-      volume: player.volume,
-      play: (time) => {
-        take();
-        player.play(time);
-      },
-      pause: () => undefined,
-      toggle: () => {
-        take();
-        player.play();
-      },
-      seek: (time) => {
-        take();
-        player.seek(time);
-      },
-      skip: (seconds) => {
-        take();
-        player.skip(seconds);
-      },
-      setRate: player.setRate,
-      setVolume: player.setVolume,
-    };
-  }, [player, owns, source, meetingId, title, fallbackDuration]);
+  const value = useTrackPlayback({ meetingId, track: 'recording', title, source, fallbackDuration });
 
-  useSpaceToggle(Boolean(value?.isAvailable), value?.toggle);
+  useSpaceToggle(spaceToggle && Boolean(value?.isAvailable), value?.toggle);
 
   return <ScopeContext.Provider value={value}>{children}</ScopeContext.Provider>;
 }

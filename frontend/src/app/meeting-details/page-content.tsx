@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { MeetingSummary, SummaryProcessResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -8,9 +8,12 @@ import { toast } from 'sonner';
 import { translate } from '@/lib/i18n';
 import { MeetingTranscript, type TranscriptScrollTarget } from '@/components/MeetingDetails/MeetingTranscript';
 import { SpeakersRail } from '@/components/MeetingDetails/SpeakersRail';
-import { MeetingPlayerBar } from '@/components/MeetingDetails/MeetingPlayerBar';
+import { MeetingPlayerBar, playerSource } from '@/components/MeetingDetails/MeetingPlayerBar';
+import { PlaybackSourceNotice } from '@/components/MeetingDetails/PlaybackSourceNotice';
 import { MeetingHeader, MeetingTabs, type MeetingDetailsTab, type MeetingSummaryState } from '@/components/MeetingDetails/MeetingHeader';
-import { MeetingPlaybackProvider } from '@/contexts/MeetingPlaybackContext';
+import { MeetingPlaybackProvider, useMeetingPlayer, useTrackPlayback } from '@/contexts/MeetingPlaybackContext';
+import { useSummaryAudio } from '@/hooks/useSummaryAudio';
+import { useSummaryKaraoke } from '@/hooks/useSummaryKaraoke';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
 import { MeetingActionBar } from '@/components/MeetingDetails/MeetingActionBar';
 import { MeetingSpeakersProvider } from '@/contexts/MeetingSpeakersContext';
@@ -26,6 +29,9 @@ import { useTemplates } from '@/hooks/meeting-details/useTemplates';
 import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
+import type { SpokenWord } from '@/hooks/useSummaryAudio';
+
+const NO_WORDS: SpokenWord[] = [];
 
 export default function PageContent({
   meeting,
@@ -221,6 +227,70 @@ export default function PageContent({
     : summaryGeneration.summaryStatus === 'error' ? 'error'
     : 'none';
 
+  // --- Summary read aloud, through the page's player -----------------------
+  // --- Summary read aloud -------------------------------------------------
+  // The backend prepares the reading as a file ahead of time; it plays in the
+  // app-wide player like the recording, so it also goes on in the docked
+  // player after this page is left.
+  const appPlayer = useMeetingPlayer();
+  const summaryKey = useMemo(
+    () => (meetingData.aiSummary ? JSON.stringify(meetingData.aiSummary) : ''),
+    [meetingData.aiSummary],
+  );
+  const summaryAudio = useSummaryAudio(meeting.id, summaryKey);
+  const summaryAudioStatus = summaryAudio.status;
+  const summaryPlayback = useTrackPlayback({
+    meetingId: meeting.id,
+    track: 'summary',
+    title: meetingData.meetingTitle,
+    source: summaryAudio.source,
+    fallbackDuration: summaryAudioStatus?.state === 'ready' ? summaryAudioStatus.duration : undefined,
+  });
+  const canSpeakSummary = summaryState === 'ready'
+    && Boolean(summaryAudioStatus && !['unavailable', 'noSummary'].includes(summaryAudioStatus.state));
+  const ownRecording = appPlayer?.session?.meetingId === meeting.id && appPlayer?.session?.track === 'recording';
+  const source = playerSource({
+    recording: ownRecording ? appPlayer : null,
+    summary: summaryPlayback,
+    preferSummary: activeTab === 'summary' && canSpeakSummary,
+  });
+
+  useSummaryKaraoke({
+    playback: summaryPlayback,
+    words: summaryAudioStatus?.state === 'ready' ? summaryAudioStatus.words : NO_WORDS,
+    container: '#meeting-panel-summary',
+    follow: activeTab === 'summary',
+  });
+
+  // Asked for explicitly: play once the file is ready.
+  const playWhenReadyRef = useRef(false);
+  const prepareSummaryAudio = summaryAudio.prepare;
+  const prepareAndPlay = useCallback(() => {
+    playWhenReadyRef.current = true;
+    prepareSummaryAudio();
+  }, [prepareSummaryAudio]);
+  const summaryAudioForBar = useMemo(
+    () => ({ ...summaryAudio, prepare: prepareAndPlay }),
+    [summaryAudio, prepareAndPlay],
+  );
+  useEffect(() => {
+    if (!summaryPlayback?.isAvailable || !playWhenReadyRef.current) return;
+    playWhenReadyRef.current = false;
+    summaryPlayback.play();
+  }, [summaryPlayback]);
+  useEffect(() => {
+    playWhenReadyRef.current = false;
+  }, [meeting.id]);
+
+  // From the menu: read it now, preparing it first when needed.
+  const listenToSummary = useCallback(() => {
+    manuallySelectedTabMeetingIdsRef.current.add(meeting.id);
+    setActiveTab('summary');
+    if (summaryPlayback?.isAvailable) summaryPlayback.play();
+    else if (summaryAudioStatus?.state === 'preparing') playWhenReadyRef.current = true;
+    else prepareAndPlay();
+  }, [meeting.id, summaryPlayback, summaryAudioStatus, prepareAndPlay]);
+
   const handleRenameMeeting = async (title: string) => {
     try {
       await invoke('api_save_meeting_title', { meetingId: meeting.id, title });
@@ -274,7 +344,7 @@ export default function PageContent({
 
   return (
     <MeetingSpeakersProvider meetingId={meeting.id} onSpeakerRenamed={onSpeakerRenamed}>
-    <MeetingPlaybackProvider meetingId={meeting.id} title={meetingData.meetingTitle} fallbackDuration={listItem?.durationSeconds ?? undefined}>
+    <MeetingPlaybackProvider meetingId={meeting.id} title={meetingData.meetingTitle} fallbackDuration={listItem?.durationSeconds ?? undefined} spaceToggle={false}>
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
@@ -315,9 +385,15 @@ export default function PageContent({
           availableTemplates={templates.availableTemplates}
           selectedTemplate={templates.selectedTemplate}
           onTemplateSelect={templates.handleTemplateSelection}
+          onListenSummary={canSpeakSummary ? listenToSummary : undefined}
         />
       </MeetingHeader>
-      <MeetingPlayerBar onSeek={(time, speaker) => void revealTime(time, speaker)} />
+      <MeetingPlayerBar
+        source={source}
+        summary={summaryPlayback}
+        summaryAudio={summaryAudioForBar}
+        onSeek={(time, speaker) => void revealTime(time, speaker)}
+      />
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col">
           <MeetingTabs
@@ -347,6 +423,7 @@ export default function PageContent({
             aria-labelledby="meeting-tab-transcript"
             className={`${activeTab === 'transcript' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col`}
           >
+            <PlaybackSourceNotice tab="transcript" summary={summaryPlayback} />
             <MeetingTranscript
               segments={segments ?? []}
               hasMore={hasMore}
@@ -365,6 +442,7 @@ export default function PageContent({
             aria-labelledby="meeting-tab-summary"
             className={`${activeTab === 'summary' ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col`}
           >
+            <PlaybackSourceNotice tab="summary" summary={summaryPlayback} />
             <SummaryPanel
               meeting={meeting}
               meetingTitle={meetingData.meetingTitle}

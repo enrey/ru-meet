@@ -4,8 +4,9 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Check, Copy, Play } from 'lucide-react';
 import { TranscriptSegmentData } from '@/types';
-import { formatPlaybackTime, useMeetingPlayback } from '@/contexts/MeetingPlaybackContext';
+import { formatPlaybackTime, useMeetingPlayback, type PlaybackControls } from '@/contexts/MeetingPlaybackContext';
 import { useI18n } from '@/lib/i18n';
+import { lastStartingBy, setSpokenWord, usePlaybackFrames, wordsIn, wordWeight, type TextWord } from '@/lib/spoken-word-highlight';
 import { SpeakerAvatar, SpeakerName } from './SpeakerName';
 
 export interface TranscriptScrollTarget {
@@ -60,6 +61,60 @@ function segmentAt(segments: TranscriptSegmentData[], time: number, hasMore: boo
   const segment = segments[found];
   if (found === segments.length - 1 && hasMore && time > (segment.endTime ?? segment.timestamp) + 1) return null;
   return segment.id;
+}
+
+/** A spoken line past its end by this much is over: no word is lit in the gap. */
+const LINE_TAIL_SECONDS = 0.4;
+
+/**
+ * Karaoke over the transcript: the word being said gets a pale yellow
+ * background. Lines carry no word timings, so a line's time is shared between
+ * its words by length, with pauses after punctuation.
+ */
+function useTranscriptKaraoke(playback: PlaybackControls | null, segments: TranscriptSegmentData[]) {
+  const lineRef = useRef<{ id: string; text: string; words: TextWord[]; starts: number[] } | null>(null);
+  const shownRef = useRef('');
+
+  const clear = () => {
+    if (!shownRef.current) return;
+    shownRef.current = '';
+    setSpokenWord('spoken-word-transcript', null);
+  };
+
+  usePlaybackFrames(playback, segments.length > 0, (time) => {
+    if (time === null) return clear();
+    const at = lastStartingBy(segments, time, (segment) => segment.timestamp);
+    if (at < 0) return clear();
+    const segment = segments[at];
+    const start = segment.timestamp;
+    const end = Math.max(start + 0.5, segment.endTime ?? segments[at + 1]?.timestamp ?? start + 5);
+    if (time > end + LINE_TAIL_SECONDS) return clear();
+    const element = document.getElementById(`segment-${segment.id}`);
+    if (!element) return clear();
+
+    let line = lineRef.current;
+    const text = element.textContent ?? '';
+    if (!line || line.id !== segment.id || line.text !== text) {
+      const words = wordsIn(element);
+      const starts: number[] = [];
+      let total = 0;
+      for (const word of words) {
+        starts.push(total);
+        const { weight, pause } = wordWeight(word.text);
+        total += weight + pause;
+      }
+      line = { id: segment.id, text, words, starts: starts.map((value) => value / (total || 1)) };
+      lineRef.current = line;
+    }
+    if (!line.words.length) return clear();
+
+    const progress = Math.min(1, (time - start) / (end - start));
+    const index = Math.max(0, lastStartingBy(line.starts, progress, (value) => value));
+    const key = `${segment.id}:${index}:${text.length}`;
+    if (key === shownRef.current) return;
+    shownRef.current = key;
+    setSpokenWord('spoken-word-transcript', line.words[index].range());
+  });
 }
 
 /** `text` with every case-insensitive occurrence of `query` wrapped in <mark>. */
@@ -156,7 +211,7 @@ const TurnRow = memo(function TurnRow({
                     if (window.getSelection()?.isCollapsed !== false) onPlay(segment.timestamp);
                   } : undefined}
                   className={`rounded-sm box-decoration-clone transition-colors ${canPlay ? 'cursor-pointer hover:text-slate-950' : ''} ${
-                    playing ? 'bg-indigo-100/80 text-slate-950' : target ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
+                    playing ? 'bg-indigo-50 text-slate-950' : target ? 'bg-indigo-50 ring-1 ring-indigo-300' : ''
                   }`}
                 >
                   {highlightMatches(cleanText(segment.text, silence), highlightQuery)}
@@ -245,6 +300,7 @@ export function MeetingTranscript({
   const started = isPlaying || currentTime > 0;
   const activeId = started ? segmentAt(segments, currentTime, hasMore) : null;
   const activeTurn = activeId ? turnIndexById.get(activeId) ?? null : null;
+  useTranscriptKaraoke(playback, segments);
 
   // Stable across player ticks so the memoized rows don't re-render with them.
   const playbackRef = useRef(playback);

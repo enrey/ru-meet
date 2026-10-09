@@ -716,8 +716,8 @@ pub fn run() {
             // Playback device detection (Bluetooth warning)
             audio::recording_commands::get_active_audio_output,
             // Reading the summary aloud
-            audio::tts::tts_speak,
-            audio::tts::tts_stop,
+            audio::tts::tts_summary_audio,
+            audio::tts::tts_prepare_summary_audio,
             audio::tts::tts_get_status,
             audio::tts::tts_set_settings,
             // Audio recovery commands (for transcript recovery feature)

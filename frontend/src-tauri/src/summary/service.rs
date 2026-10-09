@@ -330,7 +330,7 @@ impl SummaryService {
     /// the main thread. It updates the database with progress and results.
     ///
     /// # Arguments
-    /// * `_app` - Tauri app handle (for future use)
+    /// * `app` - Tauri app handle
     /// * `pool` - SQLx connection pool
     /// * `meeting_id` - Unique identifier for the meeting
     /// * `text` - Full transcript text
@@ -339,7 +339,7 @@ impl SummaryService {
     /// * `custom_prompt` - Optional user-provided context
     /// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
     pub async fn process_transcript_background<R: tauri::Runtime>(
-        _app: AppHandle<R>,
+        app: AppHandle<R>,
         pool: SqlitePool,
         meeting_id: String,
         started_at: DateTime<Utc>,
@@ -497,7 +497,7 @@ impl SummaryService {
         };
 
         // Get app data directory for BuiltInAI provider
-        let app_data_dir = crate::portable::app_data_dir(&_app).ok();
+        let app_data_dir = crate::portable::app_data_dir(&app).ok();
 
         if let Some(code) = &summary_language {
             info!("📝 Summary language preference: {}", code);
@@ -651,6 +651,7 @@ impl SummaryService {
                             ),
                         }
                         info!("Summary saved successfully for meeting_id: {}", meeting_id);
+                        crate::audio::tts::prepare_if_automatic(&app, &meeting_id);
                     }
                     Ok(false) => warn!(
                         "Skipped stale summary completion for meeting_id: {}",

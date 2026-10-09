@@ -66,7 +66,7 @@ pub(crate) fn write_summary_files(
     Ok(())
 }
 
-fn summary_to_markdown(summary: &Value) -> Option<String> {
+pub(crate) fn summary_to_markdown(summary: &Value) -> Option<String> {
     let object = summary.as_object()?;
     if let Some(markdown) = object.get("markdown").and_then(Value::as_str) {
         if !markdown.trim().is_empty() {

@@ -1,9 +1,11 @@
 'use client';
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
-import { Pause, Play, RotateCcw, RotateCw, Volume2, VolumeX, type LucideIcon } from 'lucide-react';
-import { formatPlaybackTime, PLAYBACK_RATES, useMeetingPlayback, type PlaybackControls } from '@/contexts/MeetingPlaybackContext';
+import { motion } from 'framer-motion';
+import { Loader2, Mic, Pause, Play, RotateCcw, RotateCw, Sparkles, Volume2, VolumeX, type LucideIcon } from 'lucide-react';
+import { formatPlaybackTime, PLAYBACK_RATES, useMeetingPlayback, useSpaceToggle, type PlaybackControls, type PlaybackTrack } from '@/contexts/MeetingPlaybackContext';
 import { useMeetingSpeakers } from '@/contexts/MeetingSpeakersContext';
+import type { SummaryAudio } from '@/hooks/useSummaryAudio';
 import { useI18n } from '@/lib/i18n';
 
 const SKIP_SECONDS = 10;
@@ -19,20 +21,129 @@ function SkipIcon({ icon: Icon }: { icon: LucideIcon }) {
 }
 
 /**
- * Slim player for the meeting's recording. Seeking reports the new position
- * (and who speaks there) through `onSeek` so the page can bring that moment
- * of the transcript into view.
+ * Which track the meeting page's player shows: whichever is playing, so
+ * switching tabs never interrupts listening; otherwise the summary reading on
+ * the summary tab and the recording everywhere else.
  */
-export function MeetingPlayerBar({ onSeek }: { onSeek?: (time: number, speaker?: string) => void }) {
-  const playback = useMeetingPlayback();
+export function playerSource({
+  recording,
+  summary,
+  preferSummary,
+}: {
+  recording: PlaybackControls | null;
+  summary: PlaybackControls | null;
+  preferSummary: boolean;
+}): PlaybackTrack {
+  if (recording?.isPlaying) return 'recording';
+  if (summary?.isPlaying) return 'summary';
+  return preferSummary ? 'summary' : 'recording';
+}
+
+/** Names the track a player plays. */
+export function TrackBadge({ track }: { track: PlaybackTrack }) {
+  const { t } = useI18n();
+  const summary = track === 'summary';
+  return (
+    <motion.span
+      key={track}
+      initial={{ opacity: 0, y: -2 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className={`flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium ${summary ? 'bg-violet-50 text-violet-700' : 'bg-slate-100 text-slate-600'}`}
+    >
+      {summary ? <Sparkles className="h-3.5 w-3.5" /> : <Mic className="h-3.5 w-3.5" />}
+      {summary ? t('AI summary reading') : t('Original recording')}
+    </motion.span>
+  );
+}
+
+/**
+ * The meeting page's player, fixed above the tabs: the recording or the
+ * summary read aloud (see `playerSource`), with a badge naming which. Seeking
+ * the recording reports the new position (and who speaks there) through
+ * `onSeek` so the page can bring that moment of the transcript into view.
+ */
+export function MeetingPlayerBar({
+  source,
+  summary,
+  summaryAudio,
+  onSeek,
+}: {
+  source: PlaybackTrack;
+  /** The summary reading's track; null until it is prepared. */
+  summary: PlaybackControls | null;
+  summaryAudio: SummaryAudio;
+  onSeek?: (time: number, speaker?: string) => void;
+}) {
+  const recording = useMeetingPlayback();
   const meetingSpeakers = useMeetingSpeakers();
-  if (!playback?.isAvailable) return null;
+  const playback = source === 'summary'
+    ? (summary?.isAvailable ? summary : null)
+    : (recording?.isAvailable ? recording : null);
+
+  useSpaceToggle(Boolean(playback), playback?.toggle);
+
+  if (source === 'summary' && !playback) return <SummaryAudioPending summaryAudio={summaryAudio} />;
+  if (!playback) return null;
   return (
     <PlayerControls
       playback={playback}
-      onSeek={(time) => onSeek?.(time, meetingSpeakers?.speakerAt(time))}
+      onSeek={source === 'recording' ? (time) => onSeek?.(time, meetingSpeakers?.speakerAt(time)) : undefined}
       className="border-b border-slate-100 px-8 py-2"
+      label={<TrackBadge track={source} />}
     />
+  );
+}
+
+/** In place of the player while the summary reading is not ready. */
+function SummaryAudioPending({ summaryAudio }: { summaryAudio: SummaryAudio }) {
+  const { t } = useI18n();
+  const { status, prepare } = summaryAudio;
+  if (!status) return null;
+
+  let text: string;
+  let action: string | null = null;
+  let progress: number | null = null;
+  switch (status.state) {
+    case 'preparing':
+      text = status.total
+        ? t('Preparing the reading… {done} of {total} sentences', { done: status.done, total: status.total })
+        : t('Preparing the reading…');
+      progress = status.total ? status.done / status.total : 0;
+      break;
+    case 'notPrepared':
+      text = status.stale ? t('The summary changed since it was read aloud') : t('The summary has not been read aloud yet');
+      action = status.stale ? t('Read again') : t('Read aloud');
+      break;
+    case 'failed':
+      text = t('Could not read the summary aloud: {message}', { message: status.message });
+      action = t('Try again');
+      break;
+    default:
+      return null;
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-4 border-b border-slate-100 bg-white px-8 py-2">
+      <TrackBadge track="summary" />
+      {progress !== null && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-violet-500" />}
+      <span className="min-w-0 truncate text-sm text-slate-600">{text}</span>
+      {progress !== null && (
+        <div className="h-[3px] min-w-0 flex-1 overflow-hidden rounded-full bg-slate-200">
+          <div className="h-full rounded-full bg-violet-400 transition-[width]" style={{ width: `${progress * 100}%` }} />
+        </div>
+      )}
+      {action && (
+        <button
+          type="button"
+          onClick={prepare}
+          className="flex shrink-0 items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+        >
+          <Play className="h-3.5 w-3.5 fill-current" />
+          {action}
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -264,3 +264,17 @@
 @media (prefers-reduced-motion: reduce) {
   .auto-record-echo { animation: none; }
 }
+
+/* Karaoke: the word being spoken, in the transcript and in the summary
+   reading (see lib/spoken-word-highlight.ts). */
+:root {
+  --spoken-word-bg: rgb(253 224 71 / 0.35);
+}
+.dark {
+  --spoken-word-bg: rgb(250 204 21 / 0.22);
+}
+::highlight(spoken-word-summary),
+::highlight(spoken-word-transcript) {
+  background-color: var(--spoken-word-bg);
+  color: inherit;
+}

@@ -167,26 +167,31 @@ fn split_long_sentence(sentence: &str) -> Vec<String> {
     parts
 }
 
-/// Full pipeline: summary markdown in, speakable chunks out.
+/// Full pipeline: summary markdown in, speakable chunks out, each tagged with
+/// the index of the paragraph (heading, bullet, ...) it came from.
 ///
 /// A chunk is one sentence. Chunks never span two paragraphs, so a heading or a
 /// bullet always ends the utterance, and the pause between chunks falls where
 /// the text itself pauses.
-pub fn summary_to_chunks(markdown: &str) -> Vec<String> {
-    let mut chunks: Vec<String> = Vec::new();
+pub fn summary_to_chunks(markdown: &str) -> Vec<(usize, String)> {
+    let mut chunks: Vec<(usize, String)> = Vec::new();
 
-    for paragraph in strip_markdown(markdown) {
-        let speakable = collapse_spaces(&paragraph);
+    for (index, paragraph) in strip_markdown(markdown).iter().enumerate() {
+        let speakable = collapse_spaces(paragraph);
         if !has_letters(&speakable) {
             continue;
         }
 
         for sentence in sentences_of(&speakable) {
-            chunks.extend(split_long_sentence(&sentence));
+            chunks.extend(
+                split_long_sentence(&sentence)
+                    .into_iter()
+                    .filter(|chunk| has_letters(chunk))
+                    .map(|chunk| (index, chunk)),
+            );
         }
     }
 
-    chunks.retain(|chunk| has_letters(chunk));
     chunks
 }
 
@@ -194,16 +199,22 @@ pub fn summary_to_chunks(markdown: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn texts(markdown: &str) -> Vec<String> {
+        summary_to_chunks(markdown)
+            .into_iter()
+            .map(|(_, chunk)| chunk)
+            .collect()
+    }
+
     #[test]
     fn ordinary_text_reaches_the_model_unchanged() {
-        let text = summary_to_chunks("- Выполнено 5 задач из 12, рост 30%.").join(" ");
+        let text = texts("- Выполнено 5 задач из 12, рост 30%.").join(" ");
         assert_eq!(text, "Выполнено 5 задач из 12, рост 30%.");
     }
 
     #[test]
     fn markdown_structure_is_removed() {
-        let text =
-            summary_to_chunks("## Решения\n\n- **Первое** решение\n- Второе решение").join(" ");
+        let text = texts("## Решения\n\n- **Первое** решение\n- Второе решение").join(" ");
         assert!(!text.contains('#') && !text.contains('*'), "{text}");
         assert!(text.contains("Решения."), "{text}");
     }
@@ -211,16 +222,14 @@ mod tests {
     #[test]
     fn chunks_stay_within_the_model_limit() {
         let long = "Обсудили план и распределили задачи между участниками, ".repeat(20);
-        for chunk in summary_to_chunks(&long) {
+        for chunk in texts(&long) {
             assert!(chunk.chars().count() <= MAX_CHUNK_CHARS, "{chunk}");
         }
     }
 
     #[test]
     fn a_chunk_is_one_sentence_and_never_spans_paragraphs() {
-        let chunks = summary_to_chunks(
-            "## Решения\n\n- Первое решение. Второе решение.\n- Третье решение.",
-        );
+        let chunks = texts("## Решения\n\n- Первое решение. Второе решение.\n- Третье решение.");
         assert_eq!(
             chunks,
             vec![
@@ -228,6 +237,24 @@ mod tests {
                 "Первое решение.",
                 "Второе решение.",
                 "Третье решение."
+            ]
+        );
+    }
+
+    #[test]
+    fn chunks_remember_their_paragraph() {
+        assert_eq!(
+            summary_to_chunks(
+                "Резюме
+
+---
+
+Первое. Второе."
+            ),
+            vec![
+                (0, "Резюме.".to_string()),
+                (1, "Первое.".to_string()),
+                (1, "Второе.".to_string()),
             ]
         );
     }

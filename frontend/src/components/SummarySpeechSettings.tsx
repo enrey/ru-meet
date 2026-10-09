@@ -23,6 +23,7 @@ interface TtsModel {
 interface TtsStatus {
   enabled: boolean
   model: string
+  autoPrepare: boolean
   models: TtsModel[]
   problem: string | null
 }
@@ -44,7 +45,7 @@ export function SummarySpeechSettings() {
   }, [])
 
   const save = useCallback(
-    async (next: { enabled: boolean; model: string }) => {
+    async (next: { enabled: boolean; model: string; autoPrepare: boolean }) => {
       setIsSaving(true)
       try {
         await invoke("tts_set_settings", { settings: next })
@@ -92,7 +93,7 @@ export function SummarySpeechSettings() {
             checked={status.enabled && isInstalled}
             disabled={!isInstalled || isSaving}
             onCheckedChange={(checked) =>
-              void save({ enabled: checked, model: status.model })
+              void save({ enabled: checked, model: status.model, autoPrepare: status.autoPrepare })
             }
           />
         </div>
@@ -110,7 +111,7 @@ export function SummarySpeechSettings() {
             value={status.model}
             disabled={!status.enabled || isSaving}
             onValueChange={(value) =>
-              void save({ enabled: status.enabled, model: value })
+              void save({ enabled: status.enabled, model: value, autoPrepare: status.autoPrepare })
             }
           >
             <SelectTrigger className="w-60">
@@ -131,6 +132,22 @@ export function SummarySpeechSettings() {
           </Select>
         </div>
       )}
+
+      <div className="mt-4 flex items-center justify-between gap-4 border-t border-slate-100 pt-4">
+        <div>
+          <p className="text-sm font-medium text-slate-900">{t("Read new summaries right away")}</p>
+          <p className="text-xs text-slate-500">
+            {t("Each new or edited summary is read into a file in the background, so it plays at once. Off: only when you press Play.")}
+          </p>
+        </div>
+        <Switch
+          checked={status.autoPrepare}
+          disabled={!status.enabled || !isInstalled || isSaving}
+          onCheckedChange={(checked) =>
+            void save({ enabled: status.enabled, model: status.model, autoPrepare: checked })
+          }
+        />
+      </div>
     </div>
   )
 }

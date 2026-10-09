@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type RefObject } from 'react';
+import { useCallback, useState, type RefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import {
@@ -11,8 +11,6 @@ import {
   Languages,
   Loader2,
   MoreHorizontal,
-  Pause,
-  Play,
   RefreshCw,
   Save,
   Settings,
@@ -41,7 +39,6 @@ import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal
 import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useSummaryLanguage } from '@/hooks/meeting-details/useSummaryLanguage';
-import { useSummarySpeech } from '@/hooks/useSummarySpeech';
 import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
 import { hasVisibleSummaryContent } from '@/lib/summary-content';
 import { MeetingSummary } from '@/types';
@@ -82,6 +79,8 @@ interface MeetingActionBarProps {
   availableTemplates: Array<{ id: string; name: string; description: string }>;
   selectedTemplate: string;
   onTemplateSelect: (templateId: string, templateName: string) => void;
+  /** Read the summary aloud in the page's player; absent when it cannot be read. */
+  onListenSummary?: () => void;
 }
 
 /**
@@ -114,6 +113,7 @@ export function MeetingActionBar({
   availableTemplates,
   selectedTemplate,
   onTemplateSelect,
+  onListenSummary,
 }: MeetingActionBarProps) {
   const { t } = useI18n();
   const { betaFeatures } = useConfig();
@@ -175,35 +175,6 @@ export function MeetingActionBar({
     }
   }, [meetingId, t]);
 
-  // --- Read the summary aloud -------------------------------------------
-  // Same text the copy action uses: the editor's markdown, falling back to
-  // whatever the stored summary carries.
-  const getSummaryMarkdown = useCallback(async () => {
-    const fromEditor = await summaryRef.current?.getMarkdown?.();
-    if (fromEditor) return fromEditor;
-    if (aiSummary && typeof aiSummary.markdown === 'string') return aiSummary.markdown;
-    return '';
-  }, [summaryRef, aiSummary]);
-  const speech = useSummarySpeech(getSummaryMarkdown);
-
-  useEffect(() => {
-    if (speech.error) toast.error(speech.error);
-  }, [speech.error]);
-  useEffect(() => {
-    if (speech.notice) toast.info(speech.notice);
-  }, [speech.notice]);
-
-  const toggleSpeech = () => {
-    void speech.toggle().catch((error) => {
-      console.error('Summary speech failed:', error);
-      toast.error(error instanceof Error ? error.message : t('Could not read the summary aloud'));
-    });
-  };
-  const speechTitle = !speech.isActive
-    ? t('Read the summary aloud')
-    : speech.isPaused ? t('Resume reading') : t('Pause reading');
-  const speechLabel = !speech.isActive ? t('Listen') : speech.isPaused ? t('Resume') : t('Pause');
-
   // Radix returns focus to the menu trigger as the menu closes, which would
   // dismiss a dialog or popover opened from the same click; open it after.
   const afterMenuCloses = (open: () => void) => () => {
@@ -238,20 +209,6 @@ export function MeetingActionBar({
           <Square />
           <span className="hidden @[60rem]:inline">{isCancellingDiarization ? t('Stopping…') : t('Stop')}</span>
         </Button>
-      )}
-
-      {speech.isActive && (
-        <>
-          <Button variant="outline" size="sm" onClick={toggleSpeech} title={speechTitle}>
-            {speech.isBuffering && !speech.isPaused
-              ? <Loader2 className="animate-spin" />
-              : speech.isPaused ? <Play /> : <Pause />}
-            <span>{speechLabel}</span>
-          </Button>
-          <Button variant="outline" size="sm" onClick={speech.stop} title={t('Stop reading')} aria-label={t('Stop reading')}>
-            <Square fill="currentColor" />
-          </Button>
-        </>
       )}
 
       {hasSummary && (isSummaryDirty || isSaving) && (
@@ -311,13 +268,13 @@ export function MeetingActionBar({
                 {t('Identify speakers')}
               </DropdownMenuItem>
             )}
-            {hasSummary && speech.isAvailable && !speech.isActive && (
-              <DropdownMenuItem onSelect={toggleSpeech} disabled={isGenerating}>
+            {hasSummary && onListenSummary && (
+              <DropdownMenuItem onSelect={onListenSummary} disabled={isGenerating}>
                 <Volume2 className="h-4 w-4" />
                 {t('Read the summary aloud')}
               </DropdownMenuItem>
             )}
-            {((hasFolder && !isDiarizing) || (hasSummary && speech.isAvailable && !speech.isActive)) && <DropdownMenuSeparator />}
+            {((hasFolder && !isDiarizing) || (hasSummary && onListenSummary)) && <DropdownMenuSeparator />}
             <DropdownMenuItem onSelect={onCopyTranscript} disabled={!hasTranscripts}>
               <Copy className="h-4 w-4" />
               {t('Copy Transcript')}

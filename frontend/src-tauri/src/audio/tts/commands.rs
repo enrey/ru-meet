@@ -1,18 +1,13 @@
-//! Tauri commands for reading a summary aloud.
-//!
-//! Synthesis runs chunk by chunk in the background and each finished chunk is
-//! announced with a `tts-chunk` event, so playback starts after the first
-//! sentence or two instead of after the whole summary.
+//! TTS settings and the speech engine shared by everything that speaks.
+//! The summary reading itself is prepared in `summary_audio.rs`.
 
 use super::qwen::{QwenTts, Variant};
-use super::text;
 use anyhow::{anyhow, Result};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
 
 const SETTINGS_FILE: &str = "tts-settings.json";
@@ -24,6 +19,14 @@ pub struct TtsSettings {
     pub enabled: bool,
     /// Which Qwen3-TTS checkpoint reads the summary.
     pub model: Variant,
+    /// Read every new summary into a file as soon as it is generated, so it
+    /// plays at once. Off: only when Play is pressed.
+    #[serde(default = "auto_prepare_default")]
+    pub auto_prepare: bool,
+}
+
+fn auto_prepare_default() -> bool {
+    true
 }
 
 impl Default for TtsSettings {
@@ -31,6 +34,7 @@ impl Default for TtsSettings {
         Self {
             enabled: true,
             model: Variant::Small,
+            auto_prepare: true,
         }
     }
 }
@@ -52,6 +56,7 @@ pub struct TtsStatus {
     pub enabled: bool,
     /// The selected checkpoint.
     pub model: String,
+    pub auto_prepare: bool,
     pub models: Vec<TtsModel>,
     /// Why the feature is unavailable, when it is.
     pub problem: Option<String>,
@@ -60,13 +65,8 @@ pub struct TtsStatus {
 static SETTINGS: Lazy<Mutex<TtsSettings>> = Lazy::new(|| Mutex::new(TtsSettings::default()));
 
 static ENGINE: Lazy<Mutex<Option<Arc<QwenTts>>>> = Lazy::new(|| Mutex::new(None));
-/// Id of the reading the UI is currently listening to. A background job whose
-/// id no longer matches stops at the next chunk boundary, which is how both
-/// "stop" and "start another reading" cancel the previous one.
-static CURRENT_JOB: AtomicU64 = AtomicU64::new(0);
-static NEXT_JOB: AtomicU64 = AtomicU64::new(0);
 
-fn data_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
+pub(super) fn data_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     crate::portable::app_data_dir(app)
         .map_err(|error| anyhow!("Cannot resolve the application data directory: {error}"))
 }
@@ -95,7 +95,7 @@ fn is_installed<R: Runtime>(app: &AppHandle<R>, variant: Variant) -> bool {
         .unwrap_or(false)
 }
 
-fn settings() -> TtsSettings {
+pub(super) fn settings() -> TtsSettings {
     SETTINGS
         .lock()
         .map(|settings| settings.clone())
@@ -142,7 +142,14 @@ pub fn tts_get_status<R: Runtime>(app: AppHandle<R>) -> TtsStatus {
                 .unwrap_or_default()
         ))
     } else if !runtime_root(&app)
-        .map(|path| path.join(if cfg!(windows) { "llama-tts.exe" } else { "llama-tts" }).is_file())
+        .map(|path| {
+            path.join(if cfg!(windows) {
+                "llama-tts.exe"
+            } else {
+                "llama-tts"
+            })
+            .is_file()
+        })
         .unwrap_or(false)
     {
         Some("The speech runtime is not installed".to_string())
@@ -153,13 +160,13 @@ pub fn tts_get_status<R: Runtime>(app: AppHandle<R>) -> TtsStatus {
     TtsStatus {
         enabled: settings.enabled,
         model: settings.model.id().to_string(),
+        auto_prepare: settings.auto_prepare,
         models,
         problem,
     }
 }
 
-/// Store the settings. Changing the voice needs no reload: it is an input to
-/// the graph, not part of it.
+/// Store the settings.
 #[tauri::command]
 pub fn tts_set_settings<R: Runtime>(
     app: AppHandle<R>,
@@ -179,22 +186,18 @@ pub fn tts_set_settings<R: Runtime>(
     Ok(())
 }
 
-/// Whether the model is already in memory. `try_lock` on purpose: the lock is
-/// held for the whole load, and a blocked caller is exactly the case we want
-/// to report as "still loading".
-fn is_loaded() -> bool {
-    ENGINE
-        .try_lock()
-        .map(|engine| engine.is_some())
-        .unwrap_or(false)
+/// Reading aloud is turned on and everything it needs is installed.
+pub(super) fn can_speak<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let status = tts_get_status(app.clone());
+    status.enabled && status.problem.is_none()
 }
 
-fn engine<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<QwenTts>> {
+/// The checkpoint that will actually speak. The default points at the
+/// smaller checkpoint, which may not be the one that is actually on disk;
+/// speak with whatever is installed rather than refusing.
+pub(super) fn speaking_variant<R: Runtime>(app: &AppHandle<R>) -> Variant {
     let chosen = settings().model;
-    // The default points at the smaller checkpoint, which may not be the one
-    // that is actually on disk; speak with whatever is installed rather than
-    // refusing.
-    let wanted = match is_installed(app, chosen) {
+    match is_installed(app, chosen) {
         true => chosen,
         false => Variant::all()
             .into_iter()
@@ -208,7 +211,11 @@ fn engine<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<QwenTts>> {
                 fallback
             })
             .unwrap_or(chosen),
-    };
+    }
+}
+
+pub(super) fn engine<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<QwenTts>> {
+    let wanted = speaking_variant(app);
     let mut guard = ENGINE
         .lock()
         .map_err(|_| anyhow!("The TTS engine lock is poisoned"))?;
@@ -225,121 +232,6 @@ fn engine<R: Runtime>(app: &AppHandle<R>) -> Result<Arc<QwenTts>> {
     )?);
     *guard = Some(loaded.clone());
     Ok(loaded)
-}
-
-/// How long a finished WAV plays, read from its header.
-fn wav_seconds(path: &Path) -> Option<f32> {
-    let header = std::fs::read(path).ok()?;
-    if header.len() < 44 || &header[0..4] != b"RIFF" {
-        return None;
-    }
-    let rate = u32::from_le_bytes(header[24..28].try_into().ok()?) as f32;
-    let bytes_per_sample = u16::from_le_bytes(header[34..36].try_into().ok()?) as f32 / 8.0;
-    let data = (header.len() - 44) as f32;
-    (rate > 0.0 && bytes_per_sample > 0.0).then(|| data / (rate * bytes_per_sample))
-}
-
-/// Synthesize the chunks of one reading, announcing each as it becomes
-/// playable. Already synthesized chunks are reused, so replaying the same
-/// summary starts instantly.
-fn run_job<R: Runtime>(app: &AppHandle<R>, job: u64, chunks: &[String]) -> Result<()> {
-    if !is_loaded() {
-        let _ = app.emit(
-            "tts-waiting",
-            serde_json::json!({ "job": job, "message": "Preparing the speech model…" }),
-        );
-    }
-    let engine = engine(app)?;
-    // The model is part of the key: the same text read by another checkpoint
-    // is different audio.
-    let digest = format!(
-        "{:x}",
-        md5::compute(format!("{}\n{}", engine.variant().id(), chunks.join("\n")).as_bytes())
-    );
-    let directory = data_root(app)?.join("tts-cache").join(&digest);
-    std::fs::create_dir_all(&directory)?;
-
-    let started = std::time::Instant::now();
-    let mut synthesized_seconds = 0.0_f32;
-    for (index, chunk) in chunks.iter().enumerate() {
-        if CURRENT_JOB.load(Ordering::SeqCst) != job {
-            log::debug!("TTS job {job} cancelled after {index} chunks");
-            return Ok(());
-        }
-
-        let path = directory.join(format!("{index:04}.wav"));
-        if !path.is_file() {
-            let chunk_started = std::time::Instant::now();
-            engine.synthesize(chunk, &path)?;
-            let seconds = wav_seconds(&path).unwrap_or(0.0);
-            synthesized_seconds += seconds;
-            log::info!(
-                "TTS chunk {}/{}: {seconds:.1}s of audio in {:.1}s: {chunk}",
-                index + 1,
-                chunks.len(),
-                chunk_started.elapsed().as_secs_f32()
-            );
-        }
-
-        app.asset_protocol_scope().allow_file(&path)?;
-        app.emit(
-            "tts-chunk",
-            serde_json::json!({
-                "job": job,
-                "index": index,
-                "total": chunks.len(),
-                "path": path.to_string_lossy(),
-            }),
-        )?;
-    }
-
-    log::info!(
-        "TTS job {job}: {} chunks, {synthesized_seconds:.1}s synthesized in {:.1}s",
-        chunks.len(),
-        started.elapsed().as_secs_f32()
-    );
-    app.emit(
-        "tts-done",
-        serde_json::json!({ "job": job, "total": chunks.len() }),
-    )?;
-    Ok(())
-}
-
-/// Start reading `text` aloud. Returns the id of this reading; audio arrives
-/// as `tts-chunk` events and the reading ends with `tts-done` or `tts-error`.
-#[tauri::command]
-pub async fn tts_speak<R: Runtime>(app: AppHandle<R>, text: String) -> Result<u64, String> {
-    if !settings().enabled {
-        return Err("Reading summaries aloud is turned off in settings".to_string());
-    }
-    let chunks = text::summary_to_chunks(&text);
-    if chunks.is_empty() {
-        return Err("There is nothing to read in this summary".to_string());
-    }
-
-    let job = NEXT_JOB.fetch_add(1, Ordering::SeqCst) + 1;
-    CURRENT_JOB.store(job, Ordering::SeqCst);
-
-    let app_for_job = app.clone();
-    tokio::task::spawn_blocking(move || {
-        if let Err(error) = run_job(&app_for_job, job, &chunks) {
-            log::warn!("TTS job {job} failed: {error}");
-            if CURRENT_JOB.load(Ordering::SeqCst) == job {
-                let _ = app_for_job.emit(
-                    "tts-error",
-                    serde_json::json!({ "job": job, "message": error.to_string() }),
-                );
-            }
-        }
-    });
-
-    Ok(job)
-}
-
-/// Stop the current reading. Chunks already delivered stay on disk.
-#[tauri::command]
-pub fn tts_stop() {
-    CURRENT_JOB.store(0, Ordering::SeqCst);
 }
 
 /// Load the model at startup, the way the transcription engines do, so the
