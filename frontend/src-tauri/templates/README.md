@@ -16,13 +16,15 @@ Time-boxed daily updates template designed for engineering/product teams.
 - Notes
 
 ### 2. `standard_meeting.json`
-General-purpose meeting notes template focusing on key outcomes and actions.
+Detailed business status of a meeting, in Russian. Generated section by
+section on the built-in model (`per_section`).
 
 **Sections:**
-- Summary
-- Key Decisions
-- Action Items
-- Discussion Highlights
+- Резюме
+- Что обсудили
+- Договорённости и задачи
+- Открытые вопросы
+- Риски и ограничения
 
 ## Template Structure
 
@@ -59,6 +61,9 @@ Custom templates override built-in templates with the same filename.
 - `name` (required): Display name for the template
 - `description` (required): Brief explanation of the template's use case
 - `sections` (required): Array of section definitions
+- `per_section` (optional, default `false`): with the built-in model and a
+  Russian report, generate one request per section instead of one prompt for
+  the whole template. Gives a small local model noticeably more detail.
 
 ### Section Object
 - `title` (required): Section heading text
@@ -66,6 +71,11 @@ Custom templates override built-in templates with the same filename.
 - `format` (required): One of `"paragraph"`, `"list"`, or `"string"`
 - `item_format` (optional): Markdown formatting hint for list items (e.g., table structure)
 - `example_item_format` (optional): Alternative formatting hint
+- `layout` (optional): Concrete shape and length limits, e.g. "2–8 пунктов,
+  каждый не длиннее 25 слов"
+- `builds_on` (optional): Title of an earlier section; in per-section
+  generation its finished text is shown to this section so it neither repeats
+  nor contradicts it
 
 ## Usage in Code
 

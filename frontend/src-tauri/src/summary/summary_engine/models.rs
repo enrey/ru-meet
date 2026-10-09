@@ -52,13 +52,16 @@ impl SamplingParams {
         }
     }
 
-    /// Summary-tuned Qwen 3.5 preset: non-greedy with mild repetition controls.
+    /// Summary-tuned Qwen 3.5 preset: low temperature with mild repetition
+    /// controls. On real meetings higher temperatures invented more owners,
+    /// deadlines and numbers; per-section generation (`section_pass`) was
+    /// tuned with exactly these values.
     pub fn qwen35_summary(stop_tokens: Vec<String>) -> Self {
         Self {
-            temperature: 0.5,
+            temperature: 0.3,
             top_k: 20,
             top_p: 0.8,
-            presence_penalty: 0.3,
+            presence_penalty: 0.0,
             frequency_penalty: 0.0,
             repeat_penalty: 1.05,
             penalty_last_n: 256,

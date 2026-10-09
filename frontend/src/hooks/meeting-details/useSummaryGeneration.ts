@@ -416,18 +416,24 @@ export function useSummaryGeneration({
     }
   }, []);
 
+  // One line per speaker turn ("Speaker 1: …"), consecutive segments of the
+  // same speaker merged. Timestamps are left out: the model never used them,
+  // while the labels tell it who did what and who took which task.
   const buildSummaryTranscriptPayload = useCallback((allTranscripts: Transcript[]) => {
-    const formatTime = (seconds: number | undefined, fallbackTimestamp: string): string => {
-      if (seconds === undefined) {
-        return fallbackTimestamp;
+    const turns: { speaker: string; texts: string[] }[] = [];
+    for (const transcript of allTranscripts) {
+      const speaker = transcript.speaker?.trim() ?? '';
+      const last = turns[turns.length - 1];
+      if (speaker && last?.speaker === speaker) {
+        last.texts.push(transcript.text);
+      } else {
+        turns.push({ speaker, texts: [transcript.text] });
       }
-      const totalSecs = Math.floor(seconds);
-      return `[${Math.floor(totalSecs / 60).toString().padStart(2, '0')}:${(totalSecs % 60).toString().padStart(2, '0')}]`;
-    };
+    }
 
     return {
-      transcriptText: allTranscripts
-        .map((transcript) => `${formatTime(transcript.audio_start_time, transcript.timestamp)} ${transcript.text}`)
+      transcriptText: turns
+        .map(({ speaker, texts }) => (speaker ? `${speaker}: ${texts.join(' ')}` : texts.join(' ')))
         .join('\n'),
       transcriptTexts: allTranscripts.map((transcript) => transcript.text),
     };

@@ -1,4 +1,5 @@
 use crate::summary::llm_client::{generate_summary, LLMProvider};
+use crate::summary::section_pass;
 use crate::summary::templates::Template;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -399,6 +400,26 @@ pub(crate) async fn generate_meeting_summary(
         );
         base_markdown_language = None;
         (cached.to_string(), 1_i64, false)
+    } else if provider == &LLMProvider::BuiltInAI
+        && template.per_section
+        && generation_language == "Russian"
+        && total_tokens < token_threshold
+    {
+        info!(
+            "Generating report section by section with template: {}",
+            template_id
+        );
+        let report = section_pass::generate_report(
+            client,
+            model_name,
+            app_data_dir,
+            text,
+            custom_prompt,
+            template,
+            cancellation_token,
+        )
+        .await?;
+        (report.markdown, 1_i64, report.reasoning_stripped)
     } else {
         let mut content_to_summarize = text.to_string();
         let successful_chunk_count;

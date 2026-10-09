@@ -866,7 +866,10 @@ mod tests {
                 format: "paragraph".to_string(),
                 item_format: None,
                 example_item_format: None,
+                layout: None,
+                builds_on: None,
             }],
+            per_section: false,
         }
     }
 

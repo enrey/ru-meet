@@ -19,6 +19,16 @@ pub struct TemplateSection {
     /// Alternative formatting hint
     #[serde(skip_serializing_if = "Option::is_none")]
     pub example_item_format: Option<String>,
+
+    /// Concrete shape and length limits, e.g. "2–8 пунктов, каждый не длиннее
+    /// 25 слов". Small local models follow numbers far better than adjectives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
+
+    /// Title of an earlier section whose finished text is shown to this one
+    /// in per-section generation, so it neither repeats nor contradicts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builds_on: Option<String>,
 }
 
 /// Represents a complete meeting template
@@ -32,6 +42,11 @@ pub struct Template {
 
     /// List of sections in the template
     pub sections: Vec<TemplateSection>,
+
+    /// Generate the built-in model's report one section per request instead
+    /// of one prompt for the whole template (see `summary::section_pass`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub per_section: bool,
 }
 
 impl Template {
@@ -64,6 +79,15 @@ impl Template {
                     "Section '{}' has invalid format '{}'. Must be 'paragraph', 'list', or 'string'",
                     section.title, other
                 )),
+            }
+
+            if let Some(earlier) = &section.builds_on {
+                if !self.sections[..i].iter().any(|s| &s.title == earlier) {
+                    return Err(format!(
+                        "Section '{}' builds on '{}', which is not an earlier section",
+                        section.title, earlier
+                    ));
+                }
             }
         }
 
@@ -126,7 +150,10 @@ mod tests {
                 format: "paragraph".to_string(),
                 item_format: None,
                 example_item_format: None,
+                layout: None,
+                builds_on: None,
             }],
+            per_section: false,
         };
 
         assert!(template.validate().is_ok());
@@ -138,6 +165,7 @@ mod tests {
             name: "".to_string(),
             description: "A test template".to_string(),
             sections: vec![],
+            per_section: false,
         };
 
         assert!(template.validate().is_err());
@@ -154,7 +182,10 @@ mod tests {
                 format: "invalid".to_string(),
                 item_format: None,
                 example_item_format: None,
+                layout: None,
+                builds_on: None,
             }],
+            per_section: false,
         };
 
         assert!(template.validate().is_err());
