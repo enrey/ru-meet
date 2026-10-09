@@ -101,9 +101,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
-      - name: install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      # Pinned: every rustc release invalidates the whole Rust cache (its key
+      # includes the compiler version), and stable moves every six weeks.
+      # Bump deliberately.
+      - name: install Rust
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.99.0"
           # Only aarch64-apple-darwin for Apple Silicon (no Intel support)
           targets: ${{ contains(inputs.platform, 'macos') && 'aarch64-apple-darwin' || '' }}
 
@@ -560,9 +564,36 @@ jobs:
 
           echo "features=$FEATURES" >> "$GITHUB_OUTPUT"
 
+      # llama-helper changes rarely, but building it (llama.cpp with Vulkan
+      # shaders) takes ~6 minutes on Windows. The key covers its sources and
+      # its resolved dependency tree, not the whole Cargo.lock, so an app-only
+      # change (even a version bump) does not rebuild it.
+      - name: llama-helper cache key
+        id: llama-helper-key
+        shell: bash
+        run: |
+          case "${{ inputs.platform }}" in
+            *windows*) FEATURES="--features vulkan" ;;
+            *macos*) FEATURES="--features metal" ;;
+            *) FEATURES="" ;;
+          esac
+          TREE=$(cargo tree --locked -p llama-helper $FEATURES -e normal,build --prefix none -f '{p} {f}' | sort -u | sha256sum | cut -c1-16)
+          echo "key=${{ runner.os }}-${{ inputs.target }}-llama-helper-v1-${TREE}-${{ hashFiles('llama-helper/**', '.github/force-portable-ggml.cmake') }}-$(echo "$RUSTFLAGS" | sha256sum | cut -c1-8)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore llama-helper sidecar
+        id: llama-helper-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: frontend/src-tauri/binaries/llama-helper-*
+          key: ${{ steps.llama-helper-key.outputs.key }}
+
       - name: Build llama-helper sidecar (Windows)
-        if: contains(inputs.platform, 'windows')
+        id: llama-helper-windows
+        if: contains(inputs.platform, 'windows') && steps.llama-helper-cache.outputs.cache-hit != 'true'
         shell: pwsh
+        env:
+          # Temporary: why cached crates are rebuilt.
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         run: |
           # Try Vulkan first for GPU-accelerated local summarization.
           # Note: llama-cpp-sys-2's CMake build hits an intermittent race in the
@@ -591,6 +622,8 @@ jobs:
             Write-Warning "Vulkan build attempt $i failed; see the compiler/CMake error above."
           }
 
+          "gpu=$($vulkanOk.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
           if (-not $vulkanOk) {
             Write-Warning "Vulkan build failed after 3 attempts, falling back to CPU-only llama-helper"
             cargo build --locked --release -p llama-helper
@@ -609,7 +642,7 @@ jobs:
           Get-ChildItem "frontend/src-tauri/binaries/"
 
       - name: Build llama-helper sidecar (macOS/Linux)
-        if: "!contains(inputs.platform, 'windows')"
+        if: "!contains(inputs.platform, 'windows') && steps.llama-helper-cache.outputs.cache-hit != 'true'"
         shell: bash
         run: |
           echo "Building llama-helper sidecar..."
@@ -639,6 +672,17 @@ jobs:
           echo "Copied llama-helper to frontend/src-tauri/binaries/llama-helper-${TARGET}"
           ls -la frontend/src-tauri/binaries/
 
+      # Saved only after a real build, and on Windows only a GPU one: a
+      # CPU-only fallback must not be reused by later releases.
+      - name: Save llama-helper sidecar
+        if: >-
+          steps.llama-helper-cache.outputs.cache-hit != 'true'
+          && (!contains(inputs.platform, 'windows') || steps.llama-helper-windows.outputs.gpu == 'true')
+        uses: actions/cache/save@v6
+        with:
+          path: frontend/src-tauri/binaries/llama-helper-*
+          key: ${{ steps.llama-helper-key.outputs.key }}
+
       - name: Cache FFmpeg binary
         uses: actions/cache@v6
         with:
@@ -656,6 +700,8 @@ jobs:
         id: tauri-build
         uses: tauri-apps/tauri-action@v0
         env:
+          # Temporary: why cached crates are rebuilt.
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Apple signing vars (APPLE_ID, APPLE_CERTIFICATE, APPLE_SIGNING_IDENTITY, etc.)
           # are intentionally NOT set here. They're exported to $GITHUB_ENV by the
