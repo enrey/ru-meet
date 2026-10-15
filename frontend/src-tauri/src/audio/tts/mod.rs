@@ -21,7 +21,8 @@ pub use commands::{
     tts_get_status, tts_set_settings,
 };
 pub use summary_audio::{
+    __cmd__tts_cancel_summary_audio, __tauri_command_name_tts_cancel_summary_audio,
     __cmd__tts_prepare_summary_audio, __cmd__tts_summary_audio,
     __tauri_command_name_tts_prepare_summary_audio, __tauri_command_name_tts_summary_audio,
-    prepare_if_automatic, tts_prepare_summary_audio, tts_summary_audio,
+    prepare_if_automatic, tts_cancel_summary_audio, tts_prepare_summary_audio, tts_summary_audio,
 };

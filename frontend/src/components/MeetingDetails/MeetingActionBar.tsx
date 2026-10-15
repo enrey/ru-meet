@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import {
@@ -20,7 +20,7 @@ import {
   UsersRound,
   Volume2,
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -47,8 +47,15 @@ import { ConfirmationModal } from '@/components/ConfirmationModel/confirmation-m
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { DiarizationProgress } from './DiarizationProgress';
 import { RetranscribeDialog } from './RetranscribeDialog';
+import { useProcessRecording, type ProcessingStep } from '@/hooks/meeting-details/useProcessRecording';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
+
+const STEP_LABELS: Record<ProcessingStep, string> = {
+  speakers: 'Identifying speakers…',
+  summary: 'Creating the summary…',
+  speech: 'Preparing the reading…',
+};
 
 interface MeetingActionBarProps {
   meetingId: string;
@@ -151,6 +158,21 @@ export function MeetingActionBar({
   const [isDiarizing, setIsDiarizing] = useState(false);
   const [isCancellingDiarization, setIsCancellingDiarization] = useState(false);
   const [showRetranscribeDialog, setShowRetranscribeDialog] = useState(false);
+  const processing = useProcessRecording({ meetingId, meetingFolderPath, isDiarizing, summaryStatus, onGenerateSummary, customPrompt });
+
+  // "Process" in the library opens the meeting with ?process=1: run it once
+  // the model configuration is known, then drop the flag from the address.
+  const searchParams = useSearchParams();
+  const processRequested = searchParams.get('process') === '1';
+  const processStarted = useRef(false);
+  useEffect(() => {
+    if (!processRequested || processStarted.current || isModelConfigLoading) return;
+    processStarted.current = true;
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete('process');
+    router.replace(`/meeting-details?${next.toString()}`);
+    void processing.process();
+  }, [processRequested, isModelConfigLoading, processing, router, searchParams]);
 
   const handleDiarize = useCallback(async () => {
     if (!meetingFolderPath) return;
@@ -164,6 +186,22 @@ export function MeetingActionBar({
       setIsStartingDiarization(false);
     }
   }, [meetingId, meetingFolderPath, t]);
+
+  const [isCancellingSpeech, setIsCancellingSpeech] = useState(false);
+  const isPreparingSpeech = processing.speechRunning;
+  useEffect(() => {
+    if (!isPreparingSpeech) setIsCancellingSpeech(false);
+  }, [isPreparingSpeech]);
+
+  const handleStopSpeech = useCallback(async () => {
+    setIsCancellingSpeech(true);
+    try {
+      await invoke('tts_cancel_summary_audio', { meetingId });
+    } catch (error) {
+      toast.error(t('Could not stop reading the summary aloud'), { description: String(error) });
+      setIsCancellingSpeech(false);
+    }
+  }, [meetingId, t]);
 
   const handleStopDiarization = useCallback(async () => {
     setIsCancellingDiarization(true);
@@ -211,6 +249,19 @@ export function MeetingActionBar({
         </Button>
       )}
 
+      {isPreparingSpeech && (
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={handleStopSpeech}
+          disabled={isCancellingSpeech}
+          title={t('Stop reading the summary aloud')}
+        >
+          <Square />
+          <span className="hidden @[60rem]:inline">{isCancellingSpeech ? t('Stopping…') : t('Stop')}</span>
+        </Button>
+      )}
+
       {hasSummary && (isSummaryDirty || isSaving) && (
         <Button
           variant="outline"
@@ -240,14 +291,14 @@ export function MeetingActionBar({
         <Button
           size="sm"
           className="bg-indigo-600 text-white hover:bg-indigo-700"
-          onClick={() => void onGenerateSummary(customPrompt)}
-          disabled={isModelConfigLoading}
+          onClick={() => void processing.process()}
+          disabled={isModelConfigLoading || processing.step !== null}
           title={isModelConfigLoading
             ? t('Loading model configuration...')
-            : hasSummary ? t('Regenerate AI Summary') : t('Generate AI Summary')}
+            : t('Identify speakers, create the summary and read it aloud - whatever this recording is missing')}
         >
-          {isModelConfigLoading ? <Loader2 className="animate-spin" /> : <Sparkles />}
-          <span className="hidden @[40rem]:inline">{hasSummary ? t('Regenerate Summary') : t('Generate Summary')}</span>
+          {isModelConfigLoading || processing.step ? <Loader2 className="animate-spin" /> : <Sparkles />}
+          <span className="hidden @[40rem]:inline">{processing.step ? t(STEP_LABELS[processing.step]) : t('Process recording')}</span>
         </Button>
       ))}
 
@@ -262,8 +313,17 @@ export function MeetingActionBar({
             </DropdownMenuTrigger>
           </PopoverAnchor>
           <DropdownMenuContent align="end" className="w-64">
+            {hasTranscripts && (
+              <DropdownMenuItem
+                onSelect={() => void onGenerateSummary(customPrompt)}
+                disabled={isGenerating || isModelConfigLoading || processing.step !== null}
+              >
+                <Sparkles className="h-4 w-4" />
+                {hasSummary ? t('Regenerate Summary') : t('Generate Summary')}
+              </DropdownMenuItem>
+            )}
             {hasFolder && !isDiarizing && (
-              <DropdownMenuItem onSelect={() => void handleDiarize()} disabled={isStartingDiarization}>
+              <DropdownMenuItem onSelect={() => void handleDiarize()} disabled={isStartingDiarization || processing.step !== null}>
                 <UsersRound className="h-4 w-4" />
                 {t('Identify speakers')}
               </DropdownMenuItem>
@@ -274,7 +334,7 @@ export function MeetingActionBar({
                 {t('Read the summary aloud')}
               </DropdownMenuItem>
             )}
-            {((hasFolder && !isDiarizing) || (hasSummary && onListenSummary)) && <DropdownMenuSeparator />}
+            {(hasTranscripts || (hasFolder && !isDiarizing) || (hasSummary && onListenSummary)) && <DropdownMenuSeparator />}
             <DropdownMenuItem onSelect={onCopyTranscript} disabled={!hasTranscripts}>
               <Copy className="h-4 w-4" />
               {t('Copy Transcript')}

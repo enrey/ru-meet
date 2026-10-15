@@ -74,6 +74,10 @@ export function useSummaryAudio(meetingId: string, summaryKey: string): SummaryA
       listen<MeetingEvent>('summary-audio-failed', ({ payload }) => {
         if (mine(payload)) setStatus({ state: 'failed', message: payload.message ?? '' });
       }),
+      // Stopped from the meeting bar or the processing pipeline.
+      listen<MeetingEvent>('summary-audio-cancelled', ({ payload }) => {
+        if (mine(payload)) refresh();
+      }),
     ];
     return () => {
       subscriptions.forEach((subscription) => {

@@ -725,6 +725,7 @@ pub fn run() {
             audio::tts::tts_get_status,
             audio::tts::tts_set_settings,
             audio::tts::tts_download_model,
+            audio::tts::tts_cancel_summary_audio,
             audio::vad::vad_model_status,
             audio::vad::download_vad_model,
             // Audio recovery commands (for transcript recovery feature)

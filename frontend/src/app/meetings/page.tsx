@@ -24,7 +24,7 @@ const FILTERS: { value: SummaryFilter; label: string }[] = [
 
 const SEARCH_DEBOUNCE_MS = 250;
 const RUNNING_REFRESH_MS = 3000;
-const ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_130px_120px_90px_130px_76px] items-center gap-4 px-5';
+const ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_130px_120px_90px_130px_108px] items-center gap-4 px-5';
 
 /** Row icon tint follows the summary state, so the list also scans by colour. */
 function rowIconClass(meeting: MeetingListItem): string {
@@ -67,6 +67,10 @@ function groupByDate(meetings: MeetingListItem[], t: TranslateFn, now = new Date
     else groups.push({ label, meetings: [meeting] });
   }
   return groups;
+}
+
+function isProcessing(meeting: MeetingListItem): boolean {
+  return Object.values(meeting.stages ?? {}).some((stage) => stage.state === 'running');
 }
 
 function formatDuration(seconds: number | null, t: TranslateFn): string {
@@ -219,11 +223,12 @@ export default function MeetingsLibraryPage() {
   const timeFormat = useMemo(() => new Intl.DateTimeFormat(getIntlLocale(), { hour: '2-digit', minute: '2-digit' }), []);
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(getIntlLocale(), { day: 'numeric', month: 'short', weekday: 'short' }), []);
 
-  const openMeeting = useCallback((meeting: MeetingListItem) => {
+  /** `process` opens the meeting and runs its missing steps there. */
+  const openMeeting = useCallback((meeting: MeetingListItem, process = false) => {
     setCurrentMeeting({ id: meeting.id, title: meeting.title });
     // A transcript match opens the meeting searched for the same text.
     const search = matchContexts.has(meeting.id) ? `&q=${encodeURIComponent(trimmedQuery)}` : '';
-    router.push(`/meeting-details?id=${meeting.id}${search}`);
+    router.push(`/meeting-details?id=${meeting.id}${search}${process ? '&process=1' : ''}`);
   }, [router, setCurrentMeeting, matchContexts, trimmedQuery]);
 
   const handleDelete = async (meetingId: string) => {
@@ -423,6 +428,21 @@ export default function MeetingsLibraryPage() {
                         <StageIcons meeting={meeting} t={t} />
                       </div>
                       <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                        {meeting.stages?.transcript?.state === 'done' && (
+                          <button
+                            type="button"
+                            aria-label={t('Process recording')}
+                            title={isProcessing(meeting) ? t('The recording is being processed') : t('Process recording: run the steps it is missing')}
+                            disabled={isProcessing(meeting)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openMeeting(meeting, true);
+                            }}
+                            className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:text-slate-500"
+                          >
+                            <Sparkles className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                         <button
                           type="button"
                           aria-label={t('Rename')}

@@ -335,6 +335,26 @@ pub fn tts_prepare_summary_audio<R: Runtime>(
     Ok(())
 }
 
+/// Stop preparing a meeting's reading. The job notices at its next sentence,
+/// so the current `llama-tts` run finishes first; sentences already made stay
+/// cached for the next attempt. Reports `summary-audio-cancelled`.
+#[tauri::command]
+pub fn tts_cancel_summary_audio<R: Runtime>(app: AppHandle<R>, meeting_id: String) -> Result<(), String> {
+    {
+        let mut jobs = JOBS.lock().map_err(|_| "The speech job lock is unavailable")?;
+        if !matches!(jobs.get(&meeting_id), Some(Job::Running { .. })) {
+            return Err("The summary is not being read aloud".to_string());
+        }
+        jobs.remove(&meeting_id);
+    }
+    log::info!("Summary reading for {meeting_id} cancelled");
+    let _ = app.emit(
+        "summary-audio-cancelled",
+        serde_json::json!({ "meetingId": meeting_id }),
+    );
+    Ok(())
+}
+
 /// After a summary is generated or saved: prepare its reading right away when
 /// the user asked for that.
 pub fn prepare_if_automatic<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) {
@@ -447,6 +467,10 @@ fn build<R: Runtime>(
             synthesized += 1;
         }
         sentences.push(path);
+        // Cancelled or superseded while this sentence was synthesized.
+        if !is_current(meeting_id, generation) {
+            return Ok(false);
+        }
         set_progress(meeting_id, generation, index + 1, total);
         let _ = app.emit(
             "summary-audio-progress",
