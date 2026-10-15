@@ -192,7 +192,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         });
         unsubscribers.push(unlistenStopped);
 
-        const unlistenDiscarded = await listen('recording-discarded', () => {
+        const unlistenDiscarded = await listen<{ reason?: string }>('recording-discarded', ({ payload }) => {
           setState(previous => ({
             ...previous,
             status: RecordingStatus.IDLE,
@@ -204,9 +204,12 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
             activeDuration: null,
           }));
           stopPolling();
-          toast.info(translate('Automatic meeting was shorter than 1 minute — the recording was not saved.'));
+          toast.info(payload?.reason === 'no_speech'
+            ? translate('Automatic recording had almost no speech — it was not saved.')
+            : translate('Automatic meeting was shorter than 1 minute — the recording was not saved.'));
         });
         unsubscribers.push(unlistenDiscarded);
+
 
         const unlistenAutomaticError = await listen<string>('automatic-recording-error', async ({ payload }) => {
           try {

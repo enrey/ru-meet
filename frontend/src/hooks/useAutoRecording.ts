@@ -9,8 +9,14 @@ import { useI18n } from '@/lib/i18n';
 interface AutomationPreferences {
   autoRecordMeetings: boolean;
   autoRecordSupported: boolean;
-  /** After a manual stop the detector waits for 5 s of silence before listening again. */
-  pausedAfterManualStop: boolean;
+  /** After a manual stop, a manual recording or a backstop the detector waits until the call app releases the microphone. */
+  pausedUntilCallEnds: boolean;
+  /** Listing the apps that use the microphone fails right now. */
+  detectionFailed: boolean;
+  /** Any app using the microphone counts as a call. */
+  recordAnyApp: boolean;
+  /** Also starts on confirmed speech without a call. */
+  recordInPerson: boolean;
 }
 
 export function useAutoRecording() {

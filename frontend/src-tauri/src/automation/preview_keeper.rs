@@ -1,4 +1,5 @@
-//! Keeps the speech-detection preview running while automatic recording is on.
+//! Keeps the speech-detection preview running while the in-person mode of
+//! automatic recording is on (ADR 0004).
 //!
 //! The preview (level monitor + Silero VAD) used to exist only while the
 //! "capture signal" panel was mounted on the home page, so automatic recording
@@ -114,6 +115,13 @@ async fn preview_devices<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
     let system = preferred(|p| p.preferred_system_device.as_ref())
         .or_else(|| default_output_device().ok().map(|device| device.name));
 
+    // macOS captures system audio through a process tap, not through CPAL,
+    // so the in-person preview listens to the microphone only.
+    #[cfg(target_os = "macos")]
+    let system: Option<String> = {
+        let _ = system;
+        None
+    };
     // A source switched off in the capture panel is not opened at all.
     let mutes = crate::audio::recording_sources::current();
     microphone

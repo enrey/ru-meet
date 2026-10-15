@@ -939,6 +939,12 @@ impl AudioPipeline {
                             // STEP 3: Send mixed audio for transcription (VAD + Whisper)
                             match self.vad_processor.process_audio(&mixed_with_gain) {
                                 Ok(speech_segments) => {
+                                    crate::automation::recording_speech::note(
+                                        std::time::Duration::from_secs_f64(
+                                            mixed_with_gain.len() as f64 / self.sample_rate as f64,
+                                        ),
+                                        self.vad_processor.in_speech() || !speech_segments.is_empty(),
+                                    );
                                     for segment in speech_segments {
                                         let duration_ms =
                                             segment.end_timestamp_ms - segment.start_timestamp_ms;

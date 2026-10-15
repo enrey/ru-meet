@@ -26,11 +26,12 @@ export function RecordingActivityBar() {
   const enabled = preferences?.autoRecordSupported && preferences.autoRecordMeetings;
   const noSources = sourceMutes?.microphone === true && sourceMutes.system === true;
   const listening = enabled && !noSources;
-  const autoLabel = !sourceMutes ? t('Automatic recording')
-    : noSources ? t('Automatic recording (disabled, no sources)')
-    : !sourceMutes.microphone && !sourceMutes.system ? t('Automatic recording (microphone + system)')
-    : !sourceMutes.microphone ? t('Automatic recording (microphone)')
-    : t('Automatic recording (system)');
+  // Nothing is listened to while waiting, so the sources describe what will be recorded.
+  const autoLabel = noSources ? t('Automatic recording (disabled, no sources)') : t('Automatic recording');
+  const autoSources = !sourceMutes || noSources ? null
+    : !sourceMutes.microphone && !sourceMutes.system ? t('will record microphone and system')
+    : !sourceMutes.microphone ? t('will record microphone')
+    : t('will record system');
   const recordingLabel = !sourceMutes ? t('Recording in progress')
     : noSources ? t('Recording in progress (no sources)')
     : !sourceMutes.microphone && !sourceMutes.system ? t('Recording in progress (microphone + system)')
@@ -72,6 +73,7 @@ export function RecordingActivityBar() {
     }
   };
 
+  const withSources = (text: string) => autoSources ? `${text} · ${autoSources}` : text;
   const label = busy
     ? (state.isStartingRecording ? t('Starting recording...') : state.isSaving ? t('Saving transcript...') : t('Processing recording...'))
     : recording ? (state.isPaused ? t('Recording paused') : recordingLabel)
@@ -79,8 +81,12 @@ export function RecordingActivityBar() {
   const autoDescription = error ? t('Could not load automatic recording status')
     : !preferences ? t('Loading...')
     : !preferences.autoRecordSupported ? t('Automatic recording is unavailable on this platform')
-    : listening ? (preferences.pausedAfterManualStop ? t('Paused after manual stop (the sound detector restarts only after 5 seconds of silence)') : t('Waiting for sound'))
-    : t('Off');
+    : !listening ? t('Off')
+    : preferences.detectionFailed ? t('Cannot detect calls right now')
+    : preferences.pausedUntilCallEnds ? t('Paused until the call ends')
+    : withSources(preferences.recordAnyApp
+      ? (preferences.recordInPerson ? t('Waiting for an app to use the microphone or for speech') : t('Waiting for an app to use the microphone'))
+      : (preferences.recordInPerson ? t('Waiting for a call or speech') : t('Waiting for a call')));
 
   const tone = recording ? (state.isPaused ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600')
     : busy ? 'bg-indigo-50 text-indigo-700'

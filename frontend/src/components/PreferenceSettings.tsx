@@ -16,6 +16,59 @@ interface AutomationPreferences {
   launchAtLogin: boolean;
   autoRecordSupported: boolean;
   excludedApps: string[];
+  callApps: string[];
+  recordAnyApp: boolean;
+  recordInPerson: boolean;
+  micHolders: { name: string; call: boolean }[];
+}
+
+type AppListKind = 'excludedApps' | 'callApps';
+type AutomationToggle = 'autoRecordMeetings' | 'launchAtLogin' | 'recordAnyApp' | 'recordInPerson';
+
+const IS_MAC = typeof navigator !== 'undefined' && navigator.userAgent.includes('Mac');
+
+function AppListEditor({ id, label, help, placeholder, apps, disabled, onSave }: {
+  id: string;
+  label: string;
+  help: string;
+  placeholder: string;
+  apps: string[];
+  disabled: boolean;
+  onSave: (apps: string[]) => Promise<boolean>;
+}) {
+  const { t } = useI18n();
+  const [input, setInput] = useState('');
+  return (
+    <div className="space-y-3">
+      <label htmlFor={id} className="block text-sm font-medium text-slate-900">{label}</label>
+      <p id={`${id}-help`} className="text-sm text-slate-600">{help}</p>
+      <form className="flex gap-2" onSubmit={async event => {
+        event.preventDefault();
+        if (input.trim() && await onSave([...apps, input])) setInput('');
+      }}>
+        <input
+          id={id}
+          aria-describedby={`${id}-help`}
+          value={input}
+          onChange={event => setInput(event.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+          className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 disabled:opacity-50"
+        />
+        <button type="submit" disabled={disabled || !input.trim()} className="rounded-md border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-600">{t('Add')}</button>
+      </form>
+      {!!apps.length && (
+        <ul className="space-y-2">
+          {apps.map(name => (
+            <li key={name} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
+              <span className="text-sm break-all">{name}</span>
+              <button type="button" aria-label={t('Remove {name} from the list', { name })} disabled={disabled} onClick={() => void onSave(apps.filter(app => app !== name))} className="text-sm text-slate-600 hover:text-slate-900 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-600">{t('Remove')}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 export function PreferenceSettings() {
@@ -34,17 +87,17 @@ export function PreferenceSettings() {
   const [automation, setAutomation] = useState<AutomationPreferences | null>(null);
   const [automationError, setAutomationError] = useState(false);
   const [savingAutomation, setSavingAutomation] = useState(false);
-  const [excludedAppInput, setExcludedAppInput] = useState('');
-
-  const saveExcludedApps = async (apps: string[]) => {
-    if (!automation || savingAutomation) return;
+  const saveAppList = async (kind: AppListKind, apps: string[]) => {
+    if (!automation || savingAutomation) return false;
     setSavingAutomation(true);
     try {
-      const excludedApps = await invoke<string[]>('set_auto_record_excluded_apps', { apps });
-      setAutomation(previous => previous && { ...previous, excludedApps });
-      setExcludedAppInput('');
+      const command = kind === 'excludedApps' ? 'set_auto_record_excluded_apps' : 'set_auto_record_call_apps';
+      const saved = await invoke<string[]>(command, { apps });
+      setAutomation(previous => previous && { ...previous, [kind]: saved });
+      return true;
     } catch (error) {
-      toast.error(t('Could not save exclusions'), { description: String(error) });
+      toast.error(t('Could not save the app list'), { description: String(error) });
+      return false;
     } finally {
       setSavingAutomation(false);
     }
@@ -70,13 +123,16 @@ export function PreferenceSettings() {
     return () => { cancelled = true; unlisten?.(); };
   }, []);
 
-  const updateAutomation = async (key: 'autoRecordMeetings' | 'launchAtLogin', enabled: boolean) => {
+  const updateAutomation = async (key: AutomationToggle, enabled: boolean) => {
     if (!automation || savingAutomation) return;
     setSavingAutomation(true);
     try {
       if (key === 'autoRecordMeetings') {
         await invoke('set_auto_record_meetings', { enabled });
         setAutomation(previous => previous && { ...previous, autoRecordMeetings: enabled });
+      } else if (key === 'recordAnyApp' || key === 'recordInPerson') {
+        await invoke('set_auto_record_option', { option: key === 'recordAnyApp' ? 'anyApp' : 'inPerson', enabled });
+        setAutomation(previous => previous && { ...previous, [key]: enabled });
       } else {
         const actual = await invoke<boolean>('set_launch_at_login', { enabled });
         setAutomation(previous => previous && { ...previous, launchAtLogin: actual });
@@ -218,10 +274,10 @@ export function PreferenceSettings() {
           <div>
             <h3 id="auto-record-label" className="text-lg font-semibold text-slate-900 mb-2">{t('Record meetings automatically')}</h3>
             <p id="auto-record-description" className="text-sm text-slate-600">
-              {t('Start recording automatically after speech is confirmed on the selected microphone or in audio from an app other than the exclusions. Non-speech sounds do not trigger recording. Meetings shorter than 1 minute are ignored.')}
+              {t('Recording starts when a call app (Zoom, Teams, Telegram, a browser with Meet or Telemost, and others) starts using the microphone, and ends a little after it releases the microphone. Being muted in the call does not stop the recording. Ru-Meet does not listen to the microphone before the call. Recordings shorter than 1 minute or with almost no speech are not saved.')}
             </p>
             {automation && !automation.autoRecordSupported && (
-              <p className="mt-2 text-sm text-slate-600">{t('Meeting detection is currently available only on Windows.')}</p>
+              <p className="mt-2 text-sm text-slate-600">{IS_MAC ? t('Meeting detection requires macOS 14.4 or later.') : t('Meeting detection is not available on this platform.')}</p>
             )}
           </div>
           <Switch
@@ -233,36 +289,66 @@ export function PreferenceSettings() {
             className="shrink-0"
           />
         </div>
-        <div className="space-y-3">
-          <label htmlFor="auto-record-exclusion" className="block text-sm font-medium text-slate-900">{t('Excluded apps')}</label>
-          <p id="auto-record-exclusion-help" className="text-sm text-slate-600">
-            {t('Audio from these apps never starts a recording. Enter the .exe name, for example Spotify.exe. Ru-Meet audio is always excluded. Exclusions do not remove audio from a recording already in progress.')}
+        {automation?.autoRecordSupported && (
+          <p className="text-sm text-slate-600" role="status">
+            {automation.micHolders.length
+              ? t('Using the microphone now: {apps}', {
+                  apps: automation.micHolders.map(holder => holder.call ? `${holder.name} (${t('call')})` : holder.name).join(', '),
+                })
+              : t('No app is using the microphone now.')}
           </p>
-          <form className="flex gap-2" onSubmit={event => {
-            event.preventDefault();
-            if (automation && excludedAppInput.trim()) void saveExcludedApps([...automation.excludedApps, excludedAppInput]);
-          }}>
-            <input
-              id="auto-record-exclusion"
-              aria-describedby="auto-record-exclusion-help"
-              value={excludedAppInput}
-              onChange={event => setExcludedAppInput(event.target.value)}
-              placeholder="Spotify.exe"
-              disabled={!automation?.autoRecordSupported || savingAutomation}
-              className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 disabled:opacity-50"
-            />
-            <button type="submit" disabled={!automation?.autoRecordSupported || savingAutomation || !excludedAppInput.trim()} className="rounded-md border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-600">{t('Add')}</button>
-          </form>
-          {!!automation?.excludedApps.length && (
-            <ul className="space-y-2">
-              {automation.excludedApps.map(name => (
-                <li key={name} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
-                  <span className="text-sm break-all">{name}</span>
-                  <button type="button" aria-label={t('Remove {name} from exclusions', { name })} disabled={savingAutomation} onClick={() => void saveExcludedApps(automation.excludedApps.filter(app => app !== name))} className="text-sm text-slate-600 hover:text-slate-900 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-indigo-600">{t('Remove')}</button>
-                </li>
-              ))}
-            </ul>
-          )}
+        )}
+        <AppListEditor
+          id="auto-record-call-apps"
+          label={t('Additional call apps')}
+          help={IS_MAC
+            ? t('If your call app is not recognised, add its bundle id, for example com.example.calls. The apps using the microphone are listed above.')
+            : t('If your call app is not recognised, add its .exe name, for example Calls.exe. The apps using the microphone are listed above.')}
+          placeholder={IS_MAC ? 'com.example.calls' : 'Calls.exe'}
+          apps={automation?.callApps ?? []}
+          disabled={!automation?.autoRecordSupported || savingAutomation}
+          onSave={apps => saveAppList('callApps', apps)}
+        />
+        <AppListEditor
+          id="auto-record-exclusion"
+          label={t('Excluded apps')}
+          help={IS_MAC
+            ? t('These apps never start a recording. Enter the bundle id, for example com.spotify.client. Exclusions do not remove audio from a recording already in progress.')
+            : t('These apps never start a recording. Enter the .exe name, for example Spotify.exe. Exclusions do not remove audio from a recording already in progress.')}
+          placeholder={IS_MAC ? 'com.spotify.client' : 'Spotify.exe'}
+          apps={automation?.excludedApps ?? []}
+          disabled={!automation?.autoRecordSupported || savingAutomation}
+          onSave={apps => saveAppList('excludedApps', apps)}
+        />
+        <div className="flex items-center justify-between gap-6">
+          <div>
+            <h4 id="auto-record-any-app-label" className="text-sm font-medium text-slate-900">{t('Record any app that uses the microphone')}</h4>
+            <p className="text-sm text-slate-600">{t('Count every app as a call app, not only the known ones. Dictation, audio utilities and excluded apps still do not count. Expect recordings you did not intend.')}</p>
+          </div>
+          <Switch
+            aria-labelledby="auto-record-any-app-label"
+            checked={automation?.recordAnyApp ?? false}
+            disabled={!automation?.autoRecordSupported || savingAutomation}
+            onCheckedChange={enabled => void updateAutomation('recordAnyApp', enabled)}
+            className="shrink-0"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-6">
+          <div>
+            <h4 id="auto-record-in-person-label" className="text-sm font-medium text-slate-900">{IS_MAC ? t('Activate on microphone sound (legacy method)') : t('Activate on any sound in the system (legacy method)')}</h4>
+            <p className="text-sm text-slate-600">
+              {IS_MAC
+                ? t('Start recording on confirmed speech in the microphone even without a call. The microphone stays open all the time while this is on.')
+                : t('Start recording on confirmed speech in the microphone or in audio played by an app, even without a call. The microphone stays open all the time while this is on.')}
+            </p>
+          </div>
+          <Switch
+            aria-labelledby="auto-record-in-person-label"
+            checked={automation?.recordInPerson ?? false}
+            disabled={!automation?.autoRecordSupported || savingAutomation}
+            onCheckedChange={enabled => void updateAutomation('recordInPerson', enabled)}
+            className="shrink-0"
+          />
         </div>
         <div className="flex items-center justify-between gap-6 border-t border-slate-200 pt-6">
           <div>

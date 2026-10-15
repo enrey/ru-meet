@@ -119,6 +119,7 @@ impl RecordingSession {
 
         let generation = self.begin_start()?;
         self.lock().automatic = automatic;
+        crate::automation::recording_speech::reset();
         let _start_guard = StartGuard(self, generation);
         if let Err(error) = crate::ensure_onnx_runtime_available() {
             return Err(recording_commands::map_recording_start_error(
@@ -249,7 +250,7 @@ impl RecordingSession {
         generation: u64,
         detected_duration: f64,
     ) -> Result<Option<FinalizedRecording>, String> {
-        let resources = self.begin_stop_matching(Some(generation))?;
+        let resources = self.begin_stop_matching(Some((generation, true)))?;
         match resources {
             Some(resources) => {
                 self.finalize_stop(app, resources, Some(detected_duration))
@@ -285,10 +286,12 @@ impl RecordingSession {
         }
         recording_commands::unload_transcription_engine(&app).await;
 
-        if should_ignore_recording(
+        if let Some(reason) = discard_reason(
             resources.automatic,
             detected_duration.unwrap_or(resources.duration),
+            crate::automation::recording_speech::snapshot(),
         ) {
+            info!("Discarding automatic recording: {reason}");
             resources
                 .manager
                 .discard_recording()
@@ -296,7 +299,7 @@ impl RecordingSession {
                 .map_err(|e| e.to_string())?;
             let _ = app.emit(
                 "recording-discarded",
-                serde_json::json!({"reason": "short_automatic_meeting"}),
+                serde_json::json!({"reason": reason}),
             );
             crate::tray::update_tray_menu(&app);
             return Ok(None);
@@ -430,14 +433,16 @@ impl RecordingSession {
         self.begin_stop_matching(None)
     }
 
+    /// `expected` is the generation and automatic flag the caller owns; a
+    /// mismatch means another recording replaced it and nothing is stopped.
     fn begin_stop_matching(
         &self,
-        automatic_generation: Option<u64>,
+        expected: Option<(u64, bool)>,
     ) -> Result<Option<StopResources>, String> {
         let mut data = self.lock();
-        if automatic_generation
-            .is_some_and(|generation| generation != data.generation || !data.automatic)
-        {
+        if expected.is_some_and(|(generation, automatic)| {
+            generation != data.generation || automatic != data.automatic
+        }) {
             return Ok(None);
         }
         match data.phase {
@@ -562,20 +567,56 @@ impl RecordingSession {
 
 pub static RECORDING_SESSION: LazyLock<RecordingSession> = LazyLock::new(RecordingSession::new);
 
-fn should_ignore_recording(automatic: bool, duration: f64) -> bool {
-    automatic && duration < 60.0
+/// An automatic recording with less speech than this was never a meeting:
+/// a microphone check, a call nobody joined (ADR 0004).
+const MIN_AUTOMATIC_SPEECH: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Why an automatic recording is thrown away instead of saved, if it is.
+fn discard_reason(
+    automatic: bool,
+    duration: f64,
+    speech: crate::automation::recording_speech::RecordingSpeech,
+) -> Option<&'static str> {
+    if !automatic {
+        None
+    } else if duration < 60.0 {
+        Some("short_automatic_meeting")
+    } else if speech.measured && speech.total < MIN_AUTOMATIC_SPEECH {
+        Some("no_speech")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::automation::recording_speech::RecordingSpeech;
+    use std::time::Duration;
+
+    fn speech(measured: bool, seconds: u64) -> RecordingSpeech {
+        RecordingSpeech {
+            measured,
+            total: Duration::from_secs(seconds),
+            last_speech: None,
+        }
+    }
 
     #[test]
     fn one_minute_threshold_only_applies_to_automatic_recordings() {
-        assert!(should_ignore_recording(true, 59.999));
-        assert!(!should_ignore_recording(true, 60.0));
-        assert!(!should_ignore_recording(true, 61.0));
-        assert!(!should_ignore_recording(false, 0.5));
+        assert_eq!(discard_reason(true, 59.999, speech(true, 60)), Some("short_automatic_meeting"));
+        assert_eq!(discard_reason(true, 60.0, speech(true, 60)), None);
+        assert_eq!(discard_reason(true, 61.0, speech(true, 60)), None);
+        assert_eq!(discard_reason(false, 0.5, speech(true, 0)), None);
+    }
+
+    #[test]
+    fn automatic_recordings_without_speech_are_discarded() {
+        assert_eq!(discard_reason(true, 600.0, speech(true, 9)), Some("no_speech"));
+        assert_eq!(discard_reason(true, 600.0, speech(true, 10)), None);
+        // A VAD that judged nothing is no evidence of silence.
+        assert_eq!(discard_reason(true, 600.0, speech(false, 0)), None);
+        assert_eq!(discard_reason(false, 600.0, speech(true, 0)), None);
     }
 
     #[test]
@@ -583,15 +624,16 @@ mod tests {
         let session = RecordingSession::new();
         let generation = session.begin_start().unwrap();
         assert!(session
-            .begin_stop_matching(Some(generation))
+            .begin_stop_matching(Some((generation, true)))
             .unwrap()
             .is_none());
         assert!(session
-            .begin_stop_matching(Some(generation.wrapping_sub(1)))
+            .begin_stop_matching(Some((generation.wrapping_sub(1), true)))
             .unwrap()
             .is_none());
         assert_eq!(session.phase(), SessionPhase::Starting);
     }
+
 
     #[test]
     fn rejects_concurrent_start_and_stale_abort() {

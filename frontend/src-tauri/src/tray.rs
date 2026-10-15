@@ -298,7 +298,7 @@ pub fn refresh_tray_indicator<R: Runtime>(app: &AppHandle<R>) {
     };
     let status = match indicator {
         TrayIndicator::Idle => None,
-        TrayIndicator::Listening => Some(tr("automatic recording is waiting for speech", "автозапись ждёт речь")),
+        TrayIndicator::Listening => Some(tr("automatic recording is waiting for a call", "автозапись ждёт звонка")),
         TrayIndicator::Recording => Some(tr("recording", "идёт запись")),
         TrayIndicator::Paused => Some(tr("recording paused", "запись на паузе")),
     };
