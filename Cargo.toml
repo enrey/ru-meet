@@ -28,6 +28,10 @@ cpal = { git = "https://github.com/RustAudio/cpal", rev = "51c3b43" }
 # ndarray-linalg-nalgebra` implements those three operations on nalgebra
 # instead, keeping the build pure Rust on both release targets.
 ndarray-linalg = { path = "crates/ndarray-linalg-nalgebra" }
+# speakrs on our fork: ORT sessions of its CPU mode get the platform
+# accelerator (DirectML / CoreML execution provider) and embeddings use more
+# than one thread - see ADR 0006 and the `ru-meet` branch.
+speakrs = { git = "https://github.com/enrey/speakrs", rev = "6093b4830bb222429ade28f34ed6da98d100cefd" }
 
 # Keep development builds compact and fast while retaining line information
 # for useful backtraces.

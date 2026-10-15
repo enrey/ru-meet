@@ -6247,8 +6247,7 @@ dependencies = [
 [[package]]
 name = "speakrs"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7ed3d9e4670beaa31736bc2baf3736aca4554920edeb6ed463c903da9df57ac"
+source = "git+https://github.com/enrey/speakrs?rev=6093b4830bb222429ade28f34ed6da98d100cefd#6093b4830bb222429ade28f34ed6da98d100cefd"
 dependencies = [
  "crossbeam-channel",
  "kodama",

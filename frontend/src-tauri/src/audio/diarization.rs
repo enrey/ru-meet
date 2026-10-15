@@ -1291,3 +1291,36 @@ mod collapse_tests {
         assert_eq!(speakers(&result), speakers(&turns));
     }
 }
+
+/// Timing of speakrs on a real recording, to compare execution providers:
+/// `SPEAKRS_BENCH_AUDIO=<file> SPEAKRS_BENCH_MINUTES=5 cargo test -p meetily
+/// --lib speakrs_benchmark -- --ignored --nocapture`. Uses the speakrs models
+/// already downloaded by the app.
+#[cfg(all(test, target_os = "windows"))]
+mod speakrs_benchmark {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn speakrs_benchmark() {
+        let runtime = concat!(env!("CARGO_MANIFEST_DIR"), "/binaries/onnxruntime/onnxruntime.dll");
+        ort::init_from(runtime).unwrap().with_telemetry(false).commit();
+        crate::record_onnx_runtime_success();
+
+        let audio = std::env::var("SPEAKRS_BENCH_AUDIO").expect("SPEAKRS_BENCH_AUDIO");
+        let minutes: usize = std::env::var("SPEAKRS_BENCH_MINUTES").map_or(5, |m| m.parse().unwrap());
+        let mut samples = decode_audio_file(std::path::Path::new(&audio)).unwrap().to_whisper_format();
+        samples.truncate(minutes * 60 * 16_000);
+
+        let started = Instant::now();
+        let turns = SpeakrsEngine.diarize(&samples).unwrap();
+        let elapsed = started.elapsed().as_secs_f64();
+        let audio_seconds = samples.len() as f64 / 16_000.0;
+        let speakers = turns.iter().map(|turn| &turn.speaker).collect::<HashSet<_>>().len();
+        println!(
+            "speakrs: {audio_seconds:.0}s of audio in {elapsed:.1}s ({:.1}x realtime), {} turns, {speakers} speakers",
+            audio_seconds / elapsed,
+            turns.len()
+        );
+    }
+}

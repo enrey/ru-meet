@@ -188,6 +188,10 @@ tauri-plugin-single-instance = "=2.4.4"
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2.11.5", features = ["devtools", "protocol-asset", "macos-private-api", "tray-icon"] }
 ort = { version = "2.0.0-rc.13", features = ["coreml"] }
+# speakrs on the GPU and Neural Engine through ORT's CoreML provider - our fork,
+# see `[patch.crates-io]` and ADR 0006. Not speakrs' native `coreml` mode,
+# which needs ~360 MB of precompiled models.
+speakrs = { version = "0.5.0", default-features = false, features = ["default-linalg", "coreml-ep"] }
 once_cell = "1.17.1"
 objc = "0.2.7"
 tauri-plugin-log = { version = "2.9.1", features = ["colored"] }
@@ -219,6 +223,9 @@ whisper-rs = { version = "0.13.2", features = ["raw-api"] }
 # actual active provider queried and reported - see "DirectML execution
 # provider" in CLAUDE.md); vad.rs and parakeet_engine still request CPU only.
 ort = { version = "2.0.0-rc.13", features = ["load-dynamic", "directml"] }
+# speakrs on the GPU through DirectML - our fork, see `[patch.crates-io]` and
+# ADR 0006; upstream speakrs offers only CUDA and MIGraphX.
+speakrs = { version = "0.5.0", default-features = false, features = ["default-linalg", "directml"] }
 futures-channel = "0.3.31"
 
 # Linux-specific dependencies
