@@ -20,6 +20,8 @@ interface MeetingHeaderProps {
   durationSeconds?: number | null;
   speakerCount?: number;
   summaryState: MeetingSummaryState;
+  /** Why the summary failed, shown on hover over the error chip. */
+  summaryError?: string | null;
   /** Persist a new title; rejecting keeps the editor open. */
   onRename: (title: string) => Promise<void>;
   /** Meeting actions, right-aligned next to the title. */
@@ -34,7 +36,7 @@ function formatDuration(seconds: number, t: TranslateFn): string {
   return hours > 0 ? t('{hours} h {minutes} min', { hours, minutes }) : t('{minutes} min', { minutes });
 }
 
-function SummaryChip({ state, t }: { state: MeetingSummaryState; t: TranslateFn }) {
+function SummaryChip({ state, error, t }: { state: MeetingSummaryState; error?: string | null; t: TranslateFn }) {
   switch (state) {
     case 'processing':
       return (
@@ -50,8 +52,14 @@ function SummaryChip({ state, t }: { state: MeetingSummaryState; t: TranslateFn 
           {t('Summary')}
         </span>
       );
-    case 'error':
-      return <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">{t('Error')}</span>;
+    case 'error': {
+      const title = error ? t('Summary failed: {error}', { error: t(error) }) : t('Summary failed');
+      return (
+        <span title={title} aria-label={title} className="cursor-help rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+          {t('Error')}
+        </span>
+      );
+    }
     default:
       return <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{t('Transcript')}</span>;
   }
@@ -67,6 +75,7 @@ export function MeetingHeader({
   durationSeconds,
   speakerCount,
   summaryState,
+  summaryError,
   onRename,
   children,
 }: MeetingHeaderProps) {
@@ -182,7 +191,7 @@ export function MeetingHeader({
             <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
           </button>
         )}
-        <span className="shrink-0"><SummaryChip state={summaryState} t={t} /></span>
+        <span className="shrink-0"><SummaryChip state={summaryState} error={summaryError} t={t} /></span>
       </div>
       {facts.length > 0 && (
         <div className="hidden shrink-0 items-center gap-2 text-xs tabular-nums text-slate-400 @[64rem]:flex">

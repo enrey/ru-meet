@@ -357,6 +357,7 @@ export default function PageContent({
         durationSeconds={listItem?.durationSeconds}
         speakerCount={listItem?.speakerCount}
         summaryState={summaryState}
+        summaryError={summaryGeneration.summaryError}
         onRename={handleRenameMeeting}
       >
         <MeetingActionBar

@@ -587,6 +587,8 @@ export const ru: Record<string, Translation> = {
   "Summary ready": "Саммари готово",
   "Generating summary…": "Генерируется саммари…",
   "Summary failed": "Ошибка саммари",
+  "Summary failed: {error}": "Ошибка саммари: {error}",
+  "Summary generation was interrupted because the application restarted.": "Создание саммари прервано: приложение перезапустилось.",
   "Summary read aloud": "Саммари озвучено",
   "Reading the summary aloud…": "Готовится озвучка…",
   "Reading aloud failed": "Ошибка озвучки",
