@@ -6,7 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import type { PermissionStatus, OnboardingPermissions } from '@/types/onboarding';
 import { resolveOnboardingSummaryModelStatus } from '@/lib/onboarding-summary-model';
 import type { ParakeetDownloadProgressEvent } from '@/lib/parakeet';
-import { DEFAULT_DIARIZATION_ENGINE, DIARIZATION_MODELS, type DiarizationEngineId } from '@/lib/diarization-models';
+import { ONBOARDING_DIARIZATION_ENGINE, DIARIZATION_MODELS, type DiarizationEngineId } from '@/lib/diarization-models';
 
 const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
 const GIGAAM_MODEL = 'gigaam-v3-e2e-ctc';
@@ -54,6 +54,9 @@ interface OnboardingContextType {
   setDownloadSummary: (value: boolean) => void;
   downloadDiarization: boolean;
   setDownloadDiarization: (value: boolean) => void;
+  /** Download the speech model that reads summaries aloud. */
+  downloadTts: boolean;
+  setDownloadTts: (value: boolean) => void;
   diarizationEngine: DiarizationEngine;
   setDiarizationEngine: (value: DiarizationEngine) => void;
   parakeetDownloaded: boolean;
@@ -107,7 +110,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
   const [downloadTranscription, setDownloadTranscription] = useState(true);
   const [downloadSummary, setDownloadSummary] = useState(true);
   const [downloadDiarization, setDownloadDiarization] = useState(true);
-  const [diarizationEngine, setDiarizationEngine] = useState<DiarizationEngine>(DEFAULT_DIARIZATION_ENGINE);
+  const [downloadTts, setDownloadTts] = useState(true);
+  const [diarizationEngine, setDiarizationEngine] = useState<DiarizationEngine>(ONBOARDING_DIARIZATION_ENGINE);
   const [completed, setCompleted] = useState(false);
   const [statusLoaded, setStatusLoaded] = useState(false);
   const [parakeetDownloaded, setParakeetDownloaded] = useState(false);
@@ -399,7 +403,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         setDiarizationEngine(
           status.diarization_engine && status.diarization_engine in DIARIZATION_MODELS
             ? status.diarization_engine
-            : DEFAULT_DIARIZATION_ENGINE,
+            : ONBOARDING_DIARIZATION_ENGINE,
         );
 
         if (status.completed) {
@@ -672,6 +676,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     setDownloadTranscription(true);
     setDownloadSummary(true);
     setDownloadDiarization(true);
+    setDownloadTts(true);
     setCurrentStep(1);
     setIsPreview(true);
   }, []);
@@ -706,6 +711,8 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
         setDownloadSummary,
         downloadDiarization,
         setDownloadDiarization,
+        downloadTts,
+        setDownloadTts,
         diarizationEngine,
         setDiarizationEngine,
         parakeetDownloaded,

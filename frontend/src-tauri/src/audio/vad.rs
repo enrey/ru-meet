@@ -214,6 +214,42 @@ fn ensure_silero_model() -> Result<PathBuf> {
     Ok(model_path)
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VadModelStatus {
+    /// Shipped inside the installer (Windows), never downloaded.
+    bundled: bool,
+    /// A verified model is available to load.
+    ready: bool,
+}
+
+/// For first-run setup: whether the speech detector still has to be fetched.
+#[tauri::command]
+pub fn vad_model_status() -> VadModelStatus {
+    let bundled = BUNDLED_MODEL_PATH.lock().unwrap().is_some();
+    let cached = || {
+        MODELS_DIR
+            .lock()
+            .unwrap()
+            .clone()
+            .is_some_and(|dir| verify_silero_model(&dir.join("silero_vad.onnx")))
+    };
+    VadModelStatus {
+        bundled,
+        ready: bundled || cached(),
+    }
+}
+
+/// Fetch the pinned model now rather than at the first recording.
+#[tauri::command]
+pub async fn download_vad_model() -> Result<(), String> {
+    tokio::task::spawn_blocking(ensure_silero_model)
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 /// Verifies a cached model file's size and SHA-256 against the pinned
 /// values. Returns `false` (never errors) so a stale/corrupt cache is simply
 /// treated the same as a missing one and re-downloaded.

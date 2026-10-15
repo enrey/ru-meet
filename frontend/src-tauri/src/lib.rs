@@ -724,6 +724,9 @@ pub fn run() {
             audio::tts::tts_prepare_summary_audio,
             audio::tts::tts_get_status,
             audio::tts::tts_set_settings,
+            audio::tts::tts_download_model,
+            audio::vad::vad_model_status,
+            audio::vad::download_vad_model,
             // Audio recovery commands (for transcript recovery feature)
             audio::incremental_saver::recover_audio_from_checkpoints,
             audio::incremental_saver::cleanup_checkpoints,

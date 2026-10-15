@@ -1,16 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Check, Globe2, Languages } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { Button } from '@/components/ui/button';
 import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
-import { cn } from '@/lib/utils';
 import { DIARIZATION_MODELS } from '@/lib/diarization-models';
 import { getSummaryModelSizeLabel } from '@/lib/onboarding-summary-model';
 import { useI18n } from '@/lib/i18n';
 
-const ENGINES: Array<{ id: 'gigaam' | 'parakeet'; icon: typeof Languages; name: string; detail: string; size: string }> = [
-  { id: 'gigaam', icon: Languages, name: 'GigaAM v3', detail: 'Russian speech', size: '~186 MB' },
-  { id: 'parakeet', icon: Globe2, name: 'Parakeet TDT v3', detail: 'Multilingual speech', size: '~670 MB' },
+const ENGINES: Array<{ id: 'gigaam' | 'parakeet'; name: string; detail: string; size: string }> = [
+  { id: 'gigaam', name: 'GigaAM v3', detail: 'Russian speech', size: '~186 MB' },
+  { id: 'parakeet', name: 'Parakeet TDT v3', detail: 'Multilingual speech', size: '~670 MB' },
 ];
 
 const SUMMARY_MODELS = [
@@ -23,10 +22,19 @@ export function SetupOverviewStep() {
     goNext, goPrevious, transcriptionProvider, setTranscriptionProvider,
     downloadTranscription, setDownloadTranscription, downloadSummary, setDownloadSummary,
     downloadDiarization, setDownloadDiarization, diarizationEngine, setDiarizationEngine,
+    downloadTts, setDownloadTts,
     selectedSummaryModel, recommendedSummaryModel, selectSummaryModel,
   } = useOnboarding();
   const { t } = useI18n();
   const [isMac, setIsMac] = useState(false);
+  /** Null until known: the installer ships the model on Windows only. */
+  const [vadBundled, setVadBundled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    invoke<{ bundled: boolean }>('vad_model_status')
+      .then(({ bundled }) => setVadBundled(bundled))
+      .catch(() => setVadBundled(false));
+  }, []);
 
   useEffect(() => {
     import('@tauri-apps/plugin-os')
@@ -48,39 +56,13 @@ export function SetupOverviewStep() {
             <input type="checkbox" checked={downloadTranscription} onChange={(event) => setDownloadTranscription(event.target.checked)} className="mt-0.5" />
             <span>{t('Selected transcription model')}<span className="block text-slate-500">{t('Needed for recording and transcription')}</span></span>
           </label>
-          <div className="space-y-2 pl-6">
-            {ENGINES.map((engine) => {
-              const Icon = engine.icon;
-              const selected = transcriptionProvider === engine.id;
-              return (
-                <label
-                  key={engine.id}
-                  className={cn(
-                    'flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition-all duration-200',
-                    selected ? 'border-slate-900 bg-slate-100' : 'border-slate-200 bg-white hover:border-slate-300'
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="transcription-engine"
-                    checked={selected}
-                    onChange={() => setTranscriptionProvider(engine.id)}
-                    className="sr-only"
-                  />
-                  <div className={cn('flex size-8 shrink-0 items-center justify-center rounded-full', selected ? 'bg-slate-200' : 'bg-slate-50')}>
-                    <Icon className={cn('h-4 w-4', selected ? 'text-slate-900' : 'text-slate-500')} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-medium text-slate-900">{engine.name}</div>
-                    <div className="text-xs text-slate-500">{t(engine.detail)} · {engine.size}</div>
-                  </div>
-                  <div className={cn('flex size-5 shrink-0 items-center justify-center rounded-full', selected ? 'bg-indigo-600' : 'bg-slate-100')}>
-                    {selected && <Check className="h-3 w-3 text-white" />}
-                  </div>
-                </label>
-              );
-            })}
-          </div>
+          <label className="block pl-6 text-sm text-slate-700">{t('Transcription engine')}
+            <select value={transcriptionProvider} onChange={(event) => setTranscriptionProvider(event.target.value as typeof transcriptionProvider)} className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2">
+              {ENGINES.map((engine) => (
+                <option key={engine.id} value={engine.id}>{engine.name} ({t(engine.detail)}) · {engine.size}</option>
+              ))}
+            </select>
+          </label>
           <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadDiarization} onChange={(event) => setDownloadDiarization(event.target.checked)} /><span>{t('Speaker diarization models')}<span className="block text-slate-500">{t('Optional; identify speakers after a recording')}</span></span></label>
           {downloadDiarization && <label className="block pl-6 text-sm text-slate-700">{t('Diarization engine')}
             <select value={diarizationEngine} onChange={(event) => setDiarizationEngine(event.target.value as typeof diarizationEngine)} className="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2">
@@ -99,6 +81,8 @@ export function SetupOverviewStep() {
               ))}
             </select>
           </label>}
+          <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={downloadTts} onChange={(event) => setDownloadTts(event.target.checked)} /><span>{t('Speech model for reading summaries aloud')}<span className="block text-slate-500">{t('Optional; Qwen3-TTS 1.7B · ~1.5 GB')}</span></span></label>
+          <label className="flex cursor-not-allowed items-start gap-3 text-sm"><input type="checkbox" checked disabled /><span>{t('Speech detection model')}<span className="block text-slate-500">Silero VAD v5.1.2{vadBundled === null ? '' : vadBundled ? ` · ${t('Built into the installer')}` : ` · ~2.3 MB · ${t('Required for recording')}`}</span></span></label>
         </fieldset>
         <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>{t('Back')}</Button><Button onClick={goNext} className="h-11 flex-1 bg-indigo-600 text-white hover:bg-indigo-700">{t('Continue')}</Button></div>
       </div>

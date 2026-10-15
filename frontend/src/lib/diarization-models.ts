@@ -24,6 +24,9 @@ export type DiarizationEngineId = keyof typeof DIARIZATION_MODELS;
 
 export const DEFAULT_DIARIZATION_ENGINE: DiarizationEngineId = 'pyannote-wespeaker';
 
+/** What first-run setup offers: the most accurate speaker count. */
+export const ONBOARDING_DIARIZATION_ENGINE: DiarizationEngineId = 'speakrs-pyannote-wespeaker';
+
 export function getDiarizationModelInfo(engine: string) {
   return DIARIZATION_MODELS[engine as DiarizationEngineId] ?? DIARIZATION_MODELS[DEFAULT_DIARIZATION_ENGINE];
 }

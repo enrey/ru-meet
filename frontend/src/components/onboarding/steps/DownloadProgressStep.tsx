@@ -11,7 +11,10 @@ import { getSummaryModelSizeLabel } from '@/lib/onboarding-summary-model';
 import { getDiarizationModelInfo } from '@/lib/diarization-models';
 import { useI18n } from '@/lib/i18n';
 
-type Download = { status: 'waiting' | 'downloading' | 'completed' | 'error'; progress: number; error?: string };
+/** The only checkpoint the app can download (`audio::tts::install`). */
+const TTS_MODEL = '1.7b';
+
+type Download ={ status: 'waiting' | 'downloading' | 'completed' | 'error'; progress: number; error?: string };
 const waiting: Download = { status: 'waiting', progress: 0 };
 const DOWNLOAD_STATUS_LABELS: Record<Download['status'], string> = {
   waiting: 'Waiting',
@@ -23,7 +26,7 @@ const DOWNLOAD_STATUS_LABELS: Record<Download['status'], string> = {
 export function DownloadProgressStep() {
   const {
     goNext, goPrevious, transcriptionProvider, downloadTranscription, downloadSummary,
-    downloadDiarization, diarizationEngine,
+    downloadDiarization, diarizationEngine, downloadTts,
     selectedSummaryModel, recommendedSummaryModel, summaryModelDownloaded,
     startBackgroundDownloads, completeOnboarding, isPreview,
   } = useOnboarding();
@@ -31,6 +34,14 @@ export function DownloadProgressStep() {
   const [transcription, setTranscription] = useState<Download>(waiting);
   const [summary, setSummary] = useState<Download>(waiting);
   const [diarization, setDiarization] = useState<Download>(waiting);
+  const [tts, setTts] = useState<Download>(waiting);
+  /** False where the app cannot download the speech model (Linux). */
+  const [ttsAvailable, setTtsAvailable] = useState(true);
+  const ttsStarted = useRef(false);
+  const [vad, setVad] = useState<Download>(waiting);
+  /** The installer ships the speech detector on Windows; there is nothing to fetch. */
+  const [vadBundled, setVadBundled] = useState<boolean | null>(null);
+  const vadStarted = useRef(false);
   const [isCompleting, setIsCompleting] = useState(false);
   const [isMac, setIsMac] = useState(false);
   const started = useRef(false);
@@ -123,6 +134,56 @@ export function DownloadProgressStep() {
     return () => { disposed = true; void unlisten.then((fn) => fn()); };
   }, [downloadDiarization, diarizationEngine]);
 
+  const downloadVadModel = () => {
+    setVad({ status: 'downloading', progress: 0 });
+    void invoke('download_vad_model')
+      .then(() => setVad({ status: 'completed', progress: 100 }))
+      .catch((error) => setVad({ status: 'error', progress: 0, error: String(error) }));
+  };
+
+  // Recording needs the speech detector, so it is always fetched.
+  useEffect(() => {
+    if (vadStarted.current) return;
+    vadStarted.current = true;
+    void invoke<{ bundled: boolean; ready: boolean }>('vad_model_status')
+      .then(({ bundled, ready }) => {
+        setVadBundled(bundled);
+        if (ready) setVad({ status: 'completed', progress: 100 });
+        else downloadVadModel();
+      })
+      .catch((error) => setVad({ status: 'error', progress: 0, error: String(error) }));
+  }, []);
+
+  const downloadSpeechModel = () => {
+    setTts({ status: 'downloading', progress: 0 });
+    void invoke('tts_download_model', { model: TTS_MODEL })
+      .then(() => setTts({ status: 'completed', progress: 100 }))
+      .catch((error) => setTts({ status: 'error', progress: 0, error: String(error) }));
+  };
+
+  useEffect(() => {
+    if (!downloadTts) return;
+    let disposed = false;
+    const unlisten = listen<{ model: string; progress: number }>('tts-download-progress', ({ payload }) => {
+      if (!disposed && payload.model === TTS_MODEL && payload.progress < 100) {
+        setTts({ status: 'downloading', progress: payload.progress });
+      }
+    });
+    if (!ttsStarted.current) {
+      ttsStarted.current = true;
+      void invoke<{ models: Array<{ id: string; installed: boolean; downloadable: boolean }> }>('tts_get_status')
+        .then(({ models }) => {
+          if (disposed) return;
+          const model = models.find((item) => item.id === TTS_MODEL);
+          if (model?.installed) setTts({ status: 'completed', progress: 100 });
+          else if (model?.downloadable) downloadSpeechModel();
+          else setTtsAvailable(false);
+        })
+        .catch((error) => { if (!disposed) setTts({ status: 'error', progress: 0, error: String(error) }); });
+    }
+    return () => { disposed = true; void unlisten.then((fn) => fn()); };
+  }, [downloadTts]);
+
   const retryTranscription = async () => {
     setTranscription({ status: 'downloading', progress: 0 });
     try {
@@ -171,10 +232,12 @@ export function DownloadProgressStep() {
   return (
     <OnboardingContainer title={t('Getting things ready')} description={t('Downloads may continue in the background. You can add models later in Settings.')} step={3} totalSteps={isMac ? 4 : 3}>
       <div className="mx-auto w-full max-w-lg space-y-4">
+        {vadBundled === false && card(t('Speech detection model'), 'Silero VAD v5.1.2 · ~2.3 MB', vad, downloadVadModel)}
         {downloadTranscription && card(label, transcriptionProvider === 'gigaam' ? '~186 MB' : '~670 MB', transcription, () => { void retryTranscription(); })}
         {downloadSummary && card(t('Local summarization model'), getSummaryModelSizeLabel(selectedSummaryModel || recommendedSummaryModel), summary, () => { void retrySummary(); })}
         {downloadDiarization && card(t('Speaker diarization'), `${getDiarizationModelInfo(diarizationEngine).name} · ${getDiarizationModelInfo(diarizationEngine).size}`, diarization, () => { void retryDiarization(); })}
-        {!downloadTranscription && !downloadSummary && !downloadDiarization && <p className="rounded-lg bg-slate-100 p-4 text-sm text-slate-700">{t('No models selected for download. Recording will need a transcription model later.')}</p>}
+        {downloadTts && ttsAvailable && card(t('Reading summaries aloud'), 'Qwen3-TTS 1.7B · ~1.5 GB', tts, downloadSpeechModel)}
+        {!downloadTranscription && !downloadSummary && !downloadDiarization && !downloadTts &&<p className="rounded-lg bg-slate-100 p-4 text-sm text-slate-700">{t('No models selected for download. Recording will need a transcription model later.')}</p>}
         <div className="flex gap-3"><Button variant="outline" onClick={goPrevious}>{t('Back')}</Button><Button className="flex-1 bg-indigo-600 text-white hover:bg-indigo-700" disabled={isCompleting} onClick={() => { void continueSetup(); }}>{isCompleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{t('Continue')}</Button></div>
       </div>
     </OnboardingContainer>

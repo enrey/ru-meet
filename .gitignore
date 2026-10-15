@@ -49,6 +49,8 @@ next-env.d.ts
 
 # Audio files
 *.wav
+# The reference voice Qwen3-TTS clones, embedded in the app.
+!frontend/src-tauri/assets/tts-default-voice.wav
 
 # Large media files
 docs/demo.mov

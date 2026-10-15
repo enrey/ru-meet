@@ -155,7 +155,7 @@ impl QwenTts {
     }
 }
 
-fn executable_name() -> &'static str {
+pub(super) fn executable_name() -> &'static str {
     if cfg!(windows) {
         "llama-tts.exe"
     } else {

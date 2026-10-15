@@ -1,7 +1,9 @@
 "use client"
 
 import { invoke } from "@tauri-apps/api/core"
-import { Volume2 } from "lucide-react"
+import { listen } from "@tauri-apps/api/event"
+import { Download, Loader2, Volume2 } from "lucide-react"
+import { Button } from "./ui/button"
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 import {
@@ -18,6 +20,7 @@ interface TtsModel {
   id: string
   label: string
   installed: boolean
+  downloadable: boolean
 }
 
 interface TtsStatus {
@@ -30,19 +33,41 @@ interface TtsStatus {
 
 /**
  * Turn reading summaries aloud on or off, and pick which Qwen3-TTS checkpoint
- * reads them. Models are installed by hand for now, so a checkpoint that is not
- * on disk is shown but cannot be selected.
+ * reads them. A checkpoint that is not on disk cannot be selected; the ones the
+ * app can fetch get a Download button.
  */
 export function SummarySpeechSettings() {
   const { t } = useI18n()
   const [status, setStatus] = useState<TtsStatus | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [download, setDownload] = useState<{ model: string; progress: number } | null>(null)
 
-  useEffect(() => {
+  const refresh = useCallback(() => {
     void invoke<TtsStatus>("tts_get_status")
       .then(setStatus)
       .catch((error) => console.error("Could not read TTS status:", error))
   }, [])
+
+  useEffect(() => {
+    refresh()
+    const unlisten = listen<{ model: string; progress: number }>("tts-download-progress", ({ payload }) => {
+      setDownload(payload.progress < 100 ? payload : null)
+    })
+    return () => { void unlisten.then((stop) => stop()) }
+  }, [refresh])
+
+  const downloadModel = async (model: string) => {
+    setDownload({ model, progress: 0 })
+    try {
+      await invoke("tts_download_model", { model })
+      toast.success(translate("The speech model is ready"))
+    } catch (error) {
+      toast.error(translate("Could not download the speech model"), { description: String(error) })
+    } finally {
+      setDownload(null)
+      refresh()
+    }
+  }
 
   const save = useCallback(
     async (next: { enabled: boolean; model: string; autoPrepare: boolean }) => {
@@ -132,6 +157,24 @@ export function SummarySpeechSettings() {
           </Select>
         </div>
       )}
+
+      {status.models.filter((model) => !model.installed && model.downloadable).map((model) => (
+        <div key={model.id} className="mt-4 flex items-center justify-between gap-4 border-t border-slate-100 pt-4">
+          <div>
+            <p className="text-sm font-medium text-slate-900">{model.label}</p>
+            <p className="text-xs text-slate-500">{t("~1.5 GB with the speech runtime. Downloaded from Hugging Face and the llama.cpp releases.")}</p>
+          </div>
+          {download?.model === model.id ? (
+            <span className="flex shrink-0 items-center gap-1.5 text-sm font-medium text-indigo-600">
+              <Loader2 className="h-4 w-4 animate-spin" /> {download.progress}%
+            </span>
+          ) : (
+            <Button size="sm" disabled={download !== null} onClick={() => void downloadModel(model.id)}>
+              <Download className="mr-1.5 h-4 w-4" /> {t("Download")}
+            </Button>
+          )}
+        </div>
+      ))}
 
       <div className="mt-4 flex items-center justify-between gap-4 border-t border-slate-100 pt-4">
         <div>

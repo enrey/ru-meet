@@ -33,7 +33,9 @@ fn default_true() -> bool {
     true
 }
 fn default_diarization_engine() -> String {
-    "pyannote-wespeaker".to_string()
+    // New users get the most accurate speaker count; the engine default for
+    // everything else stays polyvoice (`audio::diarization`).
+    "speakrs-pyannote-wespeaker".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]

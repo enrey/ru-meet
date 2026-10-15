@@ -48,6 +48,8 @@ pub struct TtsModel {
     pub label: String,
     /// Whether this checkpoint is actually on disk.
     pub installed: bool,
+    /// Whether the app can download it (with the runtime) on this platform.
+    pub downloadable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,17 +74,17 @@ pub(super) fn data_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
 }
 
 /// Checkpoints live in `<app data>/models/tts/qwen/<variant>/`.
-fn models_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
+pub(super) fn models_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     Ok(data_root(app)?.join("models").join("tts").join("qwen"))
 }
 
 /// The llama.cpp binaries that run the pipeline.
-fn runtime_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
+pub(super) fn runtime_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     Ok(data_root(app)?.join("tts-runtime"))
 }
 
 /// The reference recording whose voice the models clone.
-fn speaker_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
+pub(super) fn speaker_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf> {
     Ok(data_root(app)?.join("voices").join("default.wav"))
 }
 
@@ -131,6 +133,7 @@ pub fn tts_get_status<R: Runtime>(app: AppHandle<R>) -> TtsStatus {
             id: variant.id().to_string(),
             label: variant.label().to_string(),
             installed: is_installed(&app, variant),
+            downloadable: super::install::is_downloadable(variant),
         })
         .collect();
 
@@ -183,6 +186,25 @@ pub fn tts_set_settings<R: Runtime>(
     *SETTINGS
         .lock()
         .map_err(|_| "The TTS settings lock is unavailable")? = settings;
+    Ok(())
+}
+
+/// Download the runtime, the voice and `model`, then speak with it.
+/// Progress arrives as `tts-download-progress`.
+#[tauri::command]
+pub async fn tts_download_model<R: Runtime>(app: AppHandle<R>, model: String) -> Result<(), String> {
+    let variant =
+        Variant::from_id(&model).ok_or_else(|| format!("Unknown speech model: {model}"))?;
+    super::install::install(&app, variant)
+        .await
+        .map_err(|error| error.to_string())?;
+    let next = TtsSettings {
+        enabled: true,
+        model: variant,
+        ..settings()
+    };
+    tts_set_settings(app.clone(), next)?;
+    preload(&app);
     Ok(())
 }
 
