@@ -40,6 +40,10 @@ pub struct AutomationSettings {
     pub manual_silence_stop: bool,
     #[serde(default = "default_manual_silence_minutes")]
     pub manual_silence_minutes: u32,
+    /// After a recording, run the background processing (speakers, summary,
+    /// reading aloud) by itself; `crate::processing`.
+    #[serde(default = "default_enabled")]
+    pub auto_summary: bool,
 }
 
 fn default_enabled() -> bool {
@@ -63,6 +67,7 @@ impl Default for AutomationSettings {
             record_in_person: false,
             manual_silence_stop: true,
             manual_silence_minutes: default_manual_silence_minutes(),
+            auto_summary: true,
         }
     }
 }
@@ -255,6 +260,23 @@ pub fn set_manual_silence_stop<R: Runtime>(
         enabled: settings.manual_silence_stop,
         minutes: settings.manual_silence_minutes,
     })
+}
+
+/// Whether a recording is processed by itself once saved; also read by
+/// `audio::recording_session`.
+pub(crate) fn auto_summary<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<AutomationState>()
+        .is_some_and(|state| state.0.read().is_ok_and(|settings| settings.auto_summary))
+}
+
+#[tauri::command]
+pub fn get_auto_summary<R: Runtime>(app: AppHandle<R>) -> bool {
+    auto_summary(&app)
+}
+
+#[tauri::command]
+pub fn set_auto_summary<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result<(), String> {
+    update_settings(&app, |settings| settings.auto_summary = enabled).map(|_| ())
 }
 
 /// The in-app meeting player is playing a recording. That is speech too, both

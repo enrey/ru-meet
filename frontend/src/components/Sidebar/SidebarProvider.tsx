@@ -3,6 +3,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import type { SummaryProcessResponse } from '@/types';
 import { translate } from '@/lib/i18n';
@@ -25,6 +27,8 @@ export interface MeetingListItem extends CurrentMeeting {
   preview: string | null;
   /** Where each processing step of the meeting stands. */
   stages: MeetingStages;
+  /** The step the background processing is on, while it runs. */
+  processing?: 'speakers' | 'summary' | 'speech' | null;
 }
 
 export type StageState = 'none' | 'running' | 'done' | 'failed';
@@ -131,6 +135,31 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     fetchMeetings();
   }, [serverAddress, fetchMeetings]);
+
+  // Background processing (`crate::processing`) ends wherever the user is:
+  // say how it went and refresh the stages the library shows.
+  useEffect(() => {
+    const STEP: Record<string, string> = { speakers: 'speakers', summary: 'summary', speech: 'reading aloud' };
+    const unlisten = listen<{ meetingId: string; outcome: string; requested?: boolean; failed?: string[]; step?: string; message?: string }>(
+      'meeting-processed',
+      ({ payload }) => {
+        void fetchMeetings();
+        const failed = (payload.failed ?? []).map((step) => translate(STEP[step] ?? step));
+        if (payload.outcome === 'done' && failed.length) {
+          toast.warning(translate('Recording processed, but some steps failed: {steps}', { steps: failed.join(', ') }));
+        } else if (payload.outcome === 'done') {
+          toast.success(translate('Recording processed'));
+        } else if (payload.outcome === 'nothingToDo' && payload.requested) {
+          toast.info(translate('This recording is already processed'));
+        } else if (payload.outcome === 'failed') {
+          toast.error(translate('Processing stopped: the summary was not created'), {
+            description: payload.message ? translate(payload.message) : undefined,
+          });
+        }
+      },
+    );
+    return () => { void unlisten.then((stop) => stop()); };
+  }, [fetchMeetings]);
 
   useEffect(() => {
     const fetchSettings = async () => {

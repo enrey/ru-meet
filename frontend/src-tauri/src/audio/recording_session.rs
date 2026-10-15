@@ -362,6 +362,13 @@ impl RecordingSession {
             app.clone(), app_state.db_manager.pool().clone(), meeting_id.clone(),
             audio_path, diarization_target,
         );
+        // Speakers (already started above), summary and reading aloud, in
+        // the background and whether or not the meeting page is opened.
+        if crate::automation::auto_summary(&app) {
+            if let Err(error) = crate::processing::start(app.clone(), meeting_id.clone(), false) {
+                warn!("Could not start processing the recording: {error}");
+            }
+        }
 
         let result = FinalizedRecording {
             meeting_id,

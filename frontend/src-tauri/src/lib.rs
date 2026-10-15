@@ -47,6 +47,7 @@ pub mod openai;
 pub mod openrouter;
 pub mod parakeet_engine;
 pub mod portable;
+pub mod processing;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -739,6 +740,9 @@ pub fn run() {
             audio::tts::tts_set_settings,
             audio::tts::tts_download_model,
             audio::tts::tts_cancel_summary_audio,
+            processing::process_meeting,
+            automation::get_auto_summary,
+            automation::set_auto_summary,
             audio::vad::vad_model_status,
             audio::vad::download_vad_model,
             // Audio recovery commands (for transcript recovery feature)

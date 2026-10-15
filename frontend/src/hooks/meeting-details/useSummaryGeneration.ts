@@ -9,6 +9,7 @@ import {
 import { ModelConfig } from '@/components/ModelSettingsModal';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { translate } from '@/lib/i18n';
 
@@ -280,6 +281,24 @@ export function useSummaryGeneration({
       }
     };
   }, [meeting.id, stopSummaryPolling]);
+
+  // A summary the backend started itself (`crate::processing`): follow it
+  // like one restored on opening. Our own start reports here too, but its
+  // attempt is already tracked.
+  useEffect(() => {
+    const unlisten = listen<{ meetingId: string; processId: string }>('summary-started', ({ payload }) => {
+      if (payload.meetingId !== meeting.id || !mountedRef.current) return;
+      const ownAttempt = trackedAttemptRef.current && !trackedAttemptRef.current.finished;
+      if (ownAttempt || activeProcessIdRef.current === payload.processId) return;
+      const generationId = ++generationIdRef.current;
+      activeProcessIdRef.current = payload.processId;
+      setSummaryStatus('processing');
+      setSummaryError(null);
+      startSummaryPolling(meeting.id, payload.processId, result =>
+        pollingResultRef.current(result, generationId, false));
+    });
+    return () => { void unlisten.then((stop) => stop()); };
+  }, [meeting.id, startSummaryPolling]);
 
   useEffect(() => {
     if (!initialSummary || initialSummary.meeting_id !== meeting.id) return;

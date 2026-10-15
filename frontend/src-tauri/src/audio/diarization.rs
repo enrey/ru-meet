@@ -603,7 +603,22 @@ pub fn rerun_diarization<R: Runtime>(
     meeting_id: String,
     meeting_folder_path: String,
 ) -> Result<(), String> {
-    let folder = std::path::PathBuf::from(meeting_folder_path);
+    start_for_folder(
+        app,
+        state.db_manager.pool().clone(),
+        meeting_id,
+        std::path::Path::new(&meeting_folder_path),
+    )
+}
+
+/// Diarize the recording stored in a meeting folder; also used by
+/// `crate::processing`.
+pub(crate) fn start_for_folder<R: Runtime>(
+    app: AppHandle<R>,
+    pool: sqlx::SqlitePool,
+    meeting_id: String,
+    folder: &std::path::Path,
+) -> Result<(), String> {
     let audio_path = [
         "audio.mp4",
         "audio.m4a",
@@ -617,7 +632,7 @@ pub fn rerun_diarization<R: Runtime>(
     .map(|name| folder.join(name))
     .find(|path| path.is_file())
     .ok_or_else(|| "No recording audio was found for this meeting".to_string())?;
-    start_meeting_diarization(app, state.db_manager.pool().clone(), meeting_id, audio_path, None)
+    start_meeting_diarization(app, pool, meeting_id, audio_path, None)
 }
 
 /// Register before returning from Stop so a newly opened meeting can query

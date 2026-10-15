@@ -70,7 +70,8 @@ function groupByDate(meetings: MeetingListItem[], t: TranslateFn, now = new Date
 }
 
 function isProcessing(meeting: MeetingListItem): boolean {
-  return Object.values(meeting.stages ?? {}).some((stage) => stage.state === 'running');
+  return Boolean(meeting.processing)
+    || Object.values(meeting.stages ?? {}).some((stage) => stage.state === 'running');
 }
 
 function formatDuration(seconds: number | null, t: TranslateFn): string {
@@ -177,8 +178,7 @@ export default function MeetingsLibraryPage() {
   }, [refetchMeetings]);
 
   // ...and while any step is under way, until it is not.
-  const anyRunning = meetings.some((meeting) =>
-    Object.values(meeting.stages ?? {}).some((stage) => stage.state === 'running'));
+  const anyRunning = meetings.some(isProcessing);
   useEffect(() => {
     if (!anyRunning) return;
     const timer = setInterval(() => void refetchMeetings(), RUNNING_REFRESH_MS);
@@ -223,13 +223,22 @@ export default function MeetingsLibraryPage() {
   const timeFormat = useMemo(() => new Intl.DateTimeFormat(getIntlLocale(), { hour: '2-digit', minute: '2-digit' }), []);
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(getIntlLocale(), { day: 'numeric', month: 'short', weekday: 'short' }), []);
 
-  /** `process` opens the meeting and runs its missing steps there. */
-  const openMeeting = useCallback((meeting: MeetingListItem, process = false) => {
+  const openMeeting = useCallback((meeting: MeetingListItem) => {
     setCurrentMeeting({ id: meeting.id, title: meeting.title });
     // A transcript match opens the meeting searched for the same text.
     const search = matchContexts.has(meeting.id) ? `&q=${encodeURIComponent(trimmedQuery)}` : '';
-    router.push(`/meeting-details?id=${meeting.id}${search}${process ? '&process=1' : ''}`);
+    router.push(`/meeting-details?id=${meeting.id}${search}`);
   }, [router, setCurrentMeeting, matchContexts, trimmedQuery]);
+
+  // Runs in the backend; the row shows its progress through `stages`.
+  const processMeeting = async (meetingId: string) => {
+    try {
+      await invoke('process_meeting', { meetingId });
+      void refetchMeetings();
+    } catch (error) {
+      toast.error(t('Could not process the recording'), { description: String(error) });
+    }
+  };
 
   const handleDelete = async (meetingId: string) => {
     try {
@@ -436,7 +445,7 @@ export default function MeetingsLibraryPage() {
                             disabled={isProcessing(meeting)}
                             onClick={(event) => {
                               event.stopPropagation();
-                              openMeeting(meeting, true);
+                              void processMeeting(meeting.id);
                             }}
                             className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-indigo-200 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:text-slate-500"
                           >

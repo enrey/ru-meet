@@ -20,7 +20,7 @@ import {
   UsersRound,
   Volume2,
 } from 'lucide-react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -47,15 +47,9 @@ import { ConfirmationModal } from '@/components/ConfirmationModel/confirmation-m
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { DiarizationProgress } from './DiarizationProgress';
 import { RetranscribeDialog } from './RetranscribeDialog';
-import { useProcessRecording, type ProcessingStep } from '@/hooks/meeting-details/useProcessRecording';
+import { useProcessRecording } from '@/hooks/meeting-details/useProcessRecording';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
-
-const STEP_LABELS: Record<ProcessingStep, string> = {
-  speakers: 'Identifying speakers…',
-  summary: 'Creating the summary…',
-  speech: 'Preparing the reading…',
-};
 
 interface MeetingActionBarProps {
   meetingId: string;
@@ -158,21 +152,7 @@ export function MeetingActionBar({
   const [isDiarizing, setIsDiarizing] = useState(false);
   const [isCancellingDiarization, setIsCancellingDiarization] = useState(false);
   const [showRetranscribeDialog, setShowRetranscribeDialog] = useState(false);
-  const processing = useProcessRecording({ meetingId, meetingFolderPath, isDiarizing, summaryStatus, onGenerateSummary, customPrompt });
-
-  // "Process" in the library opens the meeting with ?process=1: run it once
-  // the model configuration is known, then drop the flag from the address.
-  const searchParams = useSearchParams();
-  const processRequested = searchParams.get('process') === '1';
-  const processStarted = useRef(false);
-  useEffect(() => {
-    if (!processRequested || processStarted.current || isModelConfigLoading) return;
-    processStarted.current = true;
-    const next = new URLSearchParams(searchParams.toString());
-    next.delete('process');
-    router.replace(`/meeting-details?${next.toString()}`);
-    void processing.process();
-  }, [processRequested, isModelConfigLoading, processing, router, searchParams]);
+  const processing = useProcessRecording({ meetingId, isDiarizing, summaryStatus });
 
   const handleDiarize = useCallback(async () => {
     if (!meetingFolderPath) return;
@@ -292,13 +272,13 @@ export function MeetingActionBar({
           size="sm"
           className="bg-indigo-600 text-white hover:bg-indigo-700"
           onClick={() => void processing.process()}
-          disabled={isModelConfigLoading || processing.step !== null}
+          disabled={processing.busy}
           title={isModelConfigLoading
             ? t('Loading model configuration...')
             : t('Identify speakers, create the summary and read it aloud - whatever this recording is missing')}
         >
-          {isModelConfigLoading || processing.step ? <Loader2 className="animate-spin" /> : <Sparkles />}
-          <span className="hidden @[40rem]:inline">{processing.step ? t(STEP_LABELS[processing.step]) : t('Process recording')}</span>
+          {processing.busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
+          <span className="hidden @[40rem]:inline">{processing.busy ? t('Processing the recording…') : t('Process recording')}</span>
         </Button>
       ))}
 
@@ -316,14 +296,14 @@ export function MeetingActionBar({
             {hasTranscripts && (
               <DropdownMenuItem
                 onSelect={() => void onGenerateSummary(customPrompt)}
-                disabled={isGenerating || isModelConfigLoading || processing.step !== null}
+                disabled={isGenerating || isModelConfigLoading || processing.busy}
               >
                 <Sparkles className="h-4 w-4" />
                 {hasSummary ? t('Regenerate Summary') : t('Generate Summary')}
               </DropdownMenuItem>
             )}
             {hasFolder && !isDiarizing && (
-              <DropdownMenuItem onSelect={() => void handleDiarize()} disabled={isStartingDiarization || processing.step !== null}>
+              <DropdownMenuItem onSelect={() => void handleDiarize()} disabled={isStartingDiarization || processing.busy}>
                 <UsersRound className="h-4 w-4" />
                 {t('Identify speakers')}
               </DropdownMenuItem>

@@ -209,7 +209,7 @@ pub async fn tts_download_model<R: Runtime>(app: AppHandle<R>, model: String) ->
 }
 
 /// Reading aloud is turned on and everything it needs is installed.
-pub(super) fn can_speak<R: Runtime>(app: &AppHandle<R>) -> bool {
+pub(crate) fn can_speak<R: Runtime>(app: &AppHandle<R>) -> bool {
     let status = tts_get_status(app.clone());
     status.enabled && status.problem.is_none()
 }

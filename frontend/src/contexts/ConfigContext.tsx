@@ -160,13 +160,14 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   });
 
   // Summary configs
-  const [isAutoSummary, setisAutoSummary] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('isAutoSummary');
-      return saved !== null ? saved === 'true' : false
-    }
-    return false;
-  });
+  // The backend owns this (it processes recordings on its own,
+  // `crate::processing`); on by default so the pipeline is not cut short.
+  const [isAutoSummary, setisAutoSummary] = useState<boolean>(true);
+  useEffect(() => {
+    invoke<boolean>('get_auto_summary')
+      .then(setisAutoSummary)
+      .catch((error) => console.warn('Could not read the auto-summary setting:', error));
+  }, []);
 
   // Beta features state (localStorage)
   const [betaFeatures, setBetaFeatures] = useState<BetaFeatures>(() => {
@@ -402,9 +403,10 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
 
   const toggleIsAutoSummary = useCallback((checked: boolean) => {
     setisAutoSummary(checked);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('isAutoSummary', checked.toString());
-    }
+    invoke('set_auto_summary', { enabled: checked }).catch((error) => {
+      console.error('Could not save the auto-summary setting:', error);
+      setisAutoSummary(!checked);
+    });
   }, [])
 
   // Toggle beta feature with localStorage persistence

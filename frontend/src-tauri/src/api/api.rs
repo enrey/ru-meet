@@ -44,6 +44,40 @@ pub struct MeetingListItem {
     pub preview: Option<String>,
     /// Where each processing step of the meeting stands.
     pub stages: MeetingStages,
+    /// The step the background processing (`crate::processing`) is on.
+    pub processing: Option<crate::processing::Step>,
+}
+
+/// What the background processing needs to know about one meeting: the same
+/// stages the library shows, so both always agree.
+pub(crate) struct MeetingSnapshot {
+    pub folder_path: Option<String>,
+    pub stages: MeetingStages,
+}
+
+pub(crate) async fn meeting_snapshot<R: Runtime>(
+    app: &AppHandle<R>,
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+) -> Result<Option<MeetingSnapshot>, String> {
+    let rows = MeetingsRepository::get_meeting_list(pool)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(rows.into_iter().find(|row| row.id == meeting_id).map(|row| {
+        let has_summary = row_has_summary(&row);
+        MeetingSnapshot {
+            stages: meeting_stages(app, &row, has_summary),
+            folder_path: row.folder_path.clone(),
+        }
+    }))
+}
+
+fn row_has_summary(row: &crate::database::models::MeetingListRow) -> bool {
+    row.summary_status.as_deref() == Some("completed")
+        && row
+            .summary_markdown
+            .as_deref()
+            .is_some_and(|markdown| !markdown.trim().is_empty())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -466,16 +500,13 @@ pub async fn api_get_meetings<R: Runtime>(
             let result = rows
                 .into_iter()
                 .map(|row| {
-                    let has_summary = row.summary_status.as_deref() == Some("completed")
-                        && row
-                            .summary_markdown
-                            .as_deref()
-                            .is_some_and(|m| !m.trim().is_empty());
+                    let has_summary = row_has_summary(&row);
                     let preview = meeting_preview(
                         row.summary_markdown.as_deref(),
                         row.first_transcript.as_deref(),
                     );
                     let stages = meeting_stages(&app, &row, has_summary);
+                    let processing = crate::processing::current_step(&row.id);
                     MeetingListItem {
                         id: row.id,
                         title: row.title,
@@ -486,6 +517,7 @@ pub async fn api_get_meetings<R: Runtime>(
                         has_summary,
                         preview,
                         stages,
+                        processing,
                     }
                 })
                 .collect();

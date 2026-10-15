@@ -512,8 +512,38 @@ pub async fn api_process_transcript<R: Runtime>(
         &m_id,
         &model
     );
+    start_summary(
+        app,
+        state.db_manager.pool().clone(),
+        m_id,
+        text,
+        model,
+        model_name,
+        _chunk_size,
+        _overlap,
+        custom_prompt,
+        template_id,
+        summary_language,
+    )
+    .await
+}
 
-    let pool = state.db_manager.pool().clone();
+/// Start generating a summary in the background; what `api_process_transcript`
+/// does, callable from the backend (`crate::processing`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn start_summary<R: Runtime>(
+    app: AppHandle<R>,
+    pool: sqlx::SqlitePool,
+    m_id: String,
+    text: String,
+    model: String,
+    model_name: String,
+    _chunk_size: Option<i32>,
+    _overlap: Option<i32>,
+    custom_prompt: Option<String>,
+    template_id: Option<String>,
+    summary_language: Option<String>,
+) -> Result<ProcessTranscriptResponse, String> {
     let final_prompt = custom_prompt.unwrap_or_else(|| "".to_string());
     let final_template_id = template_id.unwrap_or_else(|| "daily_standup".to_string());
 
@@ -555,6 +585,14 @@ pub async fn api_process_transcript<R: Runtime>(
     }
 
     let cancellation_token = SummaryService::register_cancellation_token(&m_id, started_at);
+    let process_id = started_at.to_rfc3339_opts(SecondsFormat::Nanos, true);
+    // An open meeting page follows a summary it did not start itself
+    // (`crate::processing`) from this.
+    let _ = tauri::Emitter::emit(
+        &app,
+        "summary-started",
+        serde_json::json!({ "meetingId": m_id, "processId": process_id }),
+    );
     let meeting_id_clone = m_id.clone();
     tauri::async_runtime::spawn(async move {
         SummaryService::process_transcript_background(
@@ -576,7 +614,7 @@ pub async fn api_process_transcript<R: Runtime>(
     log_info!("🚀 Background task spawned for meeting_id: {}", &m_id);
     Ok(ProcessTranscriptResponse {
         message: "Summary generation started".to_string(),
-        process_id: started_at.to_rfc3339_opts(SecondsFormat::Nanos, true),
+        process_id,
     })
 }
 
