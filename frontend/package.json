@@ -1,6 +1,6 @@
 {
   "name": "meetily",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -9,6 +9,7 @@
     "export": "next export",
     "start": "next start -p 3118",
     "tauri": "tauri",
+    "version:set": "node scripts/set-version.mjs",
     "tauri:dev": "tauri dev",
     "tauri:dev:auto": "node scripts/tauri-auto.js dev",
     "tauri:dev:cpu": "tauri dev",

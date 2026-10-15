@@ -57,6 +57,7 @@
 
 ## Release Notes
 
+- Set the app version with `pnpm version:set X.Y.Z` from `frontend/`; it updates `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` (read by CI and `scripts/build_portable.ps1`) and `Cargo.lock` together.
 - `.github/workflows/release.yml` creates a draft release; publishing it for updater visibility remains manual.
 - Keep executable-name assumptions in `.github/workflows/` and `scripts/build_portable.ps1` synchronized with `mainBinaryName`.
 
