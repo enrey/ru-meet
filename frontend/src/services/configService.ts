@@ -46,6 +46,7 @@ export interface RecordingPreferences {
   file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
+  trim_silent_edges?: boolean;
   system_audio_backend?: string | null;
 }
 

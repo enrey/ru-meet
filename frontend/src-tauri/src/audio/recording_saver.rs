@@ -573,6 +573,14 @@ impl RecordingSaver {
             error!("No incremental saver initialized - cannot save recording");
             return Err("No incremental saver initialized".to_string());
         };
+        let trim = super::recording_preferences::load_recording_preferences(app)
+            .await
+            .map_or(true, |preferences| preferences.trim_silent_edges);
+        let recording_duration = if trim {
+            self.trim_silent_edges(&final_audio_path, recording_duration)
+        } else {
+            recording_duration
+        };
 
         // Save final transcripts.json with validation
         if let Some(folder) = &self.meeting_folder {
@@ -639,6 +647,30 @@ impl RecordingSaver {
         // Keep segments until the recording manager is dropped: the optional
         // post-save diarization pass needs their timestamps to attach labels.
         Ok(Some(final_audio_path.to_string_lossy().to_string()))
+    }
+
+    /// Cut silent edges off the finalized file and move the segments onto the
+    /// new timeline. Returns the duration of the file as saved. A failed cut
+    /// keeps the recording untouched.
+    fn trim_silent_edges(&self, audio_path: &std::path::Path, duration: Option<f64>) -> Option<f64> {
+        let Ok(mut segments) = self.transcript_segments.lock() else {
+            return duration;
+        };
+        let Some((start, end)) = super::edge_trim::speech_window(&segments, duration) else {
+            return duration;
+        };
+        if let Err(error) = super::edge_trim::trim_audio_file(audio_path, start, end) {
+            warn!("Could not trim silent edges, keeping the full recording: {error}");
+            return duration;
+        }
+        super::edge_trim::shift_segments(&mut segments, start);
+        let saved = if end.is_finite() {
+            Some(end - start)
+        } else {
+            duration.map(|duration| duration - start)
+        };
+        info!("Trimmed silent edges: kept {start:.1}s..{end:.1}s of {duration:?}s");
+        saved
     }
 
     /// Get the meeting folder path (for passing to backend)

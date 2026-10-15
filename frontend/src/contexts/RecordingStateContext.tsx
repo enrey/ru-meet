@@ -100,6 +100,9 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         recordingDuration: backendState.recording_duration,
         activeDuration: backendState.active_duration,
       }));
+      // A reload during a recording misses recording-started; without this
+      // the timer would freeze at the value read on mount.
+      if (backendState.is_recording && !pollingIntervalRef.current) startPolling();
 
       console.log('[RecordingStateContext] Synced with backend:', backendState);
     } catch (error) {
@@ -210,6 +213,11 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         });
         unsubscribers.push(unlistenDiscarded);
 
+        // The state itself follows recording-stopped; this only says why.
+        const unlistenSilenceStop = await listen<number>('recording-stopped-for-silence', ({ payload }) => {
+          toast.info(translate('Recording stopped after {minutes} min without speech.', { minutes: payload }));
+        });
+        unsubscribers.push(unlistenSilenceStop);
 
         const unlistenAutomaticError = await listen<string>('automatic-recording-error', async ({ payload }) => {
           try {

@@ -20,6 +20,10 @@ pub struct RecordingPreferences {
     pub preferred_mic_device: Option<String>,
     #[serde(default)]
     pub preferred_system_device: Option<String>,
+    /// Cut the silence before the first and after the last phrase when a
+    /// recording is saved (`edge_trim`).
+    #[serde(default = "default_trim_silent_edges")]
+    pub trim_silent_edges: bool,
     #[cfg(target_os = "macos")]
     #[serde(default)]
     pub system_audio_backend: Option<String>,
@@ -33,10 +37,15 @@ impl Default for RecordingPreferences {
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
+            trim_silent_edges: default_trim_silent_edges(),
             #[cfg(target_os = "macos")]
             system_audio_backend: Some("coreaudio".to_string()),
         }
     }
+}
+
+fn default_trim_silent_edges() -> bool {
+    true
 }
 
 /// Get the default recordings folder based on platform

@@ -15,6 +15,12 @@ export interface RecordingPreferences {
   file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
+  trim_silent_edges: boolean;
+}
+
+interface ManualSilenceStop {
+  enabled: boolean;
+  minutes: number;
 }
 
 interface RecordingSettingsProps {
@@ -27,11 +33,14 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     auto_save: true,
     file_format: 'mp4',
     preferred_mic_device: null,
-    preferred_system_device: null
+    preferred_system_device: null,
+    trim_silent_edges: true
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showRecordingNotification, setShowRecordingNotification] = useState(true);
+  const [silenceStop, setSilenceStop] = useState<ManualSilenceStop | null>(null);
+  const [silenceMinutes, setSilenceMinutes] = useState('');
   const { isRecording } = useRecordingState();
   const { setSelectedDevices } = useConfig();
   const { t } = useI18n();
@@ -83,8 +92,37 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     loadNotificationPref();
   }, []);
 
+  useEffect(() => {
+    invoke<ManualSilenceStop>('get_manual_silence_stop')
+      .then(value => { setSilenceStop(value); setSilenceMinutes(String(value.minutes)); })
+      .catch(error => console.error('Failed to load silence stop preference:', error));
+  }, []);
+
+  const saveSilenceStop = async (enabled: boolean, minutesText: string) => {
+    const minutes = Number(minutesText);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 600) {
+      toast.error(t('Enter from 1 to 600 minutes'));
+      if (silenceStop) setSilenceMinutes(String(silenceStop.minutes));
+      return;
+    }
+    try {
+      const saved = await invoke<ManualSilenceStop>('set_manual_silence_stop', { enabled, minutes });
+      setSilenceStop(saved);
+      setSilenceMinutes(String(saved.minutes));
+    } catch (error) {
+      toast.error(t('Failed to save preference'), { description: String(error) });
+      if (silenceStop) setSilenceMinutes(String(silenceStop.minutes));
+    }
+  };
+
   const handleAutoSaveToggle = async (enabled: boolean) => {
     const newPreferences = { ...preferences, auto_save: enabled };
+    setPreferences(newPreferences);
+    await savePreferences(newPreferences);
+  };
+
+  const handleTrimToggle = async (enabled: boolean) => {
+    const newPreferences = { ...preferences, trim_silent_edges: enabled };
     setPreferences(newPreferences);
     await savePreferences(newPreferences);
   };
@@ -244,6 +282,51 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
         <Switch
           checked={showRecordingNotification}
           onCheckedChange={handleNotificationToggle}
+        />
+      </div>
+
+      {/* Silence stop for manual recordings */}
+      <div className="flex items-center justify-between gap-4 p-4 border rounded-lg">
+        <div className="flex-1">
+          <label htmlFor="manual-silence-minutes" className="font-medium">{t('Stop a manual recording after silence longer than (minutes)')}</label>
+          <div className="text-sm text-slate-600">
+            {t('For when you forget to press Stop after a meeting. Automatic recordings end on their own.')}
+          </div>
+        </div>
+        <input
+          id="manual-silence-minutes"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={600}
+          value={silenceMinutes}
+          disabled={!silenceStop}
+          onChange={event => setSilenceMinutes(event.target.value)}
+          onBlur={() => { if (silenceStop && silenceMinutes !== String(silenceStop.minutes)) void saveSilenceStop(silenceStop.enabled, silenceMinutes); }}
+          onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+          className="w-20 rounded-md border border-slate-300 px-2 py-1 text-sm tabular-nums disabled:opacity-50"
+        />
+        <Switch
+          checked={silenceStop?.enabled ?? false}
+          disabled={!silenceStop}
+          onCheckedChange={enabled => void saveSilenceStop(enabled, silenceMinutes)}
+          aria-label={t('Stop a manual recording after silence')}
+        />
+      </div>
+
+      {/* Silent edges */}
+      <div className="flex items-center justify-between p-4 border rounded-lg">
+        <div className="flex-1">
+          <div className="font-medium">{t('Trim silence at the edges of a recording')}</div>
+          <div className="text-sm text-slate-600">
+            {t('When a recording is saved, the silence before the first phrase and after the last one is cut off, keeping 2 seconds around them.')}
+          </div>
+        </div>
+        <Switch
+          checked={preferences.trim_silent_edges}
+          onCheckedChange={handleTrimToggle}
+          disabled={saving}
+          aria-label={t('Trim silence at the edges of a recording')}
         />
       </div>
 

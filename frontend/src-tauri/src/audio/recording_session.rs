@@ -260,6 +260,18 @@ impl RecordingSession {
         }
     }
 
+    /// Stop the manual recording `generation`, if it is still the one running.
+    pub async fn stop_manual<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        generation: u64,
+    ) -> Result<Option<FinalizedRecording>, String> {
+        match self.begin_stop_matching(Some((generation, false)))? {
+            Some(resources) => self.finalize_stop(app, resources, None).await,
+            None => Ok(None),
+        }
+    }
+
     async fn finalize_stop<R: Runtime>(
         &self,
         app: AppHandle<R>,
@@ -488,6 +500,13 @@ impl RecordingSession {
             && matches!(data.phase, SessionPhase::Recording | SessionPhase::Paused)
     }
 
+    /// The generation of the running manual recording, if one is running.
+    pub fn manual_generation(&self) -> Option<u64> {
+        let data = self.lock();
+        (!data.automatic && matches!(data.phase, SessionPhase::Recording | SessionPhase::Paused))
+            .then_some(data.generation)
+    }
+
     pub fn is_active(&self) -> bool {
         matches!(
             self.phase(),
@@ -634,6 +653,18 @@ mod tests {
         assert_eq!(session.phase(), SessionPhase::Starting);
     }
 
+    #[test]
+    fn silence_stop_of_a_manual_recording_cannot_take_an_automatic_one() {
+        let session = RecordingSession::new();
+        let generation = session.begin_start().unwrap();
+        session.lock().automatic = true;
+        assert!(session
+            .begin_stop_matching(Some((generation, false)))
+            .unwrap()
+            .is_none());
+        assert_eq!(session.manual_generation(), None);
+        assert_eq!(session.phase(), SessionPhase::Starting);
+    }
 
     #[test]
     fn rejects_concurrent_start_and_stale_abort() {

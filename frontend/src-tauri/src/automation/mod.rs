@@ -10,6 +10,7 @@ pub(crate) mod call_apps;
 #[cfg(target_os = "macos")]
 mod macos;
 pub(crate) mod microphone_activity;
+mod manual_silence;
 mod monitor;
 mod preview_keeper;
 pub(crate) mod preview_vad;
@@ -34,11 +35,23 @@ pub struct AutomationSettings {
     /// Also start on confirmed speech without a call; keeps the microphone open.
     #[serde(default)]
     pub record_in_person: bool,
+    /// Stop a manual recording after `manual_silence_minutes` without speech.
+    #[serde(default = "default_enabled")]
+    pub manual_silence_stop: bool,
+    #[serde(default = "default_manual_silence_minutes")]
+    pub manual_silence_minutes: u32,
 }
 
 fn default_enabled() -> bool {
     true
 }
+
+fn default_manual_silence_minutes() -> u32 {
+    30
+}
+
+/// Bounds of `manual_silence_minutes`.
+const MANUAL_SILENCE_MINUTES: std::ops::RangeInclusive<u32> = 1..=600;
 
 impl Default for AutomationSettings {
     fn default() -> Self {
@@ -48,6 +61,8 @@ impl Default for AutomationSettings {
             call_apps: Vec::new(),
             record_any_app: false,
             record_in_person: false,
+            manual_silence_stop: true,
+            manual_silence_minutes: default_manual_silence_minutes(),
         }
     }
 }
@@ -109,6 +124,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     };
     app.manage(AutomationState(std::sync::RwLock::new(settings)));
     monitor::start(app.clone());
+    manual_silence::start(app.clone());
     Ok(())
 }
 
@@ -197,6 +213,48 @@ pub fn set_auto_record_option<R: Runtime>(
     let settings = update_settings(&app, |settings| *field(settings) = enabled)?;
     let _ = app.emit("auto-record-meetings-changed", settings.auto_record_meetings);
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualSilenceStop {
+    enabled: bool,
+    minutes: u32,
+}
+
+#[tauri::command]
+pub fn get_manual_silence_stop<R: Runtime>(app: AppHandle<R>) -> Result<ManualSilenceStop, String> {
+    let state = app
+        .try_state::<AutomationState>()
+        .ok_or("Automation settings are unavailable")?;
+    let settings = state.0.read().map_err(|e| e.to_string())?;
+    Ok(ManualSilenceStop {
+        enabled: settings.manual_silence_stop,
+        minutes: settings.manual_silence_minutes,
+    })
+}
+
+#[tauri::command]
+pub fn set_manual_silence_stop<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+    minutes: u32,
+) -> Result<ManualSilenceStop, String> {
+    if !MANUAL_SILENCE_MINUTES.contains(&minutes) {
+        return Err(format!(
+            "Enter from {} to {} minutes",
+            MANUAL_SILENCE_MINUTES.start(),
+            MANUAL_SILENCE_MINUTES.end()
+        ));
+    }
+    let settings = update_settings(&app, |settings| {
+        settings.manual_silence_stop = enabled;
+        settings.manual_silence_minutes = minutes;
+    })?;
+    Ok(ManualSilenceStop {
+        enabled: settings.manual_silence_stop,
+        minutes: settings.manual_silence_minutes,
+    })
 }
 
 /// The in-app meeting player is playing a recording. That is speech too, both

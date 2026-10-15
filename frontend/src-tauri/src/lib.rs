@@ -631,6 +631,8 @@ pub fn run() {
             automation::set_auto_record_excluded_apps,
             automation::set_auto_record_call_apps,
             automation::set_auto_record_option,
+            automation::get_manual_silence_stop,
+            automation::set_manual_silence_stop,
             automation::set_meeting_playback_active,
             stop_recording,
             audio::diarization::set_diarization_settings,

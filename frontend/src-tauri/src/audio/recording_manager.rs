@@ -212,6 +212,9 @@ pub struct RecordingManager {
     recording_saver: RecordingSaver,
     device_monitor: Option<AudioDeviceMonitor>,
     device_event_receiver: Option<mpsc::UnboundedReceiver<DeviceEvent>>,
+    /// Active duration read at stop, before `cleanup` forgets the start time;
+    /// saving happens after that.
+    stopped_duration: Option<f64>,
 }
 
 // SAFETY: RecordingManager contains types that we've marked as Send
@@ -232,6 +235,7 @@ impl RecordingManager {
             recording_saver: RecordingSaver::new(),
             device_monitor: Some(device_monitor),
             device_event_receiver: Some(device_event_receiver),
+            stopped_duration: None,
         }
     }
 
@@ -377,6 +381,8 @@ impl RecordingManager {
             monitor.stop_monitoring().await;
         }
 
+        self.stopped_duration = self.state.get_active_recording_duration();
+
         // Stop recording state first - this clears device references
         self.state.stop_recording();
 
@@ -411,8 +417,10 @@ impl RecordingManager {
     ) -> Result<Option<String>> {
         debug!("Saving recording with transcript chunks");
 
-        // Get actual recording duration from state
-        let recording_duration = self.state.get_active_recording_duration();
+        // Active duration, read before the stop cleared the state
+        let recording_duration = self
+            .stopped_duration
+            .or_else(|| self.state.get_active_recording_duration());
         info!("Recording duration from state: {:?}s", recording_duration);
 
         // Save the recording with actual duration
