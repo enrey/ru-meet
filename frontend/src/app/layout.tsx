@@ -150,6 +150,18 @@ export default function RootLayout({
       return () => document.removeEventListener('contextmenu', handleContextMenu);
     }
   }, []);
+  // F12 opens the console in every build. WebView2 (Windows) handles F12
+  // itself, so only macOS, whose WKWebView has no such shortcut, asks for it.
+  useEffect(() => {
+    if (!navigator.userAgent.includes('Mac')) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'F12') return;
+      event.preventDefault();
+      invoke('open_devtools').catch(error => console.error('Could not open the console:', error));
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
   useEffect(() => {
     // Listen for tray recording toggle request
     const unlisten = listen('request-recording-toggle', () => {

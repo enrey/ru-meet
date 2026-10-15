@@ -209,6 +209,18 @@ async fn is_recording() -> bool {
     audio::recording_commands::is_recording().await
 }
 
+/// F12 in every build, release included: the console is how users and we
+/// find frontend errors. WebView2 handles F12 itself; WKWebView has no such
+/// shortcut, so the page asks for it.
+#[tauri::command]
+fn open_devtools<R: Runtime>(window: tauri::WebviewWindow<R>) {
+    if window.is_devtools_open() {
+        window.close_devtools();
+    } else {
+        window.open_devtools();
+    }
+}
+
 #[tauri::command]
 fn read_audio_file(file_path: String) -> Result<Vec<u8>, String> {
     match std::fs::read(&file_path) {
@@ -645,6 +657,7 @@ pub fn run() {
             audio::diarization::download_diarization_models,
             audio::diarization::get_diarization_model_statuses,
             is_recording,
+            open_devtools,
             read_audio_file,
             save_transcript,
             whisper_engine::commands::whisper_init,

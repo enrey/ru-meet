@@ -415,14 +415,11 @@ export const ru: Record<string, Translation> = {
   "Copy Transcript": "Копировать транскрипт",
   "Copy": "Копировать",
   "Transcription model": "Модель транскрипции",
-  "Audio devices": "Аудиоустройства",
-  "Devices": "Устройства",
   "Language": "Язык",
   "Language selection is unavailable for Parakeet": "Выбор языка недоступен для Parakeet",
   "Parakeet detects the spoken language automatically and does not support manual language selection.": "Parakeet определяет язык речи автоматически и не поддерживает ручной выбор языка.",
 
   // Home settings modals
-  "Could not save audio device preferences": "Не удалось сохранить настройки аудиоустройств",
   "Preferences": "Настройки",
   "AI Model Configuration": "Настройка ИИ-модели",
   "Summarization Model": "Модель для саммари",
@@ -431,7 +428,6 @@ export const ru: Record<string, Translation> = {
   "Size:": "Размер:",
   "Modified:": "Изменено:",
   "Done": "Готово",
-  "Audio Device Settings": "Настройки аудиоустройств",
   "Language Settings": "Настройки языка",
   "Speech Recognition Setup Required": "Требуется настройка распознавания речи",
   "Transcription Model Settings": "Настройки модели транскрипции",

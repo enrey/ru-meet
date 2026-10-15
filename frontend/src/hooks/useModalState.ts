@@ -7,7 +7,6 @@ import { translate } from '@/lib/i18n';
 
 export type ModalType =
   | 'modelSettings'
-  | 'deviceSettings'
   | 'languageSettings'
   | 'modelSelector'
   | 'errorAlert'
@@ -15,7 +14,6 @@ export type ModalType =
 
 interface ModalState {
   modelSettings: boolean;
-  deviceSettings: boolean;
   languageSettings: boolean;
   modelSelector: boolean;
   errorAlert: boolean;
@@ -49,7 +47,6 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
   // Modal visibility state
   const [modals, setModals] = useState<ModalState>({
     modelSettings: false,
-    deviceSettings: false,
     languageSettings: false,
     modelSelector: false,
     errorAlert: false,
@@ -87,7 +84,6 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
   const hideAllModals = useCallback(() => {
     setModals({
       modelSettings: false,
-      deviceSettings: false,
       languageSettings: false,
       modelSelector: false,
       errorAlert: false,

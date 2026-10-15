@@ -3,7 +3,7 @@ import { PermissionWarning } from '@/components/PermissionWarning';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { AudioLines, Cpu, Copy, FolderOpen, GlobeIcon } from 'lucide-react';
+import { Cpu, Copy, FolderOpen, GlobeIcon } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
@@ -104,15 +104,6 @@ export function TranscriptPanel({
                 >
                   <Cpu />
                   <span className="hidden md:inline">{t('Model')}</span>
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => showModal('deviceSettings')}
-                  title={t('Audio devices')}
-                >
-                  <AudioLines />
-                  <span className="hidden md:inline">{t('Devices')}</span>
                 </Button>
                 {(transcriptModelConfig.provider === 'localWhisper' ||
                   transcriptModelConfig.provider === 'gigaam') && (

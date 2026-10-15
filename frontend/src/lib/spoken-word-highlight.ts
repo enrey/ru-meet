@@ -4,16 +4,34 @@ import { useEffect, useRef } from 'react';
 import type { PlaybackControls } from '@/contexts/MeetingPlaybackContext';
 
 /**
- * Karaoke: the word being spoken gets a pale yellow background (see
- * `::highlight(...)` in globals.css). Done with the CSS Custom Highlight API,
+ * Karaoke: the word being spoken gets a pale yellow background (the colour is
+ * `--spoken-word-bg` in globals.css). Done with the CSS Custom Highlight API,
  * which paints over text without touching the DOM - so it works inside the
  * summary editor too. Where the API is missing there is simply no highlight.
  */
 
 export type HighlightName = 'spoken-word-summary' | 'spoken-word-transcript';
 
+const NAMES: HighlightName[] = ['spoken-word-summary', 'spoken-word-transcript'];
+
+/**
+ * The `::highlight()` rule lives here rather than in globals.css: Next's CSS
+ * parser does not know the pseudo-element yet and warns on every build, while
+ * the webviews apply it fine.
+ */
+function ensureHighlightStyle() {
+  const id = 'spoken-word-highlight-style';
+  if (document.getElementById(id)) return;
+  const style = document.createElement('style');
+  style.id = id;
+  style.textContent = `${NAMES.map((name) => `::highlight(${name})`).join(',\n')} {\n  background-color: var(--spoken-word-bg);\n  color: inherit;\n}`;
+  document.head.appendChild(style);
+}
+
 function registry(): HighlightRegistry | null {
-  return typeof CSS !== 'undefined' && 'highlights' in CSS ? CSS.highlights : null;
+  if (typeof CSS === 'undefined' || !('highlights' in CSS)) return null;
+  ensureHighlightStyle();
+  return CSS.highlights;
 }
 
 export function setSpokenWord(name: HighlightName, range: Range | null) {

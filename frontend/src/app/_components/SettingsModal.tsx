@@ -1,6 +1,5 @@
 import { ModelConfig } from "@/components/ModelSettingsModal";
 import { PreferenceSettings } from "@/components/PreferenceSettings";
-import { DeviceSelection } from "@/components/DeviceSelection";
 import { LanguageSelection } from "@/components/LanguageSelection";
 import { TranscriptSettings } from "@/components/TranscriptSettings";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -10,10 +9,9 @@ import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import { configService } from "@/services/configService";
 import { useI18n } from "@/lib/i18n";
 
-type modalType = "modelSettings" | "deviceSettings" | "languageSettings" | "modelSelector" | "errorAlert" | "chunkDropWarning";
+type modalType = "modelSettings" | "languageSettings" | "modelSelector" | "errorAlert" | "chunkDropWarning";
 
 /**
  * SettingsModals Component
@@ -25,7 +23,6 @@ type modalType = "modelSettings" | "deviceSettings" | "languageSettings" | "mode
 interface SettingsModalsProps {
   modals: {
     modelSettings: boolean;
-    deviceSettings: boolean;
     languageSettings: boolean;
     modelSelector: boolean;
     errorAlert: boolean;
@@ -55,8 +52,6 @@ export function SettingsModals({
     models,
     modelOptions,
     error,
-    selectedDevices,
-    setSelectedDevices,
     selectedLanguage,
     setSelectedLanguage,
     transcriptModelConfig,
@@ -67,16 +62,6 @@ export function SettingsModals({
 
   const { isRecording } = useRecordingState();
 
-  const handleDeviceChange = async (devices: typeof selectedDevices) => {
-    setSelectedDevices(devices);
-    try {
-      const saved = await configService.saveRecordingDevicePreferences(devices);
-      setSelectedDevices(saved);
-    } catch (error) {
-      console.error('Failed to save audio device preferences:', error);
-      toast.error(t('Could not save audio device preferences'));
-    }
-  };
 
   useEffect(() => {
     invoke<{ enabled: boolean; engine: string }>('get_diarization_settings')
@@ -90,7 +75,9 @@ export function SettingsModals({
   const saveDiarizationSettings = (enabled: boolean, engine = diarizationEngine) => {
     setDiarizationEnabled(enabled);
     setDiarizationEngine(engine);
-    invoke('set_diarization_settings', { settings: { enabled, engine } })
+    // Re-read the stored settings so options this dialog does not show are kept.
+    invoke<Record<string, unknown>>('get_diarization_settings')
+      .then((current) => invoke('set_diarization_settings', { settings: { ...current, enabled, engine } }))
       .catch((error) => {
         console.error('Failed to save diarization settings:', error);
         toast.error(t('Could not save speaker diarization settings'));
@@ -208,40 +195,6 @@ export function SettingsModals({
           <div className="border-t p-6 flex justify-end">
             <button
               onClick={() => onClose('modelSettings')}
-              className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-            >
-              {t('Done')}
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
-
-    {/* Device Settings Modal */}
-    {modals.deviceSettings && (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-slate-900">{t('Audio Device Settings')}</h3>
-            <button
-              onClick={() => onClose('deviceSettings')}
-              className="text-slate-500 hover:text-slate-700"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          <DeviceSelection
-            selectedDevices={selectedDevices}
-            onDeviceChange={handleDeviceChange}
-            disabled={isRecording}
-          />
-
-          <div className="mt-6 flex justify-end">
-            <button
-              onClick={() => onClose('deviceSettings')}
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
             >
               {t('Done')}
