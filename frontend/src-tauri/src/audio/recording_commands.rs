@@ -632,6 +632,16 @@ pub async fn get_meeting_audio_path<R: tauri::Runtime>(
         return Ok(None);
     };
 
+    // Older recordings keep the MP4 index at the end, which WebKit on macOS
+    // cannot play; fix the file once, losslessly. A failure only leaves it
+    // as it was. Temporary: remove after April 2027, see docs/backlog.md.
+    let remux_path = audio_path.clone();
+    match tokio::task::spawn_blocking(move || super::edge_trim::ensure_faststart(&remux_path)).await {
+        Ok(Err(error)) => log::warn!("Could not move the index of {audio_path:?} to the front: {error}"),
+        Err(error) => log::warn!("Faststart check for {audio_path:?} did not finish: {error}"),
+        Ok(Ok(())) => {}
+    }
+
     if let Err(error) = app.asset_protocol_scope().allow_file(&audio_path) {
         return Err(format!("Could not grant access to the recording: {error}"));
     }

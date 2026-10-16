@@ -204,7 +204,11 @@ impl IncrementalAudioSaver {
             list_file.to_str().unwrap(),
             "-c",
             "copy", // Copy codec - no re-encoding!
-            "-y",   // Overwrite output file
+            // Index up front: WebKit on macOS cannot play an MP4 whose
+            // index trails the audio through the asset protocol.
+            "-movflags",
+            "+faststart",
+            "-y", // Overwrite output file
             output.to_str().unwrap(),
         ]);
 
@@ -358,6 +362,8 @@ pub async fn recover_audio_from_checkpoints(
         concat_file_path.to_str().unwrap(),
         "-c",
         "copy",
+        "-movflags",
+        "+faststart",
         "-y", // Overwrite if exists
         &output_path_str,
     ]);

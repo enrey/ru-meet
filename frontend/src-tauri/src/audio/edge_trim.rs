@@ -84,6 +84,84 @@ pub(crate) fn trim_audio_file(path: &Path, start: f64, end: f64) -> Result<()> {
     Ok(())
 }
 
+/// Whether an MP4's index (`moov`) comes after its audio (`mdat`), judged from
+/// the top-level boxes alone. Unknown layouts answer `false`, leaving the file
+/// as it is.
+fn index_trails_audio(file: &mut impl std::io::Read) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut sink = std::io::sink();
+    loop {
+        let mut header = [0u8; 8];
+        if let Err(error) = file.read_exact(&mut header) {
+            return match error.kind() {
+                std::io::ErrorKind::UnexpectedEof => Ok(false),
+                _ => Err(error),
+            };
+        }
+        let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
+        match &header[4..8] {
+            b"moov" => return Ok(false),
+            b"mdat" => return Ok(true),
+            _ => {}
+        }
+        let skip = match size {
+            // The box runs to the end of the file.
+            0 => return Ok(false),
+            1 => {
+                let mut large = [0u8; 8];
+                file.read_exact(&mut large)?;
+                u64::from_be_bytes(large).checked_sub(16)
+            }
+            size => size.checked_sub(8),
+        };
+        let Some(skip) = skip else { return Ok(false) };
+        if std::io::copy(&mut (&mut *file).take(skip), &mut sink)? < skip {
+            return Ok(false);
+        }
+    }
+}
+
+/// Move a saved recording's index to the front without re-encoding.
+/// Recordings merged before `+faststart` was added keep the index at the end,
+/// and WebKit on macOS will not play those through the asset protocol, though
+/// QuickTime opens them fine.
+pub(crate) fn ensure_faststart(path: &Path) -> Result<()> {
+    let is_mp4 = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension, "mp4" | "m4a"));
+    if !is_mp4 || !index_trails_audio(&mut std::io::BufReader::new(std::fs::File::open(path)?))? {
+        return Ok(());
+    }
+    let ffmpeg = super::ffmpeg::find_ffmpeg_path().ok_or_else(|| anyhow!("FFmpeg not found"))?;
+    let remuxed = path.with_file_name(".audio.faststart.mp4");
+    let mut command = std::process::Command::new(ffmpeg);
+    command
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(path)
+        .args(["-c", "copy", "-movflags", "+faststart", "-y"])
+        .arg(&remuxed);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command.output()?;
+    if !output.status.success() || !remuxed.is_file() {
+        let _ = std::fs::remove_file(&remuxed);
+        return Err(anyhow!(
+            "FFmpeg faststart remux failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    if let Err(error) = std::fs::rename(&remuxed, path) {
+        let _ = std::fs::remove_file(&remuxed);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +178,25 @@ mod tests {
             sequence_id: 0,
             speaker: None,
         }
+    }
+
+    fn mp4(boxes: &[(&[u8; 4], usize)]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (kind, payload) in boxes {
+            bytes.extend_from_slice(&((payload + 8) as u32).to_be_bytes());
+            bytes.extend_from_slice(*kind);
+            bytes.resize(bytes.len() + payload, 0);
+        }
+        bytes
+    }
+
+    #[test]
+    fn finds_an_index_after_the_audio() {
+        let trailing = mp4(&[(b"ftyp", 24), (b"free", 0), (b"mdat", 1000), (b"moov", 300)]);
+        assert!(index_trails_audio(&mut trailing.as_slice()).unwrap());
+        let leading = mp4(&[(b"ftyp", 24), (b"moov", 300), (b"mdat", 1000)]);
+        assert!(!index_trails_audio(&mut leading.as_slice()).unwrap());
+        assert!(!index_trails_audio(&mut b"not an mp4".as_slice()).unwrap());
     }
 
     #[test]

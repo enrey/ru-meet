@@ -92,6 +92,15 @@ export function MeetingPlayerProvider({ children }: { children: ReactNode }) {
     const onMetadata = () => setMediaDuration(Number.isFinite(element.duration) ? element.duration : 0);
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
+    // play() only rejects with a generic NotSupportedError; the media error
+    // says whether the file failed to load (403/404 from the asset protocol)
+    // or to decode.
+    const onError = () => console.warn('Meeting audio failed to load:', {
+      code: element.error?.code,
+      message: element.error?.message,
+      src: element.currentSrc,
+    });
+    element.addEventListener('error', onError);
     element.addEventListener('timeupdate', onTime);
     element.addEventListener('seeked', onTime);
     element.addEventListener('loadedmetadata', onMetadata);
@@ -101,6 +110,7 @@ export function MeetingPlayerProvider({ children }: { children: ReactNode }) {
     element.addEventListener('ended', onPause);
     return () => {
       element.pause();
+      element.removeEventListener('error', onError);
       element.removeEventListener('timeupdate', onTime);
       element.removeEventListener('seeked', onTime);
       element.removeEventListener('loadedmetadata', onMetadata);
