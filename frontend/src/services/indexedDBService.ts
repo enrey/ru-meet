@@ -105,9 +105,15 @@ class IndexedDBService {
       const store = transaction.objectStore('meetings');
 
       await new Promise<void>((resolve, reject) => {
-        const request = store.put(metadata);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error ?? new Error('Recovery metadata transaction aborted'));
+        const request = store.get(metadata.meetingId);
+        request.onsuccess = () => {
+          // A late folder/title update must never resurrect an already saved
+          // recording. Read and merge within the same write transaction.
+          store.put({ ...metadata, savedToSQLite: metadata.savedToSQLite || request.result?.savedToSQLite === true });
+        };
       });
     } catch (error) {
       console.warn('Failed to save meeting metadata to IndexedDB:', error);
@@ -175,24 +181,23 @@ class IndexedDBService {
       const transaction = this.db!.transaction(['meetings'], 'readwrite');
       const store = transaction.objectStore('meetings');
 
-      return new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error ?? new Error('Recovery save marker transaction aborted'));
         const getRequest = store.get(meetingId);
         getRequest.onsuccess = () => {
           const meeting = getRequest.result;
           if (meeting) {
             meeting.savedToSQLite = true;
             meeting.lastUpdated = Date.now();
-            const putRequest = store.put(meeting);
-            putRequest.onsuccess = () => resolve();
-            putRequest.onerror = () => reject(putRequest.error);
-          } else {
-            resolve();
+            store.put(meeting);
           }
         };
-        getRequest.onerror = () => reject(getRequest.error);
       });
     } catch (error) {
       console.warn('Failed to mark meeting as saved:', error);
+      throw error;
     }
   }
 

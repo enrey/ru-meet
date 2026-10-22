@@ -335,13 +335,18 @@ pub fn tts_prepare_summary_audio<R: Runtime>(
     Ok(())
 }
 
-/// Stop preparing a meeting's reading. The job notices at its next sentence,
-/// so the current `llama-tts` run finishes first; sentences already made stay
+/// Stop preparing a meeting's reading, including its current synthesis process.
+/// Sentences already made stay
 /// cached for the next attempt. Reports `summary-audio-cancelled`.
 #[tauri::command]
-pub fn tts_cancel_summary_audio<R: Runtime>(app: AppHandle<R>, meeting_id: String) -> Result<(), String> {
+pub fn tts_cancel_summary_audio<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+) -> Result<(), String> {
     {
-        let mut jobs = JOBS.lock().map_err(|_| "The speech job lock is unavailable")?;
+        let mut jobs = JOBS
+            .lock()
+            .map_err(|_| "The speech job lock is unavailable")?;
         if !matches!(jobs.get(&meeting_id), Some(Job::Running { .. })) {
             return Err("The summary is not being read aloud".to_string());
         }
@@ -381,48 +386,55 @@ fn prepare<R: Runtime>(app: &AppHandle<R>, meeting_id: String) {
     );
 
     let app = app.clone();
+    let task = crate::tasks::Task::register(crate::tasks::Action::Speech {
+        meeting_id: meeting_id.clone(),
+    });
     tauri::async_runtime::spawn(async move {
-        let outcome = async {
-            let pool = pool(&app);
-            let markdown = summary_markdown(&pool, &meeting_id)
-                .await?
-                .ok_or_else(|| anyhow!("There is no summary to read"))?;
-            let folder = speech_folder(&app, &pool, &meeting_id).await?;
-            let worker_app = app.clone();
-            let worker_meeting = meeting_id.clone();
-            tokio::task::spawn_blocking(move || {
-                build(&worker_app, &worker_meeting, generation, &markdown, &folder)
-            })
-            .await
-            .map_err(|error| anyhow!("The speech job stopped: {error}"))?
-        }
-        .await;
+        task.run(async move {
+            let outcome = async {
+                let pool = pool(&app);
+                let markdown = summary_markdown(&pool, &meeting_id)
+                    .await?
+                    .ok_or_else(|| anyhow!("There is no summary to read"))?;
+                let folder = speech_folder(&app, &pool, &meeting_id).await?;
+                let worker_app = app.clone();
+                let worker_meeting = meeting_id.clone();
+                tokio::task::spawn_blocking(move || {
+                    build(&worker_app, &worker_meeting, generation, &markdown, &folder)
+                })
+                .await
+                .map_err(|error| anyhow!("The speech job stopped: {error}"))?
+            }
+            .await;
 
-        let current = is_current(&meeting_id, generation);
-        match outcome {
-            Ok(true) if current => {
-                if let Ok(mut jobs) = JOBS.lock() {
-                    jobs.remove(&meeting_id);
+            let current = is_current(&meeting_id, generation);
+            match outcome {
+                Ok(true) if current => {
+                    if let Ok(mut jobs) = JOBS.lock() {
+                        jobs.remove(&meeting_id);
+                    }
+                    let _ = app.emit(
+                        "summary-audio-ready",
+                        serde_json::json!({ "meetingId": meeting_id }),
+                    );
                 }
-                let _ = app.emit(
-                    "summary-audio-ready",
-                    serde_json::json!({ "meetingId": meeting_id }),
-                );
-            }
-            Err(error) if current => {
-                log::warn!("Summary reading for {meeting_id} failed: {error:#}");
-                let message = error.to_string();
-                if let Ok(mut jobs) = JOBS.lock() {
-                    jobs.insert(meeting_id.clone(), Job::Failed(message.clone()));
+                Err(error) if current => {
+                    log::warn!("Summary reading for {meeting_id} failed: {error:#}");
+                    crate::tasks::fail_current(&error);
+                    let message = error.to_string();
+                    if let Ok(mut jobs) = JOBS.lock() {
+                        jobs.insert(meeting_id.clone(), Job::Failed(message.clone()));
+                    }
+                    let _ = app.emit(
+                        "summary-audio-failed",
+                        serde_json::json!({ "meetingId": meeting_id, "message": message }),
+                    );
                 }
-                let _ = app.emit(
-                    "summary-audio-failed",
-                    serde_json::json!({ "meetingId": meeting_id, "message": message }),
-                );
+                // Superseded by a newer request, which reports for itself.
+                _ => crate::tasks::cancel_current(),
             }
-            // Superseded by a newer request, which reports for itself.
-            _ => {}
-        }
+        })
+        .await;
     });
 }
 
@@ -438,6 +450,13 @@ fn build<R: Runtime>(
     let _worker = WORKER
         .lock()
         .map_err(|_| anyhow!("The speech worker lock is poisoned"))?;
+    let Some(preparation_permit) =
+        tauri::async_runtime::block_on(crate::background_work::acquire_while(|| {
+            is_current(meeting_id, generation)
+        }))
+    else {
+        return Ok(false);
+    };
     let chunks = text::summary_to_chunks(markdown);
     if chunks.is_empty() {
         bail!("There is nothing to read in this summary");
@@ -454,15 +473,17 @@ fn build<R: Runtime>(
     let total = chunks.len();
     let mut sentences: Vec<PathBuf> = Vec::with_capacity(total);
     let mut synthesized = 0;
+    drop(preparation_permit);
     for (index, (_, chunk)) in chunks.iter().enumerate() {
         if !is_current(meeting_id, generation) {
             return Ok(false);
         }
-        wait_while_recording(meeting_id, generation);
         let path = sentence_path(app, variant.id(), chunk)?;
         if !path.is_file() {
             let partial = path.with_extension("partial.wav");
-            engine(app)?.synthesize(chunk, &partial)?;
+            if !engine(app)?.synthesize(chunk, &partial, || is_current(meeting_id, generation))? {
+                return Ok(false);
+            }
             std::fs::rename(&partial, &path)?;
             synthesized += 1;
         }
@@ -478,10 +499,17 @@ fn build<R: Runtime>(
         );
     }
 
-    std::fs::create_dir_all(folder)?;
-    let (samples, rate, words) = stitch(&chunks, &sentences)?;
-    let duration = samples.len() as f32 / rate as f32;
-    let audio = save_audio(folder, &samples, rate)?;
+    if !is_current(meeting_id, generation) {
+        return Ok(false);
+    }
+    let (audio, duration, words) = tauri::async_runtime::block_on(
+        crate::background_worker::pack_speech(app, folder, chunks, sentences, || {
+            is_current(meeting_id, generation)
+        }),
+    )?;
+    if !is_current(meeting_id, generation) {
+        return Ok(false);
+    }
     let timings = Timings {
         version: FORMAT_VERSION,
         digest: wanted,
@@ -497,21 +525,6 @@ fn build<R: Runtime>(
         started.elapsed().as_secs_f32()
     );
     Ok(true)
-}
-
-/// A recording needs the machine more than a reading does.
-fn wait_while_recording(meeting_id: &str, generation: u64) {
-    let mut announced = false;
-    while tauri::async_runtime::block_on(crate::audio::recording_commands::is_recording()) {
-        if !is_current(meeting_id, generation) {
-            return;
-        }
-        if !announced {
-            log::info!("Summary reading for {meeting_id} waits for the recording to finish");
-            announced = true;
-        }
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    }
 }
 
 /// Samples of a mono 16-bit PCM WAV, which is what `llama-tts` writes.
@@ -762,4 +775,17 @@ mod tests {
         assert_eq!(read_wav(&path).unwrap(), (vec![1, -2, 3], 24_000));
         let _ = std::fs::remove_dir_all(folder);
     }
+}
+
+/// Only called inside the killable worker; FFmpeg inherits its process group.
+pub(crate) fn pack_in_worker(
+    folder: &Path,
+    chunks: &[(usize, String)],
+    sentences: &[PathBuf],
+) -> Result<(String, f32, Vec<SpokenWord>)> {
+    std::fs::create_dir_all(folder)?;
+    let (samples, rate, words) = stitch(chunks, sentences)?;
+    let duration = samples.len() as f32 / rate as f32;
+    let audio = save_audio(folder, &samples, rate)?;
+    Ok((audio, duration, words))
 }

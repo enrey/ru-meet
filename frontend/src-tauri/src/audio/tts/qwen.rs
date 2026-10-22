@@ -15,10 +15,11 @@
 //! Measured on an RTX 5060 Ti: 22 frames per second against the 12 needed for
 //! real time, so synthesis runs comfortably ahead of playback.
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Which checkpoint to speak with. Both are Base models; they differ in size,
 /// and so in how natural they sound and how fast they run.
@@ -53,7 +54,9 @@ impl Variant {
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        Variant::all().into_iter().find(|variant| variant.id() == id)
+        Variant::all()
+            .into_iter()
+            .find(|variant| variant.id() == id)
     }
 }
 
@@ -72,17 +75,18 @@ impl QwenTts {
     pub fn load(runtime: &Path, models: &Path, speaker: &Path, variant: Variant) -> Result<Self> {
         let executable = runtime.join(executable_name());
         if !executable.is_file() {
-            bail!(
-                "The speech runtime is missing: {}",
-                executable.display()
-            );
+            bail!("The speech runtime is missing: {}", executable.display());
         }
         let directory = models.join(variant.id());
         let model = directory.join("model.gguf");
         let codec = directory.join("mmproj.gguf");
         for (what, path) in [("model", &model), ("codec", &codec)] {
             if !path.is_file() {
-                bail!("The {what} for {} is missing: {}", variant.id(), path.display());
+                bail!(
+                    "The {what} for {} is missing: {}",
+                    variant.id(),
+                    path.display()
+                );
             }
         }
         if !speaker.is_file() {
@@ -103,7 +107,12 @@ impl QwenTts {
     }
 
     /// Speak one chunk of text straight into `output`, which receives a WAV.
-    pub fn synthesize(&self, text: &str, output: &Path) -> Result<()> {
+    pub fn synthesize(
+        &self,
+        text: &str,
+        output: &Path,
+        continue_work: impl Fn() -> bool,
+    ) -> Result<bool> {
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent).ok();
         }
@@ -128,19 +137,20 @@ impl QwenTts {
             .arg("-o")
             .arg(output);
 
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        let result = command
-            .output()
-            .with_context(|| format!("could not run {}", self.executable.display()))?;
-
-        if !result.status.success() {
-            let stderr = String::from_utf8_lossy(&result.stderr);
+        let mut diagnostics = tempfile::tempfile()?;
+        command
+            .stdout(Stdio::null())
+            .stderr(diagnostics.try_clone()?);
+        let status = crate::background_process::run_blocking(&mut command, continue_work, || {
+            let _ = std::fs::remove_file(output);
+        })?;
+        let Some(status) = status else {
+            return Ok(false);
+        };
+        if !status.success() {
+            diagnostics.seek(SeekFrom::Start(0))?;
+            let mut stderr = String::new();
+            diagnostics.read_to_string(&mut stderr)?;
             let reason = stderr
                 .lines()
                 .rev()
@@ -148,10 +158,11 @@ impl QwenTts {
                 .unwrap_or("see the log for details");
             return Err(anyhow!("speech synthesis failed: {reason}"));
         }
+
         if !output.is_file() {
             bail!("speech synthesis produced no audio");
         }
-        Ok(())
+        Ok(true)
     }
 }
 

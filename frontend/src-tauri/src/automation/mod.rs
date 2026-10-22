@@ -9,8 +9,8 @@ use tauri_plugin_store::StoreExt;
 pub(crate) mod call_apps;
 #[cfg(target_os = "macos")]
 mod macos;
-pub(crate) mod microphone_activity;
 mod manual_silence;
+pub(crate) mod microphone_activity;
 mod monitor;
 mod preview_keeper;
 pub(crate) mod preview_vad;
@@ -136,9 +136,12 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 /// Automatic recording is enabled, supported here, has a source to record
 /// and is not paused until the call ends — i.e. it would start on a call.
 pub(crate) fn is_listening<R: Runtime>(app: &AppHandle<R>) -> bool {
-    let enabled = app
-        .try_state::<AutomationState>()
-        .is_some_and(|state| state.0.read().is_ok_and(|settings| settings.auto_record_meetings));
+    let enabled = app.try_state::<AutomationState>().is_some_and(|state| {
+        state
+            .0
+            .read()
+            .is_ok_and(|settings| settings.auto_record_meetings)
+    });
     let mutes = crate::audio::recording_sources::current();
     enabled
         && !(mutes.microphone && mutes.system)
@@ -216,7 +219,10 @@ pub fn set_auto_record_option<R: Runtime>(
         _ => return Err(format!("Unknown automatic recording option: {option}")),
     };
     let settings = update_settings(&app, |settings| *field(settings) = enabled)?;
-    let _ = app.emit("auto-record-meetings-changed", settings.auto_record_meetings);
+    let _ = app.emit(
+        "auto-record-meetings-changed",
+        settings.auto_record_meetings,
+    );
     Ok(())
 }
 
@@ -335,4 +341,10 @@ mod tests {
         assert_eq!(settings.excluded_apps, vec!["spotify.exe"]);
         assert!(settings.call_apps.is_empty());
     }
+}
+
+static PREVIEW_SPEECH_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+pub(crate) fn preview_speech_enabled() -> bool {
+    PREVIEW_SPEECH_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }

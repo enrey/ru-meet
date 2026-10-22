@@ -12,6 +12,7 @@ import { useI18n } from '@/lib/i18n';
 export interface RecordingPreferences {
   save_folder: string;
   auto_save: boolean;
+  realtime_transcription: boolean;
   file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;
@@ -31,6 +32,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   const [preferences, setPreferences] = useState<RecordingPreferences>({
     save_folder: '',
     auto_save: true,
+    realtime_transcription: false,
     file_format: 'mp4',
     preferred_mic_device: null,
     preferred_system_device: null,

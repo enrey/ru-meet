@@ -33,6 +33,9 @@ pub mod anthropic;
 pub mod api;
 pub mod audio;
 pub mod automation;
+mod background_process;
+mod background_work;
+mod background_worker;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -48,8 +51,10 @@ pub mod openrouter;
 pub mod parakeet_engine;
 pub mod portable;
 pub mod processing;
+pub use background_worker::run_if_requested as run_background_worker;
 pub mod state;
 pub mod summary;
+mod tasks;
 pub mod tray;
 mod tray_badge;
 pub mod utils;
@@ -461,10 +466,8 @@ pub fn run() {
             // store, so do it off the setup thread.
             let app_for_recordings = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match audio::recording_preferences::load_recording_preferences(
-                    &app_for_recordings,
-                )
-                .await
+                match audio::recording_preferences::load_recording_preferences(&app_for_recordings)
+                    .await
                 {
                     Ok(preferences) => audio::recording_preferences::allow_recordings_folder(
                         &app_for_recordings,
@@ -602,6 +605,8 @@ pub fn run() {
                     .set_error(error);
             }
 
+            tasks::initialize(_app.handle().clone());
+
             if let Err(error) = audio::recording_sources::initialize(_app.handle()) {
                 log::error!("Could not initialize recording sources: {error}");
             }
@@ -638,6 +643,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             i18n::set_ui_language,
+            tasks::get_tasks,
+            tasks::retry_task,
             automation::get_automation_preferences,
             automation::set_auto_record_meetings,
             automation::set_launch_at_login,
@@ -760,6 +767,7 @@ pub fn run() {
             anthropic::anthropic::get_anthropic_models,
             groq::groq::get_groq_models,
             api::api_get_meetings,
+            api::api_match_saved_recordings,
             api::api_search_transcripts,
             api::api_search_meeting_transcript,
             api::api_get_profile,
@@ -923,4 +931,21 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+/// Initialize the same bundled runtime in the headless process before native work.
+fn init_worker_onnx(path: Option<&std::path::Path>) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        let path = path.ok_or_else(|| anyhow::anyhow!("Bundled ONNX Runtime path is missing"))?;
+        catch_onnx_runtime_init(|| {
+            ort::init_from(path)?.with_telemetry(false).commit();
+            Ok::<(), ort::LoadDynamicError>(())
+        })
+        .map_err(anyhow::Error::msg)?;
+        record_onnx_runtime_success();
+    }
+    #[cfg(not(windows))]
+    let _ = path;
+    Ok(())
 }

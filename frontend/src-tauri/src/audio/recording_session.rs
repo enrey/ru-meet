@@ -1,6 +1,6 @@
 use std::sync::{atomic::Ordering, Arc, LazyLock, Mutex, MutexGuard};
 
-use log::{error, info, warn};
+use log::{info, warn};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::task::JoinHandle;
@@ -30,6 +30,8 @@ struct SessionData {
     transcription_task: Option<JoinHandle<()>>,
     device_recovery_task: Option<JoinHandle<()>>,
     automatic: bool,
+    realtime_transcription: bool,
+    background_priority: Option<crate::background_work::RecordingPriority>,
 }
 
 impl Default for SessionData {
@@ -41,6 +43,8 @@ impl Default for SessionData {
             transcription_task: None,
             device_recovery_task: None,
             automatic: false,
+            realtime_transcription: false,
+            background_priority: None,
         }
     }
 }
@@ -57,6 +61,7 @@ pub struct StopResources {
     pub transcription_task: Option<JoinHandle<()>>,
     pub device_recovery_task: Option<JoinHandle<()>>,
     pub automatic: bool,
+    pub realtime_transcription: bool,
     pub duration: f64,
 }
 
@@ -121,29 +126,13 @@ impl RecordingSession {
         self.lock().automatic = automatic;
         crate::automation::recording_speech::reset();
         let _start_guard = StartGuard(self, generation);
+        let priority = crate::background_work::reserve_recording();
+        self.lock().background_priority = Some(priority);
         if let Err(error) = crate::ensure_onnx_runtime_available() {
             return Err(recording_commands::map_recording_start_error(
                 &app,
                 RecordingStartError::TranscriptionRuntime(error),
             ));
-        }
-
-        // Only check the model is on disk: loading it takes seconds, and the
-        // transcription task does that after capture has already started.
-        if let Err(validation_error) =
-            transcription::ensure_transcription_model_available(&app).await
-        {
-            error!("Model validation failed: {}", validation_error);
-            let _ = app.emit(
-                "transcription-error",
-                serde_json::json!({
-                    "error": validation_error,
-                    "userMessage": format!("Recording cannot start: {}", validation_error),
-                    "actionable": false,
-                    "phase": "startup"
-                }),
-            );
-            return Err(validation_error);
         }
 
         let _ = app.emit(
@@ -158,6 +147,15 @@ impl RecordingSession {
                 error
             })
             .ok();
+        let realtime_transcription = preferences
+            .as_ref()
+            .is_some_and(|p| p.realtime_transcription);
+        self.lock().realtime_transcription = realtime_transcription;
+        if realtime_transcription {
+            if let Err(error) = transcription::ensure_transcription_model_available(&app).await {
+                return Err(error);
+            }
+        }
         let preferred_mic = microphone.as_deref().or_else(|| {
             preferences
                 .as_ref()
@@ -180,7 +178,8 @@ impl RecordingSession {
         let mut manager = RecordingManager::new();
         let auto_save = preferences
             .as_ref()
-            .map_or(true, |preferences| preferences.auto_save);
+            .map_or(true, |preferences| preferences.auto_save)
+            || !realtime_transcription;
         let effective_meeting_name = meeting_name.unwrap_or_else(|| {
             let now = chrono::Local::now();
             format!("Meeting {}", now.format("%Y-%m-%d_%H-%M-%S"))
@@ -193,7 +192,7 @@ impl RecordingSession {
         });
 
         let transcription_receiver = manager
-            .start_recording(mic_device, system_device, auto_save)
+            .start_recording(mic_device, system_device, auto_save, realtime_transcription)
             .await
             .map_err(|error| recording_commands::map_recording_start_error(&app, error))?;
         let device_event_receiver = manager.take_device_event_receiver();
@@ -209,12 +208,17 @@ impl RecordingSession {
 
         recording_commands::MIC_FALLBACK_FAILED_ATTEMPTS.store(0, Ordering::SeqCst);
         reset_speech_detected_flag();
-        let task = transcription::start_transcription_task(
-            app.clone(),
-            transcription_receiver,
-            transcript_target,
-        );
-        self.install_transcription_task(generation, task)?;
+        if realtime_transcription {
+            let task = transcription::start_transcription_task(
+                app.clone(),
+                transcription_receiver,
+                transcript_target,
+            );
+            self.install_transcription_task(generation, task)?;
+        } else {
+            drop(transcription_receiver);
+            log::info!("Recording audio with activity-only VAD; speech recognition is deferred");
+        }
 
         let _ = app.emit(
             "recording-started",
@@ -309,10 +313,7 @@ impl RecordingSession {
                 .discard_recording()
                 .await
                 .map_err(|e| e.to_string())?;
-            let _ = app.emit(
-                "recording-discarded",
-                serde_json::json!({"reason": reason}),
-            );
+            let _ = app.emit("recording-discarded", serde_json::json!({"reason": reason}));
             crate::tray::update_tray_menu(&app);
             return Ok(None);
         }
@@ -358,17 +359,56 @@ impl RecordingSession {
             )
             .await
             .map_err(|error| format!("Failed to persist finalized recording: {error}"))?;
-        let diarization_status = super::diarization::start_recording_diarization(
-            app.clone(), app_state.db_manager.pool().clone(), meeting_id.clone(),
-            audio_path, diarization_target,
-        );
-        // Speakers (already started above), summary and reading aloud, in
-        // the background and whether or not the meeting page is opened.
-        if crate::automation::auto_summary(&app) {
-            if let Err(error) = crate::processing::start(app.clone(), meeting_id.clone(), false) {
-                warn!("Could not start processing the recording: {error}");
+        let diarization_status = if resources.realtime_transcription {
+            let diarization_status = super::diarization::start_recording_diarization(
+                app.clone(),
+                app_state.db_manager.pool().clone(),
+                meeting_id.clone(),
+                audio_path,
+                diarization_target,
+            );
+            // Speakers (already started above), summary and reading aloud, in
+            // the background and whether or not the meeting page is opened.
+            if crate::automation::auto_summary(&app) {
+                if let Err(error) = crate::processing::start(app.clone(), meeting_id.clone(), false)
+                {
+                    warn!("Could not start processing the recording: {error}");
+                }
             }
-        }
+
+            diarization_status
+        } else {
+            let app_for_job = app.clone();
+            let id = meeting_id.clone();
+            let folder = folder_path
+                .clone()
+                .ok_or_else(|| "Saved recording folder is unavailable".to_string())?;
+            tauri::async_runtime::spawn(async move {
+                let config = crate::api::api::api_get_transcript_config(
+                    app_for_job.clone(),
+                    app_for_job.state(),
+                    None,
+                )
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(crate::api::api::TranscriptConfig::local_default);
+                if let Err(error) = crate::audio::retranscription::start_with_followup(
+                    app_for_job,
+                    id.clone(),
+                    folder,
+                    crate::get_language_preference_internal(),
+                    Some(config.model),
+                    Some(config.provider),
+                    true,
+                )
+                .await
+                {
+                    log::warn!("Deferred transcription failed for {id}: {error}");
+                }
+            });
+            "queued".to_string()
+        };
 
         let result = FinalizedRecording {
             meeting_id,
@@ -441,6 +481,7 @@ impl RecordingSession {
     pub fn abort_start(&self, generation: u64) {
         let mut data = self.lock();
         if data.generation == generation && data.phase == SessionPhase::Starting {
+            data.background_priority = None;
             data.manager = None;
             data.transcription_task = None;
             data.device_recovery_task = None;
@@ -482,6 +523,7 @@ impl RecordingSession {
             transcription_task: data.transcription_task.take(),
             device_recovery_task: data.device_recovery_task.take(),
             automatic: data.automatic,
+            realtime_transcription: data.realtime_transcription,
             duration,
         }))
     }
@@ -489,6 +531,7 @@ impl RecordingSession {
     pub fn finish_stop(&self, generation: u64) {
         let mut data = self.lock();
         if data.generation == generation && data.phase == SessionPhase::Stopping {
+            data.background_priority = None;
             data.manager = None;
             data.transcription_task = None;
             data.device_recovery_task = None;
@@ -630,7 +673,10 @@ mod tests {
 
     #[test]
     fn one_minute_threshold_only_applies_to_automatic_recordings() {
-        assert_eq!(discard_reason(true, 59.999, speech(true, 60)), Some("short_automatic_meeting"));
+        assert_eq!(
+            discard_reason(true, 59.999, speech(true, 60)),
+            Some("short_automatic_meeting")
+        );
         assert_eq!(discard_reason(true, 60.0, speech(true, 60)), None);
         assert_eq!(discard_reason(true, 61.0, speech(true, 60)), None);
         assert_eq!(discard_reason(false, 0.5, speech(true, 0)), None);
@@ -638,7 +684,10 @@ mod tests {
 
     #[test]
     fn automatic_recordings_without_speech_are_discarded() {
-        assert_eq!(discard_reason(true, 600.0, speech(true, 9)), Some("no_speech"));
+        assert_eq!(
+            discard_reason(true, 600.0, speech(true, 9)),
+            Some("no_speech")
+        );
         assert_eq!(discard_reason(true, 600.0, speech(true, 10)), None);
         // A VAD that judged nothing is no evidence of silence.
         assert_eq!(discard_reason(true, 600.0, speech(false, 0)), None);

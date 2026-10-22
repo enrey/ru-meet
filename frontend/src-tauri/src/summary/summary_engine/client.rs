@@ -250,7 +250,9 @@ pub async fn generate_with_builtin(
             }
         }
     } else {
-        manager.send_request(request_json, timeout, on_progress).await?
+        manager
+            .send_request(request_json, timeout, on_progress)
+            .await?
     };
 
     // Check cancellation before parsing response
@@ -387,5 +389,11 @@ mod tests {
             }
             _ => panic!("Wrong response type"),
         }
+    }
+}
+
+pub(crate) fn emit_progress(progress: GenerationProgress) {
+    if let Some(emit) = PROGRESS_EMITTER.get() {
+        emit(progress);
     }
 }

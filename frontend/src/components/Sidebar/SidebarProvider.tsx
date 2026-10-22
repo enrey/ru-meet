@@ -136,6 +136,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     fetchMeetings();
   }, [serverAddress, fetchMeetings]);
 
+  useEffect(() => {
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void listen('retranscription-complete', () => { void fetchMeetings(); })
+      .then(fn => { if (disposed) fn(); else stop = fn; });
+    return () => { disposed = true; stop?.(); };
+  }, [fetchMeetings]);
+
   // Background processing (`crate::processing`) ends wherever the user is:
   // say how it went and refresh the stages the library shows.
   useEffect(() => {

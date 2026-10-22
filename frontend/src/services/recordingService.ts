@@ -21,7 +21,7 @@ export interface FinalizedRecording {
   meetingName: string;
   folderPath?: string;
   transcriptCount: number;
-  diarizationStatus: 'completed' | 'failed' | 'skipped';
+  diarizationStatus: 'completed' | 'failed' | 'skipped' | 'pending' | 'queued';
 }
 
 // Bound the start invoke: > ~40s Bluetooth mic cold-start and ~90s worst-case

@@ -69,6 +69,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let unlistenRecordingStarted: (() => void) | undefined;
     let unlistenRecordingStopped: (() => void) | undefined;
+    let disposed = false;
 
     const setupRecordingListeners = async () => {
       try {
@@ -82,6 +83,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             transcriptsRef.current = [];
             // Generate unique meeting ID
             const meetingId = `meeting-${Date.now()}`;
+            currentMeetingIdRef.current = meetingId;
             setCurrentMeetingId(meetingId);
 
             // Get meeting name
@@ -124,22 +126,30 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
           }
         });
 
+        if (disposed) { unlistenRecordingStarted(); return; }
+
         // Listen for recording-stopped event
         unlistenRecordingStopped = await recordingService.onRecordingStopped(async (payload) => {
           try {
-            if (currentMeetingId) {
-              // Update folder path in IndexedDB
-              const metadata = await indexedDBService.getMeetingMetadata(currentMeetingId);
-
+            const draftId = currentMeetingIdRef.current;
+            if (draftId && payload.meetingId) {
+              const metadata = await indexedDBService.getMeetingMetadata(draftId);
+              // A delayed stop must not mark the next recording's draft saved.
+              if (metadata?.folderPath && payload.folderPath && metadata.folderPath !== payload.folderPath) return;
+              if (metadata && !metadata.folderPath && metadata.title !== payload.meetingName) return;
               if (metadata && payload.folderPath) {
                 metadata.folderPath = payload.folderPath;
                 await indexedDBService.saveMeetingMetadata(metadata);
               }
+              // This event is emitted only after the native SQLite transaction
+              // commits, including automatic/tray stops on other pages.
+              await indexedDBService.markMeetingSaved(draftId);
             }
           } catch (error) {
             console.error('Failed to update meeting metadata on stop:', error);
           }
         });
+        if (disposed) unlistenRecordingStopped();
       } catch (error) {
         console.error('Failed to setup recording listeners:', error);
       }
@@ -148,6 +158,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     setupRecordingListeners();
 
     return () => {
+      disposed = true;
       if (unlistenRecordingStarted) {
         unlistenRecordingStarted();
         console.log('🧹 Recording started listener cleaned up');
@@ -157,7 +168,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         console.log('🧹 Recording stopped listener cleaned up');
       }
     };
-  }, [currentMeetingId]);
+  }, []);
 
   // Main transcript buffering logic with sequence_id ordering
   useEffect(() => {

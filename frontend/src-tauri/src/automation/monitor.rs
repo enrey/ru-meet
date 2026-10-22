@@ -53,7 +53,10 @@ static MEETING_PLAYBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_meeting_playback_active(active: bool) {
     if MEETING_PLAYBACK_ACTIVE.swap(active, Ordering::Relaxed) != active {
-        log::info!("In-app meeting playback {}", if active { "started" } else { "stopped" });
+        log::info!(
+            "In-app meeting playback {}",
+            if active { "started" } else { "stopped" }
+        );
     }
 }
 
@@ -61,7 +64,10 @@ pub(crate) fn set_meeting_playback_active(active: bool) {
 static MIC_HOLDERS: Mutex<Vec<MicHolder>> = Mutex::new(Vec::new());
 
 pub(crate) fn mic_holders() -> Vec<MicHolder> {
-    MIC_HOLDERS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    MIC_HOLDERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// Returns whether the holders changed.
@@ -102,7 +108,9 @@ impl Detection {
     /// call was not `busy` within that window. A call that continues keeps it
     /// paused; the next one after it starts recording.
     fn rearm_if_silent(&mut self, busy: bool, now: Instant) {
-        if self.paused_since.is_some_and(|since| now.duration_since(since) >= REARM_SILENCE)
+        if self
+            .paused_since
+            .is_some_and(|since| now.duration_since(since) >= REARM_SILENCE)
             && !busy
         {
             self.paused_since = None;
@@ -172,8 +180,10 @@ async fn playback_active(excluded_apps: &[String]) -> bool {
     {
         let excluded_apps = excluded_apps.to_vec();
         matches!(
-            tokio::task::spawn_blocking(move || super::windows::has_active_playback(&excluded_apps))
-                .await,
+            tokio::task::spawn_blocking(move || super::windows::has_active_playback(
+                &excluded_apps
+            ))
+            .await,
             Ok(Ok(true))
         )
     }
@@ -212,6 +222,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                 }
             }
             let in_person = settings.auto_record_meetings && settings.record_in_person;
+            super::PREVIEW_SPEECH_ENABLED.store(in_person, Ordering::Relaxed);
             // Speech detection must not depend on which page (if any) is open.
             preview.tick(&app, in_person).await;
 
@@ -248,7 +259,10 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
             let failed = holders.is_none();
             let failure_changed = DETECTION_FAILED.swap(failed, Ordering::Relaxed) != failed;
             if holders_changed || failure_changed {
-                let _ = app.emit("auto-record-meetings-changed", settings.auto_record_meetings);
+                let _ = app.emit(
+                    "auto-record-meetings-changed",
+                    settings.auto_record_meetings,
+                );
             }
 
             let now = Instant::now();
@@ -261,13 +275,18 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
 
             let mutes = crate::audio::recording_sources::current();
             let no_sources = mutes.microphone && mutes.system;
-            let (microphone_speech, output_speech) = super::microphone_activity::confirmed_sources();
+            let (microphone_speech, output_speech) =
+                super::microphone_activity::confirmed_sources();
             let microphone_speech = in_person && microphone_speech && !mutes.microphone;
             let output_speech = in_person && output_speech && !mutes.system;
             let playback = in_person && playback_active(&settings.excluded_apps).await;
             // Our own player never starts a recording in the in-person mode.
             let in_person_start = !MEETING_PLAYBACK_ACTIVE.load(Ordering::Relaxed)
-                && super::microphone_activity::can_start(playback, microphone_speech, output_speech);
+                && super::microphone_activity::can_start(
+                    playback,
+                    microphone_speech,
+                    output_speech,
+                );
             let in_person_keep = microphone_speech || (playback && !mutes.system);
 
             let speech = recording_speech::snapshot();
@@ -297,9 +316,16 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
             if PAUSED_UNTIL_CALL_ENDS.swap(paused, Ordering::Relaxed) != paused {
                 log::info!(
                     "Automatic recording detector {}",
-                    if paused { "paused until the call ends" } else { "listening" }
+                    if paused {
+                        "paused until the call ends"
+                    } else {
+                        "listening"
+                    }
                 );
-                let _ = app.emit("auto-record-meetings-changed", settings.auto_record_meetings);
+                let _ = app.emit(
+                    "auto-record-meetings-changed",
+                    settings.auto_record_meetings,
+                );
             }
             crate::tray::refresh_tray_indicator(&app);
 
@@ -321,7 +347,9 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                     StopReason::CallEnded => detection.absent_since.unwrap_or(now),
                     _ => now,
                 };
-                let duration = end.saturating_duration_since(current.first_seen).as_secs_f64();
+                let duration = end
+                    .saturating_duration_since(current.first_seen)
+                    .as_secs_f64();
                 log::info!("Stopping automatic recording: {reason:?} after {duration:.0}s");
                 match RECORDING_SESSION
                     .stop_automatic(app.clone(), current.generation, duration)
@@ -499,27 +527,58 @@ mod tests {
         let start = Instant::now();
         let recording = owned(start);
         let spoke = Some(start + Duration::from_secs(60));
-        assert_eq!(backstop(&recording, &speech(true, spoke), start + Duration::from_secs(60) + SILENCE_STOP - Duration::from_secs(1)), None);
         assert_eq!(
-            backstop(&recording, &speech(true, spoke), start + Duration::from_secs(60) + SILENCE_STOP),
+            backstop(
+                &recording,
+                &speech(true, spoke),
+                start + Duration::from_secs(60) + SILENCE_STOP - Duration::from_secs(1)
+            ),
+            None
+        );
+        assert_eq!(
+            backstop(
+                &recording,
+                &speech(true, spoke),
+                start + Duration::from_secs(60) + SILENCE_STOP
+            ),
             Some(StopReason::Silence)
         );
         // Silence from the very start counts too.
-        assert_eq!(backstop(&recording, &speech(true, None), start + SILENCE_STOP), Some(StopReason::Silence));
+        assert_eq!(
+            backstop(&recording, &speech(true, None), start + SILENCE_STOP),
+            Some(StopReason::Silence)
+        );
     }
     #[test]
     fn an_unmeasured_recording_is_not_silent_and_pauses_do_not_count() {
         let start = Instant::now();
-        assert_eq!(backstop(&owned(start), &speech(false, None), start + SILENCE_STOP * 2), None);
+        assert_eq!(
+            backstop(
+                &owned(start),
+                &speech(false, None),
+                start + SILENCE_STOP * 2
+            ),
+            None
+        );
         let mut recording = owned(start);
         recording.quiet_floor = start + Duration::from_secs(30 * 60);
-        assert_eq!(backstop(&recording, &speech(true, None), start + Duration::from_secs(35 * 60)), None);
+        assert_eq!(
+            backstop(
+                &recording,
+                &speech(true, None),
+                start + Duration::from_secs(35 * 60)
+            ),
+            None
+        );
     }
     #[test]
     fn the_duration_ceiling_applies_even_during_speech() {
         let start = Instant::now();
         let now = start + MAX_DURATION;
-        assert_eq!(backstop(&owned(start), &speech(true, Some(now)), now), Some(StopReason::MaxDuration));
+        assert_eq!(
+            backstop(&owned(start), &speech(true, Some(now)), now),
+            Some(StopReason::MaxDuration)
+        );
         assert!(StopReason::MaxDuration.is_backstop());
         assert!(!StopReason::CallEnded.is_backstop());
     }

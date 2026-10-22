@@ -15,7 +15,7 @@ use tokio::sync::Mutex as AsyncMutex;
 // TRANSCRIPTION ENGINE INTERFACE
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProviderId {
     Whisper,
     Parakeet,
@@ -53,6 +53,39 @@ impl TranscriptionEngine {
         Self {
             provider_id,
             provider,
+        }
+    }
+
+    /// A worker owns its models; it never touches the live recording engines.
+    pub(crate) async fn for_worker(
+        models: std::path::PathBuf,
+        provider: ProviderId,
+        model: &str,
+    ) -> Result<Self, String> {
+        match provider {
+            ProviderId::Whisper => {
+                let engine = Arc::new(
+                    crate::whisper_engine::WhisperEngine::new_with_models_dir(Some(models))
+                        .map_err(|e| e.to_string())?,
+                );
+                ensure_whisper_model(&engine, model).await?;
+                Ok(Self::new(provider, Arc::new(WhisperProvider::new(engine))))
+            }
+            ProviderId::Parakeet => {
+                let engine = Arc::new(
+                    crate::parakeet_engine::ParakeetEngine::new_with_models_dir(Some(models))
+                        .map_err(|e| e.to_string())?,
+                );
+                ensure_parakeet_model(&engine, model).await?;
+                Ok(Self::new(provider, Arc::new(ParakeetProvider::new(engine))))
+            }
+            ProviderId::GigaAm => {
+                let engine = Arc::new(
+                    crate::gigaam_engine::GigaAmEngine::new(models).map_err(|e| e.to_string())?,
+                );
+                engine.load_model(model).await.map_err(|e| e.to_string())?;
+                Ok(Self::new(provider, engine))
+            }
         }
     }
 
@@ -95,8 +128,7 @@ static ENGINE_LIFECYCLE_LOCK: Lazy<AsyncMutex<()>> = Lazy::new(|| AsyncMutex::ne
 async fn recording_transcript_config<R: Runtime>(
     app: &AppHandle<R>,
 ) -> crate::api::api::TranscriptConfig {
-    match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state(), None).await
-    {
+    match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state(), None).await {
         Ok(Some(config)) => {
             info!(
                 "📝 Transcript config - provider: {}, model: {}",
@@ -182,7 +214,10 @@ pub async fn ensure_transcription_model_available<R: Runtime>(
     };
 
     if available {
-        info!("✅ Transcription model '{}' is on disk; it loads in the background", model);
+        info!(
+            "✅ Transcription model '{}' is on disk; it loads in the background",
+            model
+        );
         Ok(())
     } else {
         Err(format!(
@@ -260,6 +295,10 @@ pub async fn get_or_init_batch_engine<R: Runtime>(
 
 /// Unload the batch provider unless a live recording is using the shared engine.
 pub async fn unload_batch_engine(provider: Option<&str>) {
+    if crate::audio::recording_session::RECORDING_SESSION.is_active() {
+        return;
+    }
+    let _permit = crate::background_work::acquire().await;
     let _guard = ENGINE_LIFECYCLE_LOCK.lock().await;
     if crate::audio::recording_commands::is_recording().await {
         info!("Skipping model unload after batch: recording in progress");
@@ -442,4 +481,13 @@ mod tests {
         assert_eq!(result.text, "1600 samples");
         assert_eq!(result.confidence, Some(0.75));
     }
+}
+
+pub(crate) async fn worker_config<R: Runtime>(
+    app: &AppHandle<R>,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Result<(ProviderId, String), String> {
+    let provider = ProviderId::parse(provider, ProviderId::Whisper)?;
+    Ok((provider, resolve_model(app, provider, model).await?))
 }

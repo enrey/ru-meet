@@ -275,6 +275,58 @@ pub(crate) async fn generate_summary(
     app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<LlmCompletion, String> {
+    if provider == &LLMProvider::BuiltInAI {
+        let data = app_data_dir
+            .ok_or_else(|| "app_data_dir is required for BuiltInAI provider".to_string())?;
+        return crate::background_worker::summary(
+            data,
+            model_name,
+            system_prompt,
+            user_prompt,
+            cancellation_token,
+        )
+        .await
+        .map(|content| LlmCompletion {
+            content,
+            reasoning_stripped: false,
+        });
+    }
+    crate::background_work::restartable(cancellation_token, |attempt_token| async move {
+        generate_summary_once(
+            client,
+            provider,
+            model_name,
+            api_key,
+            system_prompt,
+            user_prompt,
+            ollama_endpoint,
+            custom_openai_endpoint,
+            max_tokens,
+            temperature,
+            top_p,
+            app_data_dir,
+            Some(&attempt_token),
+        )
+        .await
+    })
+    .await
+}
+
+async fn generate_summary_once(
+    client: &Client,
+    provider: &LLMProvider,
+    model_name: &str,
+    api_key: &str,
+    system_prompt: &str,
+    user_prompt: &str,
+    ollama_endpoint: Option<&str>,
+    custom_openai_endpoint: Option<&str>,
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+    app_data_dir: Option<&PathBuf>,
+    cancellation_token: Option<&CancellationToken>,
+) -> Result<LlmCompletion, String> {
     // Check if cancelled before starting
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {

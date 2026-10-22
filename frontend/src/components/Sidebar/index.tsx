@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Home, Library, Loader2, Mic, Moon, PanelLeftClose, PanelLeftOpen, Settings, Square, Sun, Unplug, Upload } from 'lucide-react';
+import { Home, Library, ListTodo, Loader2, Mic, Moon, PanelLeftClose, PanelLeftOpen, Settings, Square, Sun, Unplug, Upload } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -15,6 +15,7 @@ import { useI18n } from '@/lib/i18n';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { setTheme, useTheme } from '@/lib/theme';
 import Logo from '../Logo';
+import { useTasks } from '@/contexts/TasksContext';
 
 interface NavItemProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   icon: React.ReactNode;
@@ -111,6 +112,10 @@ const Sidebar: React.FC = () => {
   const { betaFeatures } = useConfig();
   const { recoverableCount, openRecoveryDialog } = useTranscriptRecoveryDialog();
 
+  const tasks = useTasks();
+  const pendingTasks = tasks.tasks.filter(task => !task.finishedAt).length;
+  const failedTasks = tasks.tasks.filter(task => task.status === 'failed').length;
+  const tasksRunning = tasks.tasks.some(task => task.status === 'running');
   const isLibraryPage = pathname === '/meetings' || pathname?.startsWith('/meeting-details');
   const recordingDetail = isRecording
     ? `${isPaused ? t('Paused') : t('Recording in progress')} · ${formatClock(activeDuration)}`
@@ -151,6 +156,17 @@ const Sidebar: React.FC = () => {
           active={isLibraryPage}
           onClick={() => router.push('/meetings')}
           trailing={meetings.length > 0 && <span className="text-xs text-slate-400">{meetings.length}</span>}
+        />
+
+        <NavItem
+          collapsed={isCollapsed}
+          icon={<ListTodo className="h-5 w-5" />}
+          label={t('Tasks')}
+          active={pathname === '/tasks'}
+          onClick={() => router.push('/tasks')}
+          detail={tasks.recordingPaused && pendingTasks > 0 ? t('Paused for recording') : failedTasks > 0 ? t('Needs attention: {count}', { count: failedTasks }) : undefined}
+          trailing={pendingTasks > 0 && <span className="text-xs tabular-nums text-slate-500">{pendingTasks}</span>}
+          iconBadge={(tasksRunning || failedTasks > 0) && <span aria-hidden className={`absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full ring-2 ring-white ${tasksRunning ? 'bg-indigo-500 motion-safe:animate-pulse' : 'bg-red-500'}`} />}
         />
 
         {betaFeatures.importAndRetranscribe && (

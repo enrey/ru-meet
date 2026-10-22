@@ -81,6 +81,16 @@ impl SileroVad {
         let path = ensure_silero_model()?;
         let session = Session::builder()
             .map_err(|error| anyhow!("failed to create Silero VAD ONNX session: {error}"))?
+            // Silero evaluates one 32ms frame. Worker pools/spinning cost more
+            // than this small graph; match the official single-thread wrapper.
+            .with_intra_threads(1)
+            .map_err(|error| anyhow!("failed to configure Silero VAD threads: {error}"))?
+            .with_inter_threads(1)
+            .map_err(|error| anyhow!("failed to configure Silero VAD threads: {error}"))?
+            .with_intra_op_spinning(false)
+            .map_err(|error| anyhow!("failed to configure Silero VAD threads: {error}"))?
+            .with_inter_op_spinning(false)
+            .map_err(|error| anyhow!("failed to configure Silero VAD threads: {error}"))?
             .commit_from_file(&path)
             .map_err(|error| {
                 anyhow!(
@@ -103,10 +113,7 @@ impl SileroVad {
         let mut input = Vec::with_capacity(SILERO_CONTEXT_SIZE + SILERO_FRAME_SIZE);
         input.extend_from_slice(&self.context);
         input.extend_from_slice(samples);
-        let audio = Array2::from_shape_vec(
-            (1, SILERO_CONTEXT_SIZE + SILERO_FRAME_SIZE),
-            input,
-        )?;
+        let audio = Array2::from_shape_vec((1, SILERO_CONTEXT_SIZE + SILERO_FRAME_SIZE), input)?;
         let sample_rate = Array1::from_vec(vec![VAD_SAMPLE_RATE as i64]);
         let outputs = self.session.run(inputs![
             "input" => TensorRef::from_array_view(audio.view())?,
@@ -127,7 +134,8 @@ impl SileroVad {
             .try_extract_array::<f32>()?
             .to_owned()
             .into_dimensionality::<Ix3>()?;
-        self.context.copy_from_slice(&samples[SILERO_FRAME_SIZE - SILERO_CONTEXT_SIZE..]);
+        self.context
+            .copy_from_slice(&samples[SILERO_FRAME_SIZE - SILERO_CONTEXT_SIZE..]);
         Ok(probability)
     }
 }
@@ -371,7 +379,9 @@ impl ContinuousVadProcessor {
         let mut frames = Vec::new();
         while self.buffer.len() >= SILERO_FRAME_SIZE {
             let frame: Vec<f32> = self.buffer.drain(..SILERO_FRAME_SIZE).collect();
-            let rms = (frame.iter().map(|sample| sample * sample).sum::<f32>() / SILERO_FRAME_SIZE as f32).sqrt();
+            let rms = (frame.iter().map(|sample| sample * sample).sum::<f32>()
+                / SILERO_FRAME_SIZE as f32)
+                .sqrt();
             let probability = self.session.probability(&frame)?;
             frames.push((rms, probability));
         }
@@ -746,17 +756,23 @@ mod tests {
     fn quiet_speech_keeps_context_across_frames() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jfk.mp3");
         let decoded = super::super::decoder::decode_audio_file(&path).unwrap();
-        let mono = super::super::audio_processing::audio_to_mono(
-            &decoded.samples, decoded.channels,
-        );
+        let mono =
+            super::super::audio_processing::audio_to_mono(&decoded.samples, decoded.channels);
         let mut processor = ContinuousVadProcessor::new(decoded.sample_rate, 500).unwrap();
         let quiet: Vec<f32> = mono.iter().map(|sample| sample * 0.01).collect();
         let mut speech_frames = 0;
         for chunk in quiet.chunks((decoded.sample_rate / 10) as usize) {
-            speech_frames += processor.process_activity(chunk).unwrap().iter()
-                .filter(|(_, probability)| *probability >= 0.5).count();
+            speech_frames += processor
+                .process_activity(chunk)
+                .unwrap()
+                .iter()
+                .filter(|(_, probability)| *probability >= 0.5)
+                .count();
         }
-        assert!(speech_frames >= 20, "quiet speech was lost: {speech_frames} frames");
+        assert!(
+            speech_frames >= 20,
+            "quiet speech was lost: {speech_frames} frames"
+        );
     }
 
     /// Tests that build a real [`VadProcessor`] are `#[ignore]`d: they need a
@@ -1144,4 +1160,9 @@ mod tests {
             "flush() must not emit the same forced segment twice"
         );
     }
+}
+
+pub(crate) fn configure_worker(models: PathBuf, bundled: Option<PathBuf>) {
+    *MODELS_DIR.lock().unwrap() = Some(models);
+    *BUNDLED_MODEL_PATH.lock().unwrap() = bundled.filter(|path| verify_silero_model(path));
 }

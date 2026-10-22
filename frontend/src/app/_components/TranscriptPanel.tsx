@@ -1,3 +1,4 @@
+import { RealtimeTranscriptionSwitch } from '@/components/RealtimeTranscriptionSwitch';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { PermissionWarning } from '@/components/PermissionWarning';
 import { Button } from '@/components/ui/button';
@@ -143,6 +144,8 @@ export function TranscriptPanel({
           </div>
         </div>
       </div>
+
+      <div className="shrink-0 px-4 pb-3"><RealtimeTranscriptionSwitch /></div>
 
       {/* Permission Warning - Not needed on Linux */}
       {!isRecording && !isChecking && !isLinux && (

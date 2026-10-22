@@ -1,15 +1,10 @@
 // Retranscription module - allows re-processing stored audio with different settings
 
-use super::common::{
-    create_transcript_segments, rejoin_split_utterances, split_segment_at_silence,
-    write_transcripts_json,
-};
+use super::common::{create_transcript_segments, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
-use crate::audio::decoder::decode_audio_file;
-use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::state::AppState;
 use anyhow::{anyhow, Result};
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,7 +44,8 @@ impl Drop for RetranscriptionGuard {
 /// (500ms) because the entire file is processed at once by VAD with no
 /// latency requirement, and short redemption fragments speech at every
 /// natural sentence/topic pause (500ms-2s)
-const VAD_REDEMPTION_TIME_MS: u32 = 2000;
+#[cfg(test)]
+const VAD_REDEMPTION_TIME_MS: u32 = crate::background_worker::VAD_REDEMPTION_TIME_MS;
 
 /// Progress update emitted during retranscription
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,13 +91,90 @@ pub async fn start_retranscription<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<RetranscriptionResult> {
+    start_with_followup(
+        app,
+        meeting_id,
+        meeting_folder_path,
+        language,
+        model,
+        provider,
+        false,
+    )
+    .await
+}
+
+/// Keep the continuation in the queued action so a manual retry resumes the chain.
+pub(crate) async fn start_with_followup<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    meeting_folder_path: String,
+    language: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    process_after: bool,
+) -> Result<RetranscriptionResult> {
+    let task = crate::tasks::Task::register(crate::tasks::Action::Retranscription {
+        meeting_id: meeting_id.clone(),
+        folder: meeting_folder_path.clone(),
+        language: language.clone(),
+        model: model.clone(),
+        provider: provider.clone(),
+        process_after,
+    });
+    task.run(async move {
+        let result = start_retranscription_job(
+            app.clone(),
+            meeting_id.clone(),
+            meeting_folder_path.clone(),
+            language,
+            model,
+            provider,
+        )
+        .await;
+        if let Err(error) = &result {
+            if error.to_string().to_lowercase().contains("cancelled") {
+                crate::tasks::cancel_current();
+            } else {
+                crate::tasks::fail_current(error);
+            }
+        }
+        if result.is_ok() && process_after {
+            let pool = app.state::<AppState>().db_manager.pool().clone();
+            if super::diarization::get_diarization_settings().is_ok_and(|s| s.enabled) {
+                if let Err(error) = super::diarization::start_for_folder(
+                    app.clone(),
+                    pool,
+                    meeting_id.clone(),
+                    Path::new(&meeting_folder_path),
+                ) {
+                    log::warn!("Could not queue speakers after deferred transcription: {error}");
+                }
+            }
+            if crate::automation::auto_summary(&app) {
+                if let Err(error) = crate::processing::start(app.clone(), meeting_id, false) {
+                    log::warn!("Could not queue processing after deferred transcription: {error}");
+                }
+            }
+        }
+        result
+    })
+    .await
+}
+
+async fn start_retranscription_job<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    meeting_folder_path: String,
+    language: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+) -> Result<RetranscriptionResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = RetranscriptionGuard::acquire().map_err(|e| anyhow!(e))?;
 
     // Reset cancellation flag
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
 
-    let provider_to_unload = provider.clone();
     let result = run_retranscription(
         app.clone(),
         meeting_id.clone(),
@@ -111,9 +184,6 @@ pub async fn start_retranscription<R: Runtime>(
         provider,
     )
     .await;
-
-    // Unload the engine after the batch job (success, failure, or cancellation)
-    super::transcription::unload_batch_engine(provider_to_unload.as_deref()).await;
 
     // Guard will automatically clear flag on drop
     // No need for manual: RETRANSCRIPTION_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -208,282 +278,27 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    // Decode the audio file (CPU-intensive, run in blocking task)
-    let path_for_decode = audio_path.clone();
-    let decoded = tokio::task::spawn_blocking(move || decode_audio_file(&path_for_decode))
-        .await
-        .map_err(|e| anyhow!("Decode task panicked: {}", e))??;
-    let duration_seconds = decoded.duration_seconds;
-
-    info!(
-        "Decoded audio: {:.2}s, {}Hz, {} channels",
-        duration_seconds, decoded.sample_rate, decoded.channels
-    );
-
-    emit_progress(
+    let (duration_seconds, all_transcripts, _) = crate::background_worker::transcribe(
         &app,
-        &meeting_id,
-        "decoding",
-        15,
-        "Converting audio format...",
-    );
-
-    // Check for cancellation
-    if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
-        return Err(anyhow!("Retranscription cancelled"));
-    }
-
-    // Convert to 16kHz mono format (CPU-intensive, run in blocking task)
-    let audio_samples = tokio::task::spawn_blocking(move || decoded.to_whisper_format())
-        .await
-        .map_err(|e| anyhow!("Resample task panicked: {}", e))?;
-    info!(
-        "Converted to 16kHz mono format: {} samples",
-        audio_samples.len()
-    );
-
-    emit_progress(&app, &meeting_id, "vad", 20, "Detecting speech segments...");
-
-    // Check for cancellation
-    if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
-        return Err(anyhow!("Retranscription cancelled"));
-    }
-
-    // Use VAD to find natural speech boundaries (same approach as live transcription)
-    // IMPORTANT: Run VAD in a blocking task to avoid blocking the async runtime
-    // For large files (35+ minutes), VAD processing can take several minutes
-    let app_for_vad = app.clone();
-    let meeting_id_for_vad = meeting_id.clone();
-
-    let speech_segments = tokio::task::spawn_blocking(move || {
-        get_speech_chunks_with_progress(
-            &audio_samples,
-            VAD_REDEMPTION_TIME_MS,
-            |vad_progress, segments_found| {
-                // Map VAD progress (0-100) to overall progress (20-25)
-                let overall_progress = 20 + (vad_progress as f32 * 0.05) as u32;
-                emit_progress(
-                    &app_for_vad,
-                    &meeting_id_for_vad,
-                    "vad",
-                    overall_progress,
-                    &format!(
-                        "Detecting speech segments... {}% ({} found)",
-                        vad_progress, segments_found
-                    ),
-                );
-
-                // Return false to cancel if cancellation requested
-                !RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst)
-            },
-        )
-    })
-    .await
-    .map_err(|e| anyhow!("VAD task panicked: {}", e))?
-    .map_err(|e| anyhow!("VAD processing failed: {}", e))?;
-
-    let total_segments = speech_segments.len();
-    info!(
-        "VAD detected {} speech segments (redemption_time={}ms)",
-        total_segments, VAD_REDEMPTION_TIME_MS
-    );
-
-    // Diagnostic: log segment duration distribution
-    if !speech_segments.is_empty() {
-        let durations_ms: Vec<f64> = speech_segments
-            .iter()
-            .map(|s| s.end_timestamp_ms - s.start_timestamp_ms)
-            .collect();
-        let total_speech_ms: f64 = durations_ms.iter().sum();
-        let avg_duration = total_speech_ms / durations_ms.len() as f64;
-        let min_duration = durations_ms.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max_duration = durations_ms
-            .iter()
-            .cloned()
-            .fold(f64::NEG_INFINITY, f64::max);
-        info!(
-            "VAD segment stats: avg={:.0}ms, min={:.0}ms, max={:.0}ms, total_speech={:.1}s/{:.1}s ({:.0}%)",
-            avg_duration, min_duration, max_duration,
-            total_speech_ms / 1000.0, duration_seconds,
-            (total_speech_ms / 1000.0 / duration_seconds) * 100.0
-        );
-        // Log first 10 segments for detailed inspection
-        for (i, seg) in speech_segments.iter().take(10).enumerate() {
-            let dur = seg.end_timestamp_ms - seg.start_timestamp_ms;
-            debug!(
-                "  Segment {}: {:.0}ms-{:.0}ms ({:.0}ms, {} samples)",
-                i,
-                seg.start_timestamp_ms,
-                seg.end_timestamp_ms,
-                dur,
-                seg.samples.len()
-            );
-        }
-        if total_segments > 10 {
-            debug!("  ... and {} more segments", total_segments - 10);
-        }
-    }
-
-    if total_segments == 0 {
-        warn!("No speech detected in audio");
-        return Err(anyhow!("No speech detected in audio file"));
-    }
-
-    emit_progress(
-        &app,
-        &meeting_id,
-        "transcribing",
-        25,
-        "Loading transcription engine...",
-    );
-
-    // Initialize the selected provider once through the transcription seam.
-    let transcription_engine =
-        super::transcription::get_or_init_batch_engine(&app, provider.as_deref(), model.as_deref())
-            .await
-            .map_err(|error| anyhow!(error))?;
-
-    // Split very long segments at silence boundaries for better transcription quality.
-    // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
-    // for the lowest-energy window near the target split point and cut there.
-    const MAX_SEGMENT_SAMPLES: usize = 25 * 16000; // 25 seconds at 16kHz
-
-    // Each entry carries the index of the VAD segment it came from, so the
-    // pieces of one utterance can be put back together after transcription.
-    let mut processable_segments: Vec<(usize, crate::audio::vad::SpeechSegment)> = Vec::new();
-    for (source_index, segment) in speech_segments.iter().enumerate() {
-        if segment.samples.len() > MAX_SEGMENT_SAMPLES {
-            debug!(
-                "Splitting large segment ({:.0}ms, {} samples) at silence boundaries",
-                segment.end_timestamp_ms - segment.start_timestamp_ms,
-                segment.samples.len()
-            );
-
-            let sub_segments = split_segment_at_silence(segment, MAX_SEGMENT_SAMPLES);
-            debug!("Split into {} sub-segments", sub_segments.len());
-            processable_segments
-                .extend(sub_segments.into_iter().map(|piece| (source_index, piece)));
-        } else {
-            processable_segments.push((source_index, segment.clone()));
-        }
-    }
-
-    let processable_count = processable_segments.len();
-    info!(
-        "Processing {} segments (after splitting)",
-        processable_count
-    );
-
-    // Process each speech segment with progress updates
-    // (source VAD segment, text, start ms, end ms); rejoined below.
-    let mut all_transcripts: Vec<(usize, String, f64, f64)> = Vec::new();
-    let mut total_confidence = 0.0f32;
-
-    for (i, (source_index, segment)) in processable_segments.iter().enumerate() {
-        // Check for cancellation before each segment
-        if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
-            return Err(anyhow!("Retranscription cancelled"));
-        }
-
-        // Calculate progress (25% to 80% range for transcription)
-        let progress = 25 + ((i as f32 / processable_count as f32) * 55.0) as u32;
-        let segment_duration_sec = (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0;
-        emit_progress(
-            &app,
-            &meeting_id,
-            "transcribing",
-            progress,
-            &format!(
-                "Transcribing segment {} of {} ({:.1}s)...",
-                i + 1,
-                processable_count,
-                segment_duration_sec
-            ),
-        );
-
-        // Skip very short segments (< 100ms of audio = 1600 samples at 16kHz)
-        if segment.samples.len() < 1600 {
-            debug!(
-                "Skipping short segment {} with {} samples",
-                i,
-                segment.samples.len()
-            );
-            continue;
-        }
-
-        // Transcribe this segment
-        let result = transcription_engine
-            .transcribe(segment.samples.clone(), language.clone())
-            .await
-            .map_err(|error| anyhow!("Transcription failed on segment {}: {}", i, error))?;
-        let text = result.text;
-        let conf = result.confidence.unwrap_or(0.9);
-
-        // Skip empty transcripts
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            debug!(
-                "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
-                i + 1,
-                processable_count,
-                segment_duration_sec,
-                conf,
-                if trimmed.len() > 80 {
-                    let mut end = 80;
-                    while !trimmed.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    &trimmed[..end]
-                } else {
-                    trimmed
-                }
-            );
-            all_transcripts.push((
-                *source_index,
-                text,
-                segment.start_timestamp_ms,
-                segment.end_timestamp_ms,
-            ));
-            total_confidence += conf;
-        } else {
-            debug!(
-                "Segment {}/{}: {:.1}s — empty transcription",
-                i + 1,
-                processable_count,
-                segment_duration_sec
-            );
-        }
-    }
-
-    let transcribed_count = all_transcripts.len();
-    let avg_confidence = if transcribed_count > 0 {
-        total_confidence / transcribed_count as f32
-    } else {
-        0.0
-    };
-
-    info!(
-        "Transcription complete: {} segments transcribed out of {}, avg confidence: {:.2}",
-        transcribed_count, processable_count, avg_confidence
-    );
-
-    // Put utterances back together: the 25s cap above is an ASR limitation, and
-    // without this it leaks into the saved transcript as sentences broken
-    // mid-phrase, which also splits one speaker turn across several rows.
-    let all_transcripts = rejoin_split_utterances(all_transcripts);
-    if all_transcripts.len() < transcribed_count {
-        info!(
-            "Rejoined {} clips into {} utterances split only by the {}s transcription cap",
-            transcribed_count,
-            all_transcripts.len(),
-            MAX_SEGMENT_SAMPLES / 16000
-        );
-    }
-
-    // Check for cancellation
-    if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
-        return Err(anyhow!("Retranscription cancelled"));
-    }
+        audio_path.clone(),
+        None,
+        provider.as_deref(),
+        model.as_deref(),
+        language.clone(),
+        false,
+        || !RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst),
+        |progress| {
+            emit_progress(
+                &app,
+                &meeting_id,
+                &progress.stage,
+                progress.percentage,
+                &progress.message,
+            )
+        },
+    )
+    .await?;
+    let _save_permit = crate::background_work::acquire_batch(&RETRANSCRIPTION_CANCELLED).await?;
 
     emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
 

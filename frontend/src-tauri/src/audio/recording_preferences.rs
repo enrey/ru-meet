@@ -15,6 +15,9 @@ use crate::audio::capture::AudioCaptureBackend;
 pub struct RecordingPreferences {
     pub save_folder: PathBuf,
     pub auto_save: bool,
+    /// Saving audio is always live; recognition can run after capture.
+    #[serde(default)]
+    pub realtime_transcription: bool,
     pub file_format: String,
     #[serde(default)]
     pub preferred_mic_device: Option<String>,
@@ -34,6 +37,7 @@ impl Default for RecordingPreferences {
         Self {
             save_folder: get_default_recordings_folder(),
             auto_save: true,
+            realtime_transcription: false,
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
@@ -61,8 +65,9 @@ pub fn get_default_recordings_folder() -> PathBuf {
             crate::portable::recordings_dir(music_dir)
         } else {
             // Fallback to Documents if Music folder is not available
-            crate::portable::recordings_dir(dirs::document_dir()
-                .unwrap_or_else(|| PathBuf::from(".")))
+            crate::portable::recordings_dir(
+                dirs::document_dir().unwrap_or_else(|| PathBuf::from(".")),
+            )
         }
     }
 
@@ -73,16 +78,16 @@ pub fn get_default_recordings_folder() -> PathBuf {
             crate::portable::recordings_dir(movies_dir)
         } else {
             // Fallback to Documents if Movies folder is not available
-            crate::portable::recordings_dir(dirs::document_dir()
-                .unwrap_or_else(|| PathBuf::from(".")))
+            crate::portable::recordings_dir(
+                dirs::document_dir().unwrap_or_else(|| PathBuf::from(".")),
+            )
         }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         // Linux/Others: ~/Documents/meetily-recordings
-        crate::portable::recordings_dir(dirs::document_dir()
-            .unwrap_or_else(|| PathBuf::from(".")))
+        crate::portable::recordings_dir(dirs::document_dir().unwrap_or_else(|| PathBuf::from(".")))
     }
 }
 
@@ -415,5 +420,25 @@ pub async fn get_audio_backend_info() -> Result<Vec<BackendInfo>, String> {
             name: "ScreenCaptureKit".to_string(),
             description: "Default system audio capture".to_string(),
         }])
+    }
+}
+
+#[cfg(test)]
+mod realtime_preference_tests {
+    use super::*;
+    #[test]
+    fn legacy_preferences_default_to_deferred_recognition_without_losing_fields() {
+        let value = serde_json::json!({"save_folder":"custom-recordings","auto_save":false,"file_format":"mp4", "preferred_mic_device":"mic"});
+        let prefs: RecordingPreferences = serde_json::from_value(value).unwrap();
+        assert!(!prefs.realtime_transcription);
+        assert!(!prefs.auto_save);
+        assert_eq!(prefs.preferred_mic_device.as_deref(), Some("mic"));
+        let mut value = serde_json::to_value(prefs).unwrap();
+        value["realtime_transcription"] = serde_json::json!(true);
+        assert!(
+            serde_json::from_value::<RecordingPreferences>(value)
+                .unwrap()
+                .realtime_transcription
+        );
     }
 }

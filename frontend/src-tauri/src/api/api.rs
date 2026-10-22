@@ -984,6 +984,17 @@ pub async fn api_get_meeting<R: Runtime>(
 
 /// Get meeting metadata without transcripts (for pagination)
 #[tauri::command]
+pub async fn api_match_saved_recordings(
+    state: tauri::State<'_, AppState>,
+    candidates: Vec<crate::database::repositories::meeting::RecordingRecoveryCandidate>,
+) -> Result<Vec<crate::database::repositories::meeting::RecordingRecoveryMatch>, String> {
+    let matches = MeetingsRepository::match_saved_recordings(state.db_manager.pool(), &candidates)
+        .await.map_err(|error| error.to_string())?;
+    log_info!("Recovery reconciliation: {} of {} browser drafts already saved in SQLite", matches.len(), candidates.len());
+    Ok(matches)
+}
+
+#[tauri::command]
 pub async fn api_get_meeting_metadata<R: Runtime>(
     _app: AppHandle<R>,
     meeting_id: String,

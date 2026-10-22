@@ -126,7 +126,8 @@ export function useRecordingStart(
       console.log('handleRecordingStart called - checking selected transcription model status');
 
       // Check the selected transcription model before starting.
-      const modelReady = await checkModelReady();
+      const prefs = await invoke<{ realtime_transcription?: boolean }>('get_recording_preferences');
+      const modelReady = !prefs.realtime_transcription || await checkModelReady();
       if (!modelReady) {
         const isDownloading = await checkIfModelDownloading();
         if (isDownloading) {

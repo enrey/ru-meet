@@ -653,17 +653,24 @@ impl SummaryService {
                         info!("Summary saved successfully for meeting_id: {}", meeting_id);
                         crate::audio::tts::prepare_if_automatic(&app, &meeting_id);
                     }
-                    Ok(false) => warn!(
-                        "Skipped stale summary completion for meeting_id: {}",
-                        meeting_id
-                    ),
-                    Err(error) => error!(
-                        "Failed to save completed process for {}: {}",
-                        meeting_id, error
-                    ),
+                    Ok(false) => {
+                        crate::tasks::cancel_current();
+                        warn!(
+                            "Skipped stale summary completion for meeting_id: {}",
+                            meeting_id
+                        );
+                    }
+                    Err(error) => {
+                        crate::tasks::fail_current(&error);
+                        error!(
+                            "Failed to save completed process for {}: {}",
+                            meeting_id, error
+                        );
+                    }
                 }
             }
             Err(_error) if cancellation_token.is_cancelled() => {
+                crate::tasks::cancel_current();
                 match SummaryProcessesRepository::update_process_cancelled(
                     &pool,
                     &meeting_id,
@@ -709,6 +716,7 @@ impl SummaryService {
         started_at: DateTime<Utc>,
         error_msg: &str,
     ) {
+        crate::tasks::fail_current(error_msg);
         error!(
             "Processing failed for meeting_id {}: {}",
             meeting_id, error_msg
@@ -1126,13 +1134,7 @@ mod tests {
     #[test]
     fn result_json_rejects_title_only_display_markdown() {
         assert_eq!(
-            build_summary_result_json(
-                "# Title",
-                "# Title",
-                sample_cache_source(),
-                None,
-                false,
-            ),
+            build_summary_result_json("# Title", "# Title", sample_cache_source(), None, false,),
             Err("Final summary contains no visible content after title removal".to_string())
         );
     }

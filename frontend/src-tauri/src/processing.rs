@@ -73,16 +73,21 @@ pub(crate) fn start<R: Runtime>(
     requested: bool,
 ) -> Result<(), String> {
     {
-        let mut runs = RUNS.lock().map_err(|_| "The processing lock is unavailable")?;
+        let mut runs = RUNS
+            .lock()
+            .map_err(|_| "The processing lock is unavailable")?;
         if runs.contains_key(&meeting_id) {
             return Err("This recording is already being processed".into());
         }
         runs.insert(meeting_id.clone(), Step::Speakers);
     }
     tauri::async_runtime::spawn(async move {
-        let outcome = match run(&app, &meeting_id).await {
+        let outcome = match run(&app, &meeting_id, requested).await {
             Ok(outcome) => outcome,
-            Err(message) => Outcome::Failed { step: current_step(&meeting_id).unwrap_or(Step::Speakers), message },
+            Err(message) => Outcome::Failed {
+                step: current_step(&meeting_id).unwrap_or(Step::Speakers),
+                message,
+            },
         };
         log::info!("Processing of {meeting_id} ended: {outcome:?}");
         if let Ok(mut runs) = RUNS.lock() {
@@ -106,7 +111,7 @@ async fn snapshot<R: Runtime>(
         .ok_or_else(|| "The meeting was not found".to_string())
 }
 
-async fn run<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<Outcome, String> {
+async fn run<R: Runtime>(app: &AppHandle<R>, meeting_id: &str, requested: bool) -> Result<Outcome, String> {
     let pool = app
         .try_state::<AppState>()
         .ok_or("The database is unavailable")?
@@ -119,8 +124,9 @@ async fn run<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<Outcome
     let can_speak = crate::audio::tts::commands::can_speak(app);
 
     let speakers = first.stages.speakers.state;
-    let need_speakers = (diarization_on && first.folder_path.is_some() && speakers != StageState::Done)
-        || speakers == StageState::Running;
+    let need_speakers =
+        (diarization_on && first.folder_path.is_some() && speakers != StageState::Done)
+            || speakers == StageState::Running;
     let need_summary = first.stages.summary.state != StageState::Done;
     let need_speech = can_speak && first.stages.speech.state != StageState::Done;
     if !need_speakers && !need_summary && !need_speech {
@@ -133,19 +139,41 @@ async fn run<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<Outcome
         match run_speakers(app, &pool, meeting_id, &first).await {
             Finished::Done => {}
             Finished::Failed => failed.push(Step::Speakers),
-            Finished::Stopped => return Ok(Outcome::Stopped { step: Step::Speakers }),
+            Finished::Stopped => {
+                return Ok(Outcome::Stopped {
+                    step: Step::Speakers,
+                })
+            }
         }
     }
 
     if need_summary {
+        if !requested && first.stages.summary.state != StageState::Running
+            && !automatic_summary_available(app, &pool).await? {
+            // Nothing is queued for later installation. Already completed
+            // stages stay saved, and no reading is created without a summary.
+            return Ok(if need_speakers { Outcome::Done { failed } } else { Outcome::NothingToDo });
+        }
         set_step(app, meeting_id, Step::Summary);
         match run_summary(app, &pool, meeting_id).await {
             Ok(Finished::Done) => {}
-            Ok(Finished::Stopped) => return Ok(Outcome::Stopped { step: Step::Summary }),
-            Ok(Finished::Failed) => {
-                return Ok(Outcome::Failed { step: Step::Summary, message: String::new() })
+            Ok(Finished::Stopped) => {
+                return Ok(Outcome::Stopped {
+                    step: Step::Summary,
+                })
             }
-            Err(message) => return Ok(Outcome::Failed { step: Step::Summary, message }),
+            Ok(Finished::Failed) => {
+                return Ok(Outcome::Failed {
+                    step: Step::Summary,
+                    message: String::new(),
+                })
+            }
+            Err(message) => {
+                return Ok(Outcome::Failed {
+                    step: Step::Summary,
+                    message,
+                })
+            }
         }
     }
 
@@ -203,36 +231,53 @@ async fn run_speakers<R: Runtime>(
     }
 }
 
+pub(crate) async fn automatic_summary_available<R: Runtime>(
+    app: &AppHandle<R>, pool: &sqlx::SqlitePool,
+) -> Result<bool, String> {
+    let config = SettingsRepository::get_model_config(pool).await.map_err(|error| error.to_string())?;
+    Ok(config.is_some_and(|config| crate::summary::commands::summary_model_available(app, &config.provider, &config.model)))
+}
+
+/// Prepare a saved meeting summary only when its queued retry actually starts.
+pub(crate) async fn queue_summary<R: Runtime>(
+    app: &AppHandle<R>,
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+) -> Result<(), String> {
+    let model = SettingsRepository::get_model_config(pool)
+        .await
+        .map_err(|error| error.to_string())?
+        .filter(|config| !config.provider.trim().is_empty() && !config.model.trim().is_empty())
+        .ok_or("Choose a summary model in the settings")?;
+    let (text, texts) = transcript_for_summary(pool, meeting_id).await?;
+    if text.trim().is_empty() {
+        return Err("The recording has no transcript to summarize".into());
+    }
+    let language = summary_language(pool, meeting_id, &texts).await;
+    crate::summary::commands::start_summary(
+        app.clone(),
+        pool.clone(),
+        meeting_id.to_string(),
+        text,
+        model.provider,
+        model.model,
+        None,
+        None,
+        None,
+        Some(DEFAULT_TEMPLATE.to_string()),
+        language,
+    )
+    .await?;
+    Ok(())
+}
+
 async fn run_summary<R: Runtime>(
     app: &AppHandle<R>,
     pool: &sqlx::SqlitePool,
     meeting_id: &str,
 ) -> Result<Finished, String> {
     if snapshot(app, pool, meeting_id).await?.stages.summary.state != StageState::Running {
-        let model = SettingsRepository::get_model_config(pool)
-            .await
-            .map_err(|error| error.to_string())?
-            .filter(|config| !config.provider.trim().is_empty() && !config.model.trim().is_empty())
-            .ok_or("Choose a summary model in the settings")?;
-        let (text, texts) = transcript_for_summary(pool, meeting_id).await?;
-        if text.trim().is_empty() {
-            return Err("The recording has no transcript to summarize".into());
-        }
-        let language = summary_language(pool, meeting_id, &texts).await;
-        crate::summary::commands::start_summary(
-            app.clone(),
-            pool.clone(),
-            meeting_id.to_string(),
-            text,
-            model.provider,
-            model.model,
-            None,
-            None,
-            None,
-            Some(DEFAULT_TEMPLATE.to_string()),
-            language,
-        )
-        .await?;
+        queue_summary(app, pool, meeting_id).await?;
     }
     loop {
         tokio::time::sleep(POLL).await;
@@ -262,7 +307,10 @@ async fn run_speech<R: Runtime>(
     }
     loop {
         tokio::time::sleep(POLL).await;
-        match snapshot(app, pool, meeting_id).await.map(|s| s.stages.speech.state) {
+        match snapshot(app, pool, meeting_id)
+            .await
+            .map(|s| s.stages.speech.state)
+        {
             Ok(StageState::Running) => continue,
             Ok(StageState::Done) => return Finished::Done,
             Ok(StageState::None) => return Finished::Stopped,
@@ -284,7 +332,12 @@ async fn transcript_for_summary(
             .map_err(|error| error.to_string())?;
     let mut turns: Vec<(String, Vec<String>)> = Vec::new();
     for transcript in &transcripts {
-        let speaker = transcript.speaker.as_deref().unwrap_or("").trim().to_string();
+        let speaker = transcript
+            .speaker
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         match turns.last_mut() {
             Some((last, texts)) if !speaker.is_empty() && *last == speaker => {
                 texts.push(transcript.transcript.clone())
@@ -309,7 +362,11 @@ async fn transcript_for_summary(
 
 /// The meeting's chosen summary language, else the cached detection, else a
 /// fresh detection (cached for next time) - the meeting page's order.
-async fn summary_language(pool: &sqlx::SqlitePool, meeting_id: &str, texts: &[String]) -> Option<String> {
+async fn summary_language(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    texts: &[String],
+) -> Option<String> {
     use crate::summary::metadata::{
         read_detected_summary_language_from_metadata, read_summary_language_from_metadata,
         write_detected_summary_language_to_metadata,

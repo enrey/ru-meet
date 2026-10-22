@@ -30,6 +30,13 @@ pub(crate) fn start(generation: u64) -> std::io::Result<SyncSender<PreviewAudio>
                 super::microphone_activity::clear_if_current(generation);
                 continue;
             }
+            let needed = crate::automation::preview_speech_enabled()
+                && !crate::audio::recording_session::RECORDING_SESSION.is_active();
+            if !needed {
+                processors.clear();
+                super::microphone_activity::clear_if_current(generation);
+                continue;
+            }
             let key = (packet.device.clone(), packet.sample_rate);
             if failed.contains(&key) { continue; }
             if !processors.contains_key(&key) {

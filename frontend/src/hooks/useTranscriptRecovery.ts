@@ -21,6 +21,8 @@ interface AudioRecoveryStatus {
   message: string;
 }
 
+interface SavedRecordingMatch { draftId: string; meetingId: string; }
+
 export interface UseTranscriptRecoveryReturn {
   recoverableMeetings: MeetingMetadata[];
   isLoading: boolean;
@@ -44,21 +46,33 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
     try {
       const meetings = await indexedDBService.getAllMeetings();
 
-      // Filter out meetings older than 7 days and newer than 15 seconds
-      // The 15 seconds threshold prevents showing meetings from the current session(jus in case)
+      // Filter out meetings older than 7 days and newer than 2 seconds
+      // The 2 second threshold prevents showing meetings from the current session
       // where recording just stopped but hasn't been fully saved yet
       const cutoffTime = Date.now() - (7 * 24 * 60 * 60 * 1000);
       const secondsAgo = Date.now() - (2 * 1000);
 
       const recentMeetings = meetings.filter(m => {
         const isWithinRetention = m.lastUpdated > cutoffTime; // Not older than 7 days
-        const isOldEnough = m.lastUpdated < secondsAgo; // Older than 15 seconds
+        const isOldEnough = m.lastUpdated < secondsAgo; // Older than 2 seconds
         return isWithinRetention && isOldEnough;
       });
 
+      // SQLite is authoritative after native finalization. Browser draft IDs
+      // are different, so match the recording folder rather than the title.
+      const saved = recentMeetings.length ? await invoke<SavedRecordingMatch[]>('api_match_saved_recordings', {
+        candidates: recentMeetings.map(meeting => ({ draftId: meeting.meetingId, folderPath: meeting.folderPath ?? null })),
+      }) : [];
+      const savedIds = new Set(saved.map(match => match.draftId));
+      for (const match of saved) {
+        try { await indexedDBService.markMeetingSaved(match.draftId); }
+        catch (error) { console.warn('Could not mark an existing recording saved:', error); }
+      }
+      const interruptedMeetings = recentMeetings.filter(meeting => !savedIds.has(meeting.meetingId));
+
       // Verify audio checkpoint availability for each meeting
       const meetingsWithAudioStatus = await Promise.all(
-        recentMeetings.map(async (meeting) => {
+        interruptedMeetings.map(async (meeting) => {
           if (meeting.folderPath) {
             try {
               const hasAudio = await invoke<boolean>('has_audio_checkpoints', {
@@ -117,6 +131,17 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
         throw new Error(translate('Meeting metadata not found'));
       }
 
+      // Recheck on click: the native save may have finished since this dialog
+      // opened. Reuse the existing meeting without replaying audio recovery.
+      const saved = await invoke<SavedRecordingMatch[]>('api_match_saved_recordings', {
+        candidates: [{ draftId: metadata.meetingId, folderPath: metadata.folderPath ?? null }],
+      });
+      if (saved.length) {
+        await indexedDBService.markMeetingSaved(meetingId);
+        setRecoverableMeetings(prev => prev.filter(meeting => meeting.meetingId !== meetingId));
+        return { success: true, meetingId: saved[0].meetingId };
+      }
+
       // 2. Load all transcripts
       const transcripts = await loadMeetingTranscripts(meetingId);
       if (transcripts.length === 0) {
@@ -124,18 +149,10 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
       }
 
       // 3. Check for folder path
-      let folderPath = metadata.folderPath;
+      const folderPath = metadata.folderPath;
 
 
-      if (!folderPath) {
-        // Try to get from backend (might exist if only app crashed, not system)
-        try {
-          folderPath = await invoke<string>('get_meeting_folder_path');
-        } catch (error) {
-          folderPath = undefined;
-        }
-      }
-
+      // Do not borrow a folder from the current recording for an old draft.
       // 4. Attempt audio recovery if folder path exists
       let audioRecoveryStatus: AudioRecoveryStatus | null = null;
       if (folderPath) {

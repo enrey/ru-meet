@@ -1,8 +1,7 @@
 // Audio file import module - allows importing external audio files as new meetings
 
 use crate::api::TranscriptSegment;
-use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
-use crate::audio::vad::get_speech_chunks_with_progress;
+use crate::audio::decoder::decode_audio_file;
 use crate::state::AppState;
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
@@ -15,10 +14,7 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
-use super::common::{
-    create_transcript_segments, rejoin_split_utterances, split_segment_at_silence,
-    write_transcripts_json,
-};
+use super::common::{create_transcript_segments, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
 
@@ -56,7 +52,6 @@ impl Drop for ImportGuard {
 /// (500ms) because the entire file is processed at once by VAD with no
 /// latency requirement, and short redemption fragments speech at every
 /// natural sentence/topic pause (500ms-2s)
-const VAD_REDEMPTION_TIME_MS: u32 = 2000;
 
 /// Maximum file size: 20GB (prevents OOM and excessive processing time)
 const MAX_FILE_SIZE_BYTES: u64 = 20 * 1024 * 1024 * 1024; // 20GB
@@ -205,19 +200,6 @@ impl StageTimings {
             })
             .collect()
     }
-}
-
-/// Truncate at a char boundary so log lines stay a sane length without
-/// panicking on multi-byte text (the transcripts here are routinely Russian).
-fn truncate_for_log(text: &str, max_bytes: usize) -> &str {
-    if text.len() <= max_bytes {
-        return text;
-    }
-    let mut end = max_bytes;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
 }
 
 /// Check if import is currently in progress
@@ -369,6 +351,35 @@ pub async fn start_import<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<ImportResult> {
+    let task = crate::tasks::Task::register(crate::tasks::Action::Import {
+        source: source_path.clone(),
+        title: title.clone(),
+        language: language.clone(),
+        model: model.clone(),
+        provider: provider.clone(),
+    });
+    task.run(async move {
+        let result = start_import_job(app, source_path, title, language, model, provider).await;
+        if let Err(error) = &result {
+            if error.to_string().to_lowercase().contains("cancelled") {
+                crate::tasks::cancel_current();
+            } else {
+                crate::tasks::fail_current(error);
+            }
+        }
+        result
+    })
+    .await
+}
+
+async fn start_import_job<R: Runtime>(
+    app: AppHandle<R>,
+    source_path: String,
+    title: String,
+    language: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+) -> Result<ImportResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = ImportGuard::acquire().map_err(|e| anyhow!(e))?;
 
@@ -376,7 +387,6 @@ pub async fn start_import<R: Runtime>(
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
     let log = ImportLog::new(app.clone());
-    let provider_to_unload = provider.clone();
     let result = run_import(
         app.clone(),
         &log,
@@ -387,14 +397,6 @@ pub async fn start_import<R: Runtime>(
         provider,
     )
     .await;
-
-    // Unload the engine after the batch job (success, failure, or cancellation)
-    let unload_started = Instant::now();
-    super::transcription::unload_batch_engine(provider_to_unload.as_deref()).await;
-    log.info(format!(
-        "Unloaded transcription engine in {:.2}s",
-        unload_started.elapsed().as_secs_f64()
-    ));
 
     // Guard will automatically clear flag on drop
     // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -490,395 +492,39 @@ async fn run_import<R: Runtime>(
     );
     let dest_path = meeting_folder.join(&dest_filename);
 
-    let src = source.clone();
-    let dst = dest_path.clone();
-    let copy_started = Instant::now();
-    let copied_bytes = tokio::task::spawn_blocking(move || std::fs::copy(&src, &dst))
-        .await
-        .map_err(|e| anyhow!("Copy task join error: {}", e))?
-        .map_err(|e| anyhow!("Failed to copy audio file: {}", e))?;
-    let copy_seconds = copy_started.elapsed().as_secs_f64();
-    timings.record("copy", copy_seconds);
-
-    let copied_mb = copied_bytes as f64 / (1024.0 * 1024.0);
-    log.info(format!(
-        "Copied {:.1} MB to {} in {:.2}s ({:.0} MB/s)",
-        copied_mb,
-        dest_path.display(),
-        copy_seconds,
-        copied_mb / copy_seconds.max(0.001)
-    ));
-
-    // Check for cancellation
-    if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        // Cleanup: remove the meeting folder
-        let _ = std::fs::remove_dir_all(&meeting_folder);
-        return Err(anyhow!("Import cancelled"));
-    }
-
-    emit_progress(&app, "decoding", 15, "Decoding audio file...");
-
-    // Decode the audio file with progress updates
-    let app_for_decode = app.clone();
-    let decode_progress = Box::new(move |progress: u32, msg: &str| {
-        // Map decode progress: 15% + (progress * 0.05) to go from 15% to 20%
-        let overall_progress = 15 + ((progress as f32 * 0.05) as u32);
-        emit_progress(&app_for_decode, "decoding", overall_progress, msg);
-    });
-
-    let path_for_decode = dest_path.clone();
-    let decode_started = Instant::now();
-    let decoded = tokio::task::spawn_blocking(move || {
-        decode_audio_file_with_progress(&path_for_decode, Some(decode_progress))
-    })
-    .await
-    .map_err(|e| anyhow!("Decode task join error: {}", e))??;
-    let duration_seconds = decoded.duration_seconds;
-    let decode_seconds = decode_started.elapsed().as_secs_f64();
-    timings.record("decode", decode_seconds);
-
-    log.info(format!(
-        "Decoded {:.1}s of audio ({}Hz, {} ch, {} samples) in {:.2}s",
-        duration_seconds,
-        decoded.sample_rate,
-        decoded.channels,
-        decoded.samples.len(),
-        decode_seconds
-    ));
-
-    emit_progress(&app, "resampling", 20, "Converting audio format...");
-
-    // Check for cancellation
-    if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
-        return Err(anyhow!("Import cancelled"));
-    }
-
-    // Convert to 16kHz mono format with progress updates
-    let app_for_resample = app.clone();
-    let resample_progress = Box::new(move |progress: u32, msg: &str| {
-        // Map resample progress: 20% + (progress * 0.05) to go from 20% to 25%
-        let overall_progress = 20 + ((progress as f32 * 0.05) as u32);
-        emit_progress(&app_for_resample, "resampling", overall_progress, msg);
-    });
-
-    let resample_started = Instant::now();
-    let audio_samples = tokio::task::spawn_blocking(move || {
-        decoded.to_whisper_format_with_progress(Some(resample_progress))
-    })
-    .await
-    .map_err(|e| anyhow!("Resample task join error: {}", e))?;
-    let resample_seconds = resample_started.elapsed().as_secs_f64();
-    timings.record("resample", resample_seconds);
-
-    log.info(format!(
-        "Converted to 16kHz mono in {:.2}s ({} samples, {:.1}s)",
-        resample_seconds,
-        audio_samples.len(),
-        audio_samples.len() as f64 / 16000.0
-    ));
-
-    emit_progress(&app, "vad", 25, "Detecting speech segments...");
-
-    // Check for cancellation
-    if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
-        return Err(anyhow!("Import cancelled"));
-    }
-
-    // Use VAD to find speech segments
-    let app_for_vad = app.clone();
-
-    let vad_started = Instant::now();
-    let speech_segments = tokio::task::spawn_blocking(move || {
-        get_speech_chunks_with_progress(
-            &audio_samples,
-            VAD_REDEMPTION_TIME_MS,
-            |vad_progress, segments_found| {
-                let overall_progress = 25 + (vad_progress as f32 * 0.05) as u32;
+    let compute_started = Instant::now();
+    let (duration_seconds, all_transcripts, speech_segments) =
+        crate::background_worker::transcribe(
+            &app,
+            source,
+            Some(dest_path),
+            provider.as_deref(),
+            model.as_deref(),
+            language.clone(),
+            true,
+            || !IMPORT_CANCELLED.load(Ordering::SeqCst),
+            |progress| {
                 emit_progress(
-                    &app_for_vad,
-                    "vad",
-                    overall_progress,
-                    &format!(
-                        "Detecting speech segments... {}% ({} found)",
-                        vad_progress, segments_found
-                    ),
+                    &app,
+                    &progress.stage,
+                    progress.percentage,
+                    &progress.message,
                 );
-                !IMPORT_CANCELLED.load(Ordering::SeqCst)
+                log.info(progress.message);
             },
         )
-    })
-    .await
-    .map_err(|e| anyhow!("VAD task panicked: {}", e))?
-    .map_err(|e| anyhow!("VAD processing failed: {}", e))?;
-    let vad_seconds = vad_started.elapsed().as_secs_f64();
-    timings.record("vad", vad_seconds);
-
-    let total_segments = speech_segments.len();
-    log.info(format!(
-        "VAD found {} speech segments in {:.2}s (redemption_time={}ms)",
-        total_segments, vad_seconds, VAD_REDEMPTION_TIME_MS
-    ));
-
-    // Diagnostic: log segment duration distribution
-    if !speech_segments.is_empty() {
-        let durations_ms: Vec<f64> = speech_segments
-            .iter()
-            .map(|s| s.end_timestamp_ms - s.start_timestamp_ms)
-            .collect();
-        let total_speech_ms: f64 = durations_ms.iter().sum();
-        let avg_duration = total_speech_ms / durations_ms.len() as f64;
-        let min_duration = durations_ms.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max_duration = durations_ms
-            .iter()
-            .cloned()
-            .fold(f64::NEG_INFINITY, f64::max);
-        log.info(format!(
-            "VAD stats: avg={:.0}ms, min={:.0}ms, max={:.0}ms, speech={:.1}s of {:.1}s ({:.0}% of the file)",
-            avg_duration, min_duration, max_duration,
-            total_speech_ms / 1000.0, duration_seconds,
-            (total_speech_ms / 1000.0 / duration_seconds) * 100.0
-        ));
-        // Log first 10 segments for detailed inspection
-        for (i, seg) in speech_segments.iter().take(10).enumerate() {
-            let dur = seg.end_timestamp_ms - seg.start_timestamp_ms;
-            debug!(
-                "  Segment {}: {:.0}ms-{:.0}ms ({:.0}ms, {} samples)",
-                i,
-                seg.start_timestamp_ms,
-                seg.end_timestamp_ms,
-                dur,
-                seg.samples.len()
-            );
-        }
-        if total_segments > 10 {
-            debug!("  ... and {} more segments", total_segments - 10);
-        }
-    }
-
-    if total_segments == 0 {
-        log.warn("No speech detected in audio");
-
-        // Emit warning to frontend
+        .await?;
+    timings.record("worker", compute_started.elapsed().as_secs_f64());
+    if speech_segments == 0 {
         let _ = app.emit(
             "import-warning",
             ImportWarning {
-                warning: "No speech detected in audio file".to_string(),
-                details: Some(
-                    "The file was imported successfully, but VAD did not detect any speech. \
-                     The meeting was created but contains no transcripts."
-                        .to_string(),
-                ),
+                warning: "No speech detected in audio file".into(),
+                details: Some("The meeting was imported without transcripts.".into()),
             },
         );
-        // Still create the meeting, just with no transcripts
     }
-
-    // Check for cancellation
-    if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
-        return Err(anyhow!("Import cancelled"));
-    }
-
-    emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
-
-    // Initialize the selected provider through the transcription seam.
-    let engine_load_started = Instant::now();
-    let transcription_engine = if total_segments > 0 {
-        Some(
-            super::transcription::get_or_init_batch_engine(
-                &app,
-                provider.as_deref(),
-                model.as_deref(),
-            )
-            .await
-            .map_err(|error| anyhow!(error))?,
-        )
-    } else {
-        None
-    };
-    let engine_load_seconds = engine_load_started.elapsed().as_secs_f64();
-    timings.record("engine load", engine_load_seconds);
-    if total_segments > 0 {
-        log.info(format!(
-            "Transcription engine ready in {:.2}s",
-            engine_load_seconds
-        ));
-    }
-
-    // Split very long segments at silence boundaries for better transcription quality.
-    // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
-    // for the lowest-energy window near the target split point and cut there.
-    const MAX_SEGMENT_SAMPLES: usize = 25 * 16000; // 25 seconds at 16kHz
-
-    // Each entry carries the index of the VAD segment it came from, so the
-    // pieces of one utterance can be put back together after transcription.
-    let mut processable_segments: Vec<(usize, crate::audio::vad::SpeechSegment)> = Vec::new();
-    for (source_index, segment) in speech_segments.iter().enumerate() {
-        if segment.samples.len() > MAX_SEGMENT_SAMPLES {
-            debug!(
-                "Splitting large segment ({:.0}ms, {} samples) at silence boundaries",
-                segment.end_timestamp_ms - segment.start_timestamp_ms,
-                segment.samples.len()
-            );
-
-            let sub_segments = split_segment_at_silence(segment, MAX_SEGMENT_SAMPLES);
-            debug!("Split into {} sub-segments", sub_segments.len());
-            processable_segments
-                .extend(sub_segments.into_iter().map(|piece| (source_index, piece)));
-        } else {
-            processable_segments.push((source_index, segment.clone()));
-        }
-    }
-
-    let processable_count = processable_segments.len();
-    let processable_audio_seconds: f64 = processable_segments
-        .iter()
-        .map(|(_, segment)| (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0)
-        .sum();
-    log.info(format!(
-        "Transcribing {} segments ({:.1}s of audio) after splitting at {}s max",
-        processable_count,
-        processable_audio_seconds,
-        MAX_SEGMENT_SAMPLES / 16000
-    ));
-
-    // Process each speech segment
-    // (source VAD segment, text, start ms, end ms) - the first field is dropped
-    // once the pieces are rejoined below.
-    let mut all_transcripts: Vec<(usize, String, f64, f64)> = Vec::new();
-    let mut total_confidence = 0.0f32;
-    let transcribe_started = Instant::now();
-    // Audio actually fed to the engine so far, for a running real-time factor.
-    let mut audio_seconds_done = 0.0f64;
-
-    for (i, (source_index, segment)) in processable_segments.iter().enumerate() {
-        if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-            let _ = std::fs::remove_dir_all(&meeting_folder);
-            return Err(anyhow!("Import cancelled"));
-        }
-
-        let progress = 30 + ((i as f32 / processable_count.max(1) as f32) * 50.0) as u32;
-        let segment_duration_sec = (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0;
-
-        // Estimate the remaining time from the throughput measured so far
-        // rather than from the segment count: segments vary from <1s to 25s,
-        // so "142 of 215" on its own says very little about what is left.
-        let eta = if audio_seconds_done > 0.0 {
-            let rate = transcribe_started.elapsed().as_secs_f64() / audio_seconds_done;
-            let remaining = (processable_audio_seconds - audio_seconds_done).max(0.0) * rate;
-            format!(", ~{:.0}s left", remaining)
-        } else {
-            String::new()
-        };
-        emit_progress(
-            &app,
-            "transcribing",
-            progress,
-            &format!(
-                "Transcribing segment {} of {} ({:.1}s){}...",
-                i + 1,
-                processable_count,
-                segment_duration_sec,
-                eta
-            ),
-        );
-
-        // Skip very short segments
-        if segment.samples.len() < 1600 {
-            log.info(format!(
-                "Segment {}/{}: skipped, only {} samples",
-                i + 1,
-                processable_count,
-                segment.samples.len()
-            ));
-            continue;
-        }
-
-        // Transcribe
-        let segment_started = Instant::now();
-        let result = transcription_engine
-            .as_ref()
-            .expect("engine exists when processable segments exist")
-            .transcribe(segment.samples.clone(), language.clone())
-            .await
-            .map_err(|error| anyhow!("Transcription failed on segment {}: {}", i, error))?;
-        let text = result.text;
-        let conf = result.confidence.unwrap_or(0.9);
-
-        let segment_seconds = segment_started.elapsed().as_secs_f64();
-        audio_seconds_done += segment_duration_sec;
-
-        let trimmed = text.trim();
-        let preview = if trimmed.is_empty() {
-            "(empty)".to_string()
-        } else {
-            format!("\"{}\"", truncate_for_log(trimmed, 80))
-        };
-        log.info(format!(
-            "Segment {}/{} [{:.1}s-{:.1}s]: {:.1}s audio in {:.2}s (RTF {:.3}), conf={:.2} {}",
-            i + 1,
-            processable_count,
-            segment.start_timestamp_ms / 1000.0,
-            segment.end_timestamp_ms / 1000.0,
-            segment_duration_sec,
-            segment_seconds,
-            segment_seconds / segment_duration_sec.max(0.001),
-            conf,
-            preview
-        ));
-
-        if !trimmed.is_empty() {
-            all_transcripts.push((
-                *source_index,
-                text,
-                segment.start_timestamp_ms,
-                segment.end_timestamp_ms,
-            ));
-            total_confidence += conf;
-        }
-    }
-
-    let transcribe_seconds = transcribe_started.elapsed().as_secs_f64();
-    timings.record("transcribe", transcribe_seconds);
-
-    // Average over the clips actually sent to the engine, before rejoining.
-    let transcribed_count = all_transcripts.len();
-    let avg_confidence = if transcribed_count > 0 {
-        total_confidence / transcribed_count as f32
-    } else {
-        0.0
-    };
-
-    // Put utterances back together: the 25s cap above is an ASR limitation, and
-    // without this it leaks into the saved transcript as sentences broken
-    // mid-phrase, which also splits one speaker turn across several rows.
-    let all_transcripts = rejoin_split_utterances(all_transcripts);
-    if all_transcripts.len() < transcribed_count {
-        log.info(format!(
-            "Rejoined {} clips into {} utterances split only by the {}s transcription cap",
-            transcribed_count,
-            all_transcripts.len(),
-            MAX_SEGMENT_SAMPLES / 16000
-        ));
-    }
-
-    log.info(format!(
-        "Transcribed {} of {} segments in {:.2}s (RTF {:.3}, {:.1}x realtime), avg confidence {:.2}",
-        transcribed_count,
-        processable_count,
-        transcribe_seconds,
-        transcribe_seconds / processable_audio_seconds.max(0.001),
-        processable_audio_seconds / transcribe_seconds.max(0.001),
-        avg_confidence
-    ));
-
-    // Check for cancellation
-    if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
-        return Err(anyhow!("Import cancelled"));
-    }
+    let _save_permit = crate::background_work::acquire_batch(&IMPORT_CANCELLED).await?;
 
     emit_progress(&app, "saving", 85, "Creating meeting...");
     let save_started = Instant::now();
@@ -1148,6 +794,7 @@ pub async fn is_import_in_progress_command() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::common::{rejoin_split_utterances, split_segment_at_silence};
 
     #[test]
     fn test_audio_extensions() {
@@ -1161,12 +808,25 @@ mod tests {
     fn rejoin_merges_pieces_of_one_utterance() {
         // Two clips the 25s cap cut out of one VAD segment, back to back.
         let pieces = vec![
-            (0usize, "the first half of a sentence".to_string(), 0.0, 25_000.0),
-            (0usize, "and the second half".to_string(), 25_000.0, 41_000.0),
+            (
+                0usize,
+                "the first half of a sentence".to_string(),
+                0.0,
+                25_000.0,
+            ),
+            (
+                0usize,
+                "and the second half".to_string(),
+                25_000.0,
+                41_000.0,
+            ),
         ];
         let merged = rejoin_split_utterances(pieces);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].0, "the first half of a sentence and the second half");
+        assert_eq!(
+            merged[0].0,
+            "the first half of a sentence and the second half"
+        );
         assert_eq!(merged[0].1, 0.0);
         assert_eq!(merged[0].2, 41_000.0);
     }
@@ -1187,8 +847,18 @@ mod tests {
         // No quiet point found, so the splitter repeated a second of audio:
         // both clips transcribed the same words and joining them would stutter.
         let pieces = vec![
-            (0usize, "we should ship it on Friday".to_string(), 0.0, 26_000.0),
-            (0usize, "on Friday if the tests pass".to_string(), 25_000.0, 45_000.0),
+            (
+                0usize,
+                "we should ship it on Friday".to_string(),
+                0.0,
+                26_000.0,
+            ),
+            (
+                0usize,
+                "on Friday if the tests pass".to_string(),
+                25_000.0,
+                45_000.0,
+            ),
         ];
         let merged = rejoin_split_utterances(pieces);
         assert_eq!(merged.len(), 2, "an overlapping cut must not be rejoined");

@@ -749,6 +749,7 @@ pub struct AudioPipeline {
     // Preserve the shared recording state for the pipeline lifetime.
     _state: Arc<RecordingState>,
     vad_processor: ContinuousVadProcessor,
+    realtime_transcription: bool,
     sample_rate: u32,
     chunk_id_counter: u64,
     // Performance optimization: reduce logging frequency
@@ -840,6 +841,7 @@ impl AudioPipeline {
             transcription_sender,
             _state: state,
             vad_processor,
+            realtime_transcription: true,
             sample_rate,
             chunk_id_counter: 0,
             // Performance optimization: reduce logging frequency
@@ -936,6 +938,32 @@ impl AudioPipeline {
                             // Previous 2x gain was causing excessive limiting/distortion
                             let mixed_with_gain = mixed_clean;
 
+                            // STEP 4: Send mixed audio for recording (WAV file)
+                            if let Some(ref sender) = self.recording_sender_for_mixed {
+                                let recording_chunk = AudioChunk {
+                                    data: mixed_with_gain.clone(),
+                                    sample_rate: self.sample_rate,
+                                    timestamp: chunk.timestamp,
+                                    chunk_id: self.chunk_id_counter,
+                                    device_type: DeviceType::Microphone, // Mixed audio
+                                };
+                                let _ = sender.send(recording_chunk);
+                            }
+                            if !self.realtime_transcription {
+                                // Keep silence detection without retaining speech audio or loading ASR.
+                                match self.vad_processor.process_activity(&mixed_with_gain) {
+                                    Ok(frames) => {
+                                        for (_, probability) in frames {
+                                            crate::automation::recording_speech::note(
+                                                std::time::Duration::from_secs_f64(512.0 / 16000.0),
+                                                probability >= 0.5,
+                                            );
+                                        }
+                                    }
+                                    Err(error) => warn!("Recording activity VAD failed: {error}"),
+                                }
+                                continue;
+                            }
                             // STEP 3: Send mixed audio for transcription (VAD + Whisper)
                             match self.vad_processor.process_audio(&mixed_with_gain) {
                                 Ok(speech_segments) => {
@@ -943,7 +971,8 @@ impl AudioPipeline {
                                         std::time::Duration::from_secs_f64(
                                             mixed_with_gain.len() as f64 / self.sample_rate as f64,
                                         ),
-                                        self.vad_processor.in_speech() || !speech_segments.is_empty(),
+                                        self.vad_processor.in_speech()
+                                            || !speech_segments.is_empty(),
                                     );
                                     for segment in speech_segments {
                                         let duration_ms =
@@ -982,18 +1011,6 @@ impl AudioPipeline {
                                     warn!("⚠️ VAD error: {}", e);
                                 }
                             }
-
-                            // STEP 4: Send mixed audio for recording (WAV file)
-                            if let Some(ref sender) = self.recording_sender_for_mixed {
-                                let recording_chunk = AudioChunk {
-                                    data: mixed_with_gain.clone(),
-                                    sample_rate: self.sample_rate,
-                                    timestamp: chunk.timestamp,
-                                    chunk_id: self.chunk_id_counter,
-                                    device_type: DeviceType::Microphone, // Mixed audio
-                                };
-                                let _ = sender.send(recording_chunk);
-                            }
                         }
                     }
                 }
@@ -1019,6 +1036,9 @@ impl AudioPipeline {
     }
 
     fn flush_remaining_audio(&mut self) -> Result<()> {
+        if !self.realtime_transcription {
+            return Ok(());
+        }
         info!(
             "Flushing remaining audio from pipeline (processed {} chunks)",
             self.processed_chunks
@@ -1095,6 +1115,7 @@ impl AudioPipelineManager {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        realtime_transcription: bool,
     ) -> Result<()> {
         // Log device information for adaptive buffering
         info!("🎙️ Starting pipeline with device info:");
@@ -1127,6 +1148,7 @@ impl AudioPipelineManager {
         // CRITICAL FIX: Connect recording sender to receive pre-mixed audio
         // This ensures both mic AND system audio are captured in recordings
         pipeline.recording_sender_for_mixed = recording_sender;
+        pipeline.realtime_transcription = realtime_transcription;
 
         let handle = tokio::spawn(async move { pipeline.run().await });
 
@@ -1212,6 +1234,103 @@ impl Default for AudioPipelineManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "native subprocess fixture; run by recording_modes_preserve_audio"]
+    fn recording_modes_fixture() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        crate::init_worker_onnx(Some(&root.join("binaries/onnxruntime/onnxruntime.dll"))).unwrap();
+        let models = tempfile::tempdir().unwrap();
+        crate::audio::vad::configure_worker(
+            models.path().into(),
+            Some(root.join("binaries/silero/silero_vad.onnx")),
+        );
+        let decoded =
+            crate::audio::decoder::decode_audio_file(&root.join("tests/fixtures/jfk.wav")).unwrap();
+        let speech = decoded.to_whisper_format();
+        let raw: Vec<f32> = speech.into_iter().flat_map(|sample| [sample; 3]).collect();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut recordings = Vec::new();
+            for realtime in [false, true] {
+                crate::automation::recording_speech::reset();
+                let (sender, receiver) = mpsc::unbounded_channel();
+                let (transcript, mut transcripts) = mpsc::unbounded_channel();
+                let (recording, mut recordings_rx) = mpsc::unbounded_channel();
+                let mut pipeline = AudioPipeline::new(
+                    receiver,
+                    transcript,
+                    RecordingState::new(),
+                    0,
+                    48000,
+                    "microphone".into(),
+                    super::super::device_detection::InputDeviceKind::Wired,
+                    "system".into(),
+                    super::super::device_detection::InputDeviceKind::Wired,
+                )
+                .unwrap();
+                pipeline.realtime_transcription = realtime;
+                pipeline.recording_sender_for_mixed = Some(recording);
+                for (i, chunk) in raw.chunks(1536).enumerate() {
+                    sender.send(AudioChunk { data: chunk.to_vec(), sample_rate: 48000,
+                        timestamp: i as f64 * 0.032, chunk_id: (i * 2) as u64,
+                        device_type: DeviceType::Microphone }).unwrap();
+                    sender.send(AudioChunk { data: vec![0.0; chunk.len()], sample_rate: 48000,
+                        timestamp: i as f64 * 0.032, chunk_id: (i * 2 + 1) as u64,
+                        device_type: DeviceType::System }).unwrap();
+                }
+                drop(sender);
+                pipeline.run().await.unwrap();
+                let mut samples = Vec::new();
+                while let Ok(chunk) = recordings_rx.try_recv() {
+                    samples.extend(chunk.data);
+                }
+                assert!(
+                    samples.len() > 48000 * 5,
+                    "audio must still be saved without realtime STT"
+                );
+                recordings.push(samples);
+                let speech = crate::automation::recording_speech::snapshot();
+                assert!(
+                    speech.measured && speech.total.as_secs_f32() > 2.0,
+                    "silence/empty-meeting detection must keep working"
+                );
+                assert_eq!(
+                    transcripts.try_recv().is_ok(),
+                    realtime,
+                    "only live mode may queue STT audio"
+                );
+            }
+            assert_eq!(
+                recordings[0], recordings[1],
+                "changing recognition mode must not change captured audio"
+            );
+        });
+    }
+    #[cfg(windows)]
+    #[test]
+    fn recording_modes_preserve_audio_and_silence_detection() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "audio::pipeline::tests::recording_modes_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            status.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&status.stdout),
+            String::from_utf8_lossy(&status.stderr)
+        );
+    }
 
     #[test]
     fn test_live_vad_redemption_matches_pro_policy() {

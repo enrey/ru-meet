@@ -167,6 +167,19 @@ pub struct ModelDef {
     pub description: String,
 }
 
+impl ModelDef {
+    /// Check download completion using metadata only. No model loading,
+    /// directory creation or network access is needed for automatic work.
+    pub(crate) fn is_downloaded_in(&self, app_data_dir: &std::path::Path) -> bool {
+        let path = get_models_directory(&app_data_dir.to_path_buf()).join(&self.gguf_file);
+        let Ok(metadata) = std::fs::metadata(path) else { return false; };
+        let size_mb = metadata.len() / (1024 * 1024);
+        metadata.is_file()
+            && size_mb >= (self.size_mb as f64 * 0.9) as u64
+            && size_mb <= (self.size_mb as f64 * 1.1) as u64
+    }
+}
+
 /// Get all available built-in AI models
 /// Add new models here - the system will automatically detect and manage them
 pub fn get_available_models() -> Vec<ModelDef> {
@@ -399,6 +412,31 @@ pub const GENERATION_TIMEOUT_SECS: u64 = 900; // 15 minutes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_readiness_requires_a_complete_file_and_never_installs_anything() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut model = get_model_by_name("qwen3.5:4b").unwrap();
+        // Scale the fixture, preserving the same size validation as the model manager.
+        model.size_mb = 10;
+        assert!(!model.is_downloaded_in(directory.path()));
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        let models = get_models_directory(&directory.path().to_path_buf());
+        std::fs::create_dir_all(&models).unwrap();
+        let final_path = models.join(&model.gguf_file);
+        let partial = final_path.with_extension("gguf.part");
+        let file = std::fs::File::create(&partial).unwrap();
+        file.set_len(10 * 1024 * 1024).unwrap();
+        drop(file);
+        assert!(!model.is_downloaded_in(directory.path()));
+        std::fs::rename(partial, &final_path).unwrap();
+        assert!(model.is_downloaded_in(directory.path()));
+        std::fs::OpenOptions::new().write(true).open(&final_path).unwrap().set_len(0).unwrap();
+        assert!(!model.is_downloaded_in(directory.path()));
+        std::fs::remove_file(final_path).unwrap();
+        assert!(!model.is_downloaded_in(directory.path()));
+    }
+
 
     #[test]
     fn qwen35_models_are_registered_with_expected_metadata() {

@@ -13,6 +13,7 @@ fn main() {
         std::env::set_var("RUST_LOG", "info,ort::logging=warn");
     }
     env_logger::init();
+    app_lib::run_background_worker();
 
     // Async logger will be initialized lazily when first needed (after Tauri runtime starts)
     log::info!("Starting application...");

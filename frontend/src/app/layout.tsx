@@ -2,6 +2,7 @@
 
 import './globals.css'
 import Sidebar from '@/components/Sidebar'
+import { TasksProvider } from '@/contexts/TasksContext'
 import { SidebarProvider } from '@/components/Sidebar/SidebarProvider'
 import MainContent from '@/components/MainContent'
 import { Toaster, toast } from 'sonner'
@@ -311,10 +312,12 @@ export default function RootLayout({
                                 <OnboardingFlow onComplete={handleOnboardingComplete} />
                               ) : (
                                 <TranscriptRecoveryProvider>
+                                  <TasksProvider>
                                   <div className="flex">
                                     <Sidebar />
                                     <MainContent>{children}</MainContent>
                                   </div>
+                                  </TasksProvider>
                                   <OnboardingPreview />
                                 </TranscriptRecoveryProvider>
                               )}

@@ -1,15 +1,67 @@
 use crate::api::{MeetingDetails, MeetingTranscript};
 use crate::database::models::{MeetingListRow, MeetingModel, Transcript};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};
 use tracing::{error, info};
 
 pub struct MeetingsRepository;
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingRecoveryCandidate {
+    pub draft_id: String,
+    pub folder_path: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingRecoveryMatch {
+    pub draft_id: String,
+    pub meeting_id: String,
+}
+
+fn recording_folder_key(path: &str) -> Option<String> {
+    if path.trim().is_empty() { return None; }
+    #[cfg(target_os = "windows")]
+    let path = {
+        let path = path.replace('\\', "/");
+        let path = if let Some(unc) = path.strip_prefix("//?/UNC/") {
+            format!("//{unc}")
+        } else { path.strip_prefix("//?/").unwrap_or(&path).to_string() };
+        path.trim_end_matches('/').to_lowercase()
+    };
+    #[cfg(not(target_os = "windows"))]
+    let path = path.trim_end_matches('/').to_string();
+    Some(path)
+}
+
+
 /// Longest preview line shown under a meeting title in the library.
 const PREVIEW_MAX_CHARS: usize = 220;
 
 impl MeetingsRepository {
+    /// Reconcile browser crash copies with durable native recordings. Draft IDs
+    /// differ from SQLite IDs; the recording folder is the shared identity.
+    /// Only metadata is read: no audio, transcript bodies or models.
+    pub async fn match_saved_recordings(
+        pool: &SqlitePool, candidates: &[RecordingRecoveryCandidate],
+    ) -> Result<Vec<RecordingRecoveryMatch>, SqlxError> {
+        if candidates.is_empty() { return Ok(Vec::new()); }
+        let saved = sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT id, folder_path FROM meetings ORDER BY created_at, id"
+        ).fetch_all(pool).await?;
+        Ok(candidates.iter().filter_map(|candidate| {
+            let folder = candidate.folder_path.as_deref().and_then(recording_folder_key);
+            // Prefer exact identity if a future client already knows SQLite IDs.
+            let found = saved.iter().find(|(id, _)| id == &candidate.draft_id)
+                .or_else(|| saved.iter().find(|(_, saved_folder)| {
+                    folder.is_some() && folder == saved_folder.as_deref().and_then(recording_folder_key)
+                }));
+            found.map(|(id, _)| RecordingRecoveryMatch { draft_id: candidate.draft_id.clone(), meeting_id: id.clone() })
+        }).collect())
+    }
+
     /// Meetings newest first, with the aggregates the library list shows.
     /// Each child table is scanned once via GROUP BY rather than per meeting.
     pub async fn get_meeting_list(pool: &SqlitePool) -> Result<Vec<MeetingListRow>, SqlxError> {
@@ -375,6 +427,32 @@ fn truncate_chars(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn recovery_matches_saved_recording_folder_without_matching_unrelated_drafts() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE meetings (id TEXT PRIMARY KEY, title TEXT, folder_path TEXT, created_at TEXT)")
+            .execute(&pool).await.unwrap();
+        let folder = if cfg!(target_os = "windows") { r"C:\recordings\Auto Meeting 691bee90" } else { "/recordings/Auto Meeting 691bee90" };
+        sqlx::query("INSERT INTO meetings VALUES ('saved-native-id', 'Repeated title', ?, '2026-10-20')")
+            .bind(folder).execute(&pool).await.unwrap();
+        let alias = if cfg!(target_os = "windows") {
+            format!("//?/{}/", folder.to_uppercase().replace(char::from(92), "/"))
+        } else { format!("{folder}/") };
+        let matches = MeetingsRepository::match_saved_recordings(&pool, &[
+            RecordingRecoveryCandidate { draft_id: "browser-draft-id".into(), folder_path: Some(alias) },
+            RecordingRecoveryCandidate { draft_id: "saved-native-id".into(), folder_path: None },
+            RecordingRecoveryCandidate { draft_id: "genuinely-interrupted".into(), folder_path: Some("/other-recording".into()) },
+            RecordingRecoveryCandidate { draft_id: "Repeated title".into(), folder_path: None },
+            RecordingRecoveryCandidate { draft_id: "empty-folder".into(), folder_path: Some("".into()) },
+        ]).await.unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].draft_id, "browser-draft-id");
+        assert_eq!(matches[0].meeting_id, "saved-native-id");
+        assert_eq!(matches[1].meeting_id, "saved-native-id");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meetings").fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+    }
 
     #[test]
     fn preview_skips_headings_and_markup() {

@@ -129,13 +129,7 @@ struct SpeakrsEngine;
 
 impl SpeakrsEngine {
     fn model_dir() -> Result<PathBuf> {
-        Ok(crate::portable::data_root()
-            .cloned()
-            .or_else(|| dirs::data_local_dir().map(crate::portable::product_dir))
-            .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
-            .join("models")
-            .join("diarization")
-            .join("speakrs"))
+        Ok(models_root()?.join("speakrs"))
     }
 
     fn is_ready() -> bool {
@@ -177,8 +171,9 @@ impl DiarizationEngine for SpeakrsEngine {
         // Loading the FP32 WeSpeaker ResNet34 is itself slow enough to look
         // like a stall, so time the two phases separately.
         let loading = Instant::now();
-        let mut pipeline = OwnedDiarizationPipeline::from_dir(Self::model_dir()?, ExecutionMode::Cpu)
-            .map_err(|error| anyhow!("Could not load speakrs: {error}"))?;
+        let mut pipeline =
+            OwnedDiarizationPipeline::from_dir(Self::model_dir()?, ExecutionMode::Cpu)
+                .map_err(|error| anyhow!("Could not load speakrs: {error}"))?;
         log::info!(
             "speakrs: models loaded in {:.1}s, starting inference",
             loading.elapsed().as_secs_f64()
@@ -214,12 +209,7 @@ struct PyannoteWeSpeakerEngine;
 
 impl PyannoteWeSpeakerEngine {
     fn model_registry() -> Result<ModelRegistry> {
-        let root = crate::portable::data_root()
-            .cloned()
-            .or_else(|| dirs::data_local_dir().map(crate::portable::product_dir))
-            .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
-            .join("models")
-            .join("diarization");
+        let root = models_root()?;
         ModelRegistry::with_cache_dir(root).map_err(Into::into)
     }
 }
@@ -263,13 +253,7 @@ struct NvidiaSortformerV2Engine;
 
 impl NvidiaSortformerV2Engine {
     fn model_dir() -> Result<PathBuf> {
-        Ok(crate::portable::data_root()
-            .cloned()
-            .or_else(|| dirs::data_local_dir().map(crate::portable::product_dir))
-            .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
-            .join("models")
-            .join("diarization")
-            .join("sortformer-v2"))
+        Ok(models_root()?.join("sortformer-v2"))
     }
 
     fn model_path() -> Result<PathBuf> {
@@ -340,7 +324,9 @@ fn collapse_minor_speakers(turns: Vec<SpeakerTurn>) -> Vec<SpeakerTurn> {
     let minor: HashSet<String> = ranked
         .iter()
         .skip(MIN_KEPT_SPEAKERS)
-        .filter(|(_, secs)| *secs / total < MINOR_SPEAKER_SHARE && *secs < MINOR_SPEAKER_MAX_SECONDS)
+        .filter(|(_, secs)| {
+            *secs / total < MINOR_SPEAKER_SHARE && *secs < MINOR_SPEAKER_MAX_SECONDS
+        })
         .map(|(name, _)| (*name).to_owned())
         .collect();
 
@@ -528,9 +514,15 @@ pub const DIARIZATION_FAILED: &str = "Speaker diarization failed";
 #[tauri::command]
 pub fn get_diarization_status(meeting_id: Option<String>) -> Result<DiarizationJobStatus, String> {
     if let Some(meeting_id) = meeting_id {
-        return Ok(MEETING_JOBS.lock().map_err(|_| "Diarization status lock is unavailable")?
-            .get(&meeting_id).cloned().unwrap_or(DiarizationJobStatus {
-                in_progress: false, message: String::new(), meeting_id: Some(meeting_id),
+        return Ok(MEETING_JOBS
+            .lock()
+            .map_err(|_| "Diarization status lock is unavailable")?
+            .get(&meeting_id)
+            .cloned()
+            .unwrap_or(DiarizationJobStatus {
+                in_progress: false,
+                message: String::new(),
+                meeting_id: Some(meeting_id),
             }));
     }
     JOB_STATUS
@@ -638,8 +630,11 @@ pub(crate) fn start_for_folder<R: Runtime>(
 /// Register before returning from Stop so a newly opened meeting can query
 /// its status even when it missed the first progress event.
 pub fn start_recording_diarization<R: Runtime>(
-    app: AppHandle<R>, pool: sqlx::SqlitePool, meeting_id: String,
-    audio_path: Option<String>, target: DiarizationTarget,
+    app: AppHandle<R>,
+    pool: sqlx::SqlitePool,
+    meeting_id: String,
+    audio_path: Option<String>,
+    target: DiarizationTarget,
 ) -> String {
     match get_diarization_settings() {
         Ok(settings) if !settings.enabled => return "skipped".into(),
@@ -649,8 +644,16 @@ pub fn start_recording_diarization<R: Runtime>(
         }
         _ => {}
     }
-    let Some(audio_path) = audio_path else { return "skipped".into(); };
-    match start_meeting_diarization(app.clone(), pool, meeting_id.clone(), audio_path.into(), Some(target)) {
+    let Some(audio_path) = audio_path else {
+        return "skipped".into();
+    };
+    match start_meeting_diarization(
+        app.clone(),
+        pool,
+        meeting_id.clone(),
+        audio_path.into(),
+        Some(target),
+    ) {
         Ok(()) => "pending".into(),
         Err(error) => {
             emit_rerun_error(&app, &meeting_id, error);
@@ -659,9 +662,12 @@ pub fn start_recording_diarization<R: Runtime>(
     }
 }
 
-fn start_meeting_diarization<R: Runtime>(
-    app: AppHandle<R>, pool: sqlx::SqlitePool, meeting_id: String,
-    audio_path: PathBuf, target: Option<DiarizationTarget>,
+pub(crate) fn start_meeting_diarization<R: Runtime>(
+    app: AppHandle<R>,
+    pool: sqlx::SqlitePool,
+    meeting_id: String,
+    audio_path: PathBuf,
+    target: Option<DiarizationTarget>,
 ) -> Result<(), String> {
     let (engine, collapse) = {
         let settings = SETTINGS
@@ -670,23 +676,39 @@ fn start_meeting_diarization<R: Runtime>(
         (settings.engine.clone(), settings.collapse_minor_speakers)
     };
     {
-        let mut jobs = MEETING_JOBS.lock().map_err(|_| "Diarization status lock is unavailable")?;
-        if jobs.get(&meeting_id).is_some_and(|status| status.in_progress) {
+        let mut jobs = MEETING_JOBS
+            .lock()
+            .map_err(|_| "Diarization status lock is unavailable")?;
+        if jobs
+            .get(&meeting_id)
+            .is_some_and(|status| status.in_progress)
+        {
             return Err("Speaker diarization is already running for this meeting".into());
         }
-        CANCELLED_RERUNS.lock().map_err(|_| "Diarization cancellation lock is unavailable")?.remove(&meeting_id);
-        jobs.insert(meeting_id.clone(), DiarizationJobStatus {
-            in_progress: true,
-            message: "Waiting for speaker diarization…".into(),
-            meeting_id: Some(meeting_id.clone()),
-        });
+        CANCELLED_RERUNS
+            .lock()
+            .map_err(|_| "Diarization cancellation lock is unavailable")?
+            .remove(&meeting_id);
+        jobs.insert(
+            meeting_id.clone(),
+            DiarizationJobStatus {
+                in_progress: true,
+                message: "Waiting for speaker diarization…".into(),
+                meeting_id: Some(meeting_id.clone()),
+            },
+        );
     }
     let _ = app.emit(
         "diarization-progress",
         serde_json::json!({"stage":"queued", "message":"Waiting for speaker diarization…", "meetingId": meeting_id}),
     );
 
+    let task = crate::tasks::Task::register(crate::tasks::Action::Speakers {
+        meeting_id: meeting_id.clone(),
+        audio_path: audio_path.clone(),
+    });
     tauri::async_runtime::spawn(async move {
+        task.run(async move {
         let _queue_guard = JOB_QUEUE.lock().await;
         if take_rerun_cancellation(&meeting_id) {
             finish_cancelled_rerun(&app, &meeting_id);
@@ -694,45 +716,21 @@ fn start_meeting_diarization<R: Runtime>(
         }
         set_meeting_job_status(&meeting_id, true, "Identifying speakers…");
         let _ = app.emit("diarization-progress", serde_json::json!({"stage":"processing", "message":"Identifying speakers…", "meetingId": meeting_id}));
-        // Decode first so the heartbeat below can quote the recording's real
-        // length, and so a decode failure is reported as such.
-        let decoded =
-            tokio::task::spawn_blocking(move || decode_for_diarization(&audio_path)).await;
-        let samples = match decoded {
-            Ok(Ok(samples)) => samples,
-            Ok(Err(error)) => return emit_rerun_error(&app, &meeting_id, error.to_string()),
-            Err(error) => return emit_rerun_error(&app, &meeting_id, error.to_string()),
-        };
-
-        let audio_seconds = samples.len() as f64 / 16_000.0;
-        log::info!(
-            "Diarization: starting {engine} on {audio_seconds:.0}s of audio for meeting {meeting_id}"
-        );
-        let started = Instant::now();
-        let heartbeat = spawn_progress_heartbeat(
-            app.clone(),
-            Some(meeting_id.clone()),
-            engine.clone(),
-            audio_seconds,
-        );
-
-        let selected = engine.clone();
-        let result =
-            tokio::task::spawn_blocking(move || diarize_with_engine(&selected, &samples, collapse))
-                .await;
+        let heartbeat = spawn_progress_heartbeat(app.clone(), Some(meeting_id.clone()), engine.clone(), 0.0);
+        let result = crate::background_worker::speakers(&app, audio_path, engine, collapse,
+            || !CANCELLED_RERUNS.lock().unwrap_or_else(|e| e.into_inner()).contains(&meeting_id),
+            |progress| {
+                set_meeting_job_status(&meeting_id, true, &progress.message);
+                let _ = app.emit("diarization-progress", serde_json::json!({"stage":progress.stage, "message":progress.message, "meetingId": meeting_id}));
+            },
+        ).await;
         drop(heartbeat);
-
-        let elapsed = started.elapsed().as_secs_f64();
-        log::info!(
-            "Diarization: {engine} finished in {elapsed:.1}s ({:.1}x realtime)",
-            audio_seconds / elapsed.max(0.001)
-        );
 
         match result {
             _ if take_rerun_cancellation(&meeting_id) => {
                 finish_cancelled_rerun(&app, &meeting_id);
             }
-            Ok(Ok(turns)) => {
+            Ok(turns) => {
                 match TranscriptsRepository::apply_speaker_turns(&pool, &meeting_id, &turns).await {
                     Ok(()) => {
                         if let Some(target) = target {
@@ -757,9 +755,9 @@ fn start_meeting_diarization<R: Runtime>(
                     Err(error) => emit_rerun_error(&app, &meeting_id, error.to_string()),
                 }
             }
-            Ok(Err(error)) => emit_rerun_error(&app, &meeting_id, error.to_string()),
             Err(error) => emit_rerun_error(&app, &meeting_id, error.to_string()),
         }
+        }).await;
     });
     Ok(())
 }
@@ -769,7 +767,10 @@ pub fn cancel_diarization<R: Runtime>(app: AppHandle<R>, meeting_id: String) -> 
     let jobs = MEETING_JOBS
         .lock()
         .map_err(|_| "Diarization status lock is unavailable")?;
-    if !jobs.get(&meeting_id).is_some_and(|status| status.in_progress) {
+    if !jobs
+        .get(&meeting_id)
+        .is_some_and(|status| status.in_progress)
+    {
         return Err("No diarization job is running for this meeting".into());
     }
     drop(jobs);
@@ -822,12 +823,22 @@ fn spawn_progress_heartbeat<R: Runtime>(
                 break;
             }
 
+            if crate::background_work::recording_status().0 {
+                continue;
+            }
             let elapsed = started.elapsed().as_secs();
-            let message = format!(
-                "Identifying speakers with {engine}… {} elapsed, {} of audio",
-                format_elapsed(elapsed),
-                format_elapsed(audio_seconds as u64),
-            );
+            let message = if audio_seconds > 0.0 {
+                format!(
+                    "Identifying speakers with {engine}… {} elapsed, {} of audio",
+                    format_elapsed(elapsed),
+                    format_elapsed(audio_seconds as u64),
+                )
+            } else {
+                format!(
+                    "Identifying speakers with {engine} — {} elapsed",
+                    format_elapsed(elapsed)
+                )
+            };
             log::info!(
                 "Diarization in progress: {} elapsed for {:.0}s of audio ({engine})",
                 format_elapsed(elapsed),
@@ -853,24 +864,6 @@ fn spawn_progress_heartbeat<R: Runtime>(
     });
 
     ProgressHeartbeat(stop)
-}
-
-/// Report a failure from the recording-finalization path, where there is no
-/// meeting id yet and the caller returns the error to its own caller.
-fn finish_failed_diarization<R: Runtime>(
-    app: &AppHandle<R>,
-    error: String,
-) -> std::result::Result<Vec<SpeakerTurn>, String> {
-    log::warn!("Diarization failed: {error}");
-    let _ = app.emit("diarization-error", error.clone());
-    if let Ok(mut status) = JOB_STATUS.lock() {
-        *status = DiarizationJobStatus {
-            in_progress: false,
-            message: DIARIZATION_FAILED.into(),
-            meeting_id: None,
-        };
-    }
-    Err(error)
 }
 
 fn format_elapsed(seconds: u64) -> String {
@@ -901,6 +894,7 @@ fn take_rerun_cancellation(meeting_id: &str) -> bool {
 }
 
 fn finish_cancelled_rerun<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) {
+    crate::tasks::cancel_current();
     set_meeting_job_status(meeting_id, false, "Speaker diarization stopped");
     let _ = app.emit(
         "diarization-cancelled",
@@ -909,6 +903,7 @@ fn finish_cancelled_rerun<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) {
 }
 
 fn emit_rerun_error<R: Runtime>(app: &AppHandle<R>, meeting_id: &str, error: String) {
+    crate::tasks::fail_current(&error);
     log::warn!("Diarization failed: {error}");
     set_meeting_job_status(meeting_id, false, DIARIZATION_FAILED);
     let _ = app.emit(
@@ -1108,33 +1103,25 @@ pub async fn run_diarization_task<R: Runtime>(
         serde_json::json!({"stage":"processing", "message":"Identifying speakers…"}),
     );
 
-    // Decode before starting the heartbeat so it can quote the real length.
-    let samples = match tokio::task::spawn_blocking(move || decode_for_diarization(&path)).await {
-        Ok(Ok(samples)) => samples,
-        Ok(Err(error)) => return finish_failed_diarization(&app, error.to_string()),
-        Err(error) => return finish_failed_diarization(&app, error.to_string()),
-    };
-
-    let audio_seconds = samples.len() as f64 / 16_000.0;
-    log::info!("Diarization: starting {engine} on {audio_seconds:.0}s of audio");
-    let started = Instant::now();
-    let heartbeat =
-        spawn_progress_heartbeat(app.clone(), None, engine.clone(), audio_seconds);
-
-    let selected = engine.clone();
-    let result =
-        tokio::task::spawn_blocking(move || diarize_with_engine(&selected, &samples, collapse))
-            .await;
+    let heartbeat = spawn_progress_heartbeat(app.clone(), None, engine.clone(), 0.0);
+    let result = crate::background_worker::speakers(
+        &app,
+        path,
+        engine,
+        collapse,
+        || true,
+        |progress| {
+            let _ = app.emit(
+                "diarization-progress",
+                serde_json::json!({"stage":progress.stage,"message":progress.message}),
+            );
+        },
+    )
+    .await;
     drop(heartbeat);
 
-    let elapsed = started.elapsed().as_secs_f64();
-    log::info!(
-        "Diarization: {engine} finished in {elapsed:.1}s ({:.1}x realtime)",
-        audio_seconds / elapsed.max(0.001)
-    );
-
     match result {
-        Ok(Ok(turns)) => {
+        Ok(turns) => {
             let labels: Vec<_> = target.apply_speaker_turns(&turns).into_iter().map(|(sequence_id, speaker)| serde_json::json!({"sequenceId": sequence_id, "speaker": speaker})).collect();
             let _ = app.emit(
                 "diarization-complete",
@@ -1152,18 +1139,6 @@ pub async fn run_diarization_task<R: Runtime>(
                 };
             }
             Ok(turns)
-        }
-        Ok(Err(error)) => {
-            log::warn!("Diarization failed: {error}");
-            let _ = app.emit("diarization-error", error.to_string());
-            if let Ok(mut status) = JOB_STATUS.lock() {
-                *status = DiarizationJobStatus {
-                    in_progress: false,
-                    message: DIARIZATION_FAILED.into(),
-                    meeting_id: None,
-                };
-            }
-            Err(error.to_string())
         }
         Err(error) => {
             log::warn!("Diarization worker failed: {error}");
@@ -1276,7 +1251,11 @@ mod collapse_tests {
             .iter()
             .filter(|t| t.speaker == OTHERS_SPEAKER)
             .collect();
-        assert_eq!(others.len(), 2, "touching turns join, separated ones do not");
+        assert_eq!(
+            others.len(),
+            2,
+            "touching turns join, separated ones do not"
+        );
         assert_eq!(others[0].start, 3000.0);
         assert_eq!(others[0].end, 3004.0);
     }
@@ -1303,24 +1282,61 @@ mod speakrs_benchmark {
     #[test]
     #[ignore]
     fn speakrs_benchmark() {
-        let runtime = concat!(env!("CARGO_MANIFEST_DIR"), "/binaries/onnxruntime/onnxruntime.dll");
-        ort::init_from(runtime).unwrap().with_telemetry(false).commit();
+        let runtime = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/binaries/onnxruntime/onnxruntime.dll"
+        );
+        ort::init_from(runtime)
+            .unwrap()
+            .with_telemetry(false)
+            .commit();
         crate::record_onnx_runtime_success();
 
         let audio = std::env::var("SPEAKRS_BENCH_AUDIO").expect("SPEAKRS_BENCH_AUDIO");
-        let minutes: usize = std::env::var("SPEAKRS_BENCH_MINUTES").map_or(5, |m| m.parse().unwrap());
-        let mut samples = decode_audio_file(std::path::Path::new(&audio)).unwrap().to_whisper_format();
+        let minutes: usize =
+            std::env::var("SPEAKRS_BENCH_MINUTES").map_or(5, |m| m.parse().unwrap());
+        let mut samples = decode_audio_file(std::path::Path::new(&audio))
+            .unwrap()
+            .to_whisper_format();
         samples.truncate(minutes * 60 * 16_000);
 
         let started = Instant::now();
         let turns = SpeakrsEngine.diarize(&samples).unwrap();
         let elapsed = started.elapsed().as_secs_f64();
         let audio_seconds = samples.len() as f64 / 16_000.0;
-        let speakers = turns.iter().map(|turn| &turn.speaker).collect::<HashSet<_>>().len();
+        let speakers = turns
+            .iter()
+            .map(|turn| &turn.speaker)
+            .collect::<HashSet<_>>()
+            .len();
         println!(
             "speakrs: {audio_seconds:.0}s of audio in {elapsed:.1}s ({:.1}x realtime), {} turns, {speakers} speakers",
             audio_seconds / elapsed,
             turns.len()
         );
     }
+}
+
+static WORKER_MODELS_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+pub(crate) fn models_root() -> Result<PathBuf> {
+    if let Some(root) = WORKER_MODELS_ROOT.get() {
+        return Ok(root.clone());
+    }
+    Ok(crate::portable::data_root()
+        .cloned()
+        .or_else(|| dirs::data_local_dir().map(crate::portable::product_dir))
+        .ok_or_else(|| anyhow!("Could not resolve the local application-data directory"))?
+        .join("models")
+        .join("diarization"))
+}
+pub(crate) fn configure_worker(root: PathBuf) {
+    let _ = WORKER_MODELS_ROOT.set(root);
+}
+pub(crate) fn compute_in_worker(
+    path: &std::path::Path,
+    engine: &str,
+    collapse: bool,
+) -> Result<Vec<SpeakerTurn>> {
+    let samples = decode_for_diarization(path)?;
+    diarize_with_engine(engine, &samples, collapse)
 }

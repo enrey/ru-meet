@@ -40,7 +40,7 @@ pub struct GigaAmEngine {
 }
 
 impl GigaAmEngine {
-    fn new(models_dir: PathBuf) -> Result<Self> {
+    pub(crate) fn new(models_dir: PathBuf) -> Result<Self> {
         let models_dir = models_dir.join("gigaam");
         std::fs::create_dir_all(&models_dir)?;
         Ok(Self {

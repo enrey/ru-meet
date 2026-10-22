@@ -528,6 +528,22 @@ pub async fn api_process_transcript<R: Runtime>(
     .await
 }
 
+/// Automatic work must be usable now; a missing local model is optional,
+/// not a task waiting for a download. Remote providers don't use local files.
+pub(crate) fn summary_model_available<R: Runtime>(app: &AppHandle<R>, provider: &str, model: &str) -> bool {
+    let root = crate::portable::app_data_dir(app).ok();
+    summary_model_available_at(root.as_deref(), provider, model)
+}
+
+fn summary_model_available_at(root: Option<&std::path::Path>, provider: &str, model: &str) -> bool {
+    if provider.trim().is_empty() || model.trim().is_empty() { return false; }
+    if provider == "builtin-ai" {
+        return root.zip(super::summary_engine::models::get_model_by_name(model))
+            .is_some_and(|(root, definition)| definition.is_downloaded_in(root));
+    }
+    matches!(provider, "openai" | "claude" | "ollama" | "groq" | "openrouter" | "custom-openai")
+}
+
 /// Start generating a summary in the background; what `api_process_transcript`
 /// does, callable from the backend (`crate::processing`).
 #[allow(clippy::too_many_arguments)]
@@ -544,6 +560,11 @@ pub(crate) async fn start_summary<R: Runtime>(
     template_id: Option<String>,
     summary_language: Option<String>,
 ) -> Result<ProcessTranscriptResponse, String> {
+    // Validate before writing PENDING or registering a task. The automatic
+    // caller silently skips this case; manual callers get one useful error.
+    if model == "builtin-ai" && !summary_model_available(&app, &model, &model_name) {
+        return Err("Selected summary model is not installed".into());
+    }
     let final_prompt = custom_prompt.unwrap_or_else(|| "".to_string());
     let final_template_id = template_id.unwrap_or_else(|| "daily_standup".to_string());
 
@@ -594,20 +615,32 @@ pub(crate) async fn start_summary<R: Runtime>(
         serde_json::json!({ "meetingId": m_id, "processId": process_id }),
     );
     let meeting_id_clone = m_id.clone();
+    let task = crate::tasks::Task::register(crate::tasks::Action::Summary {
+        meeting_id: m_id.clone(),
+        text: text.clone(),
+        provider: model.clone(),
+        model: model_name.clone(),
+        prompt: final_prompt.clone(),
+        template: final_template_id.clone(),
+        language: summary_language.clone(),
+    });
     tauri::async_runtime::spawn(async move {
-        SummaryService::process_transcript_background(
-            app,
-            pool,
-            meeting_id_clone,
-            started_at,
-            cancellation_token,
-            text,
-            model,
-            model_name,
-            final_prompt,
-            final_template_id,
-            summary_language,
-        )
+        task.run(async move {
+            SummaryService::process_transcript_background(
+                app,
+                pool,
+                meeting_id_clone,
+                started_at,
+                cancellation_token,
+                text,
+                model,
+                model_name,
+                final_prompt,
+                final_template_id,
+                summary_language,
+            )
+            .await;
+        })
         .await;
     });
 
@@ -689,6 +722,26 @@ pub async fn api_cancel_summary<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_summary_skips_missing_selected_model_without_installing_or_using_a_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(!summary_model_available_at(Some(root.path()), "builtin-ai", "qwen3.5:4b"));
+        assert!(!summary_model_available_at(None, "builtin-ai", "qwen3.5:4b"));
+        assert!(!summary_model_available_at(Some(root.path()), "builtin-ai", "unknown-model"));
+        assert!(!summary_model_available_at(Some(root.path()), "", "qwen3.5:4b"));
+        assert!(!summary_model_available_at(Some(root.path()), "builtin-ai", ""));
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn remote_summary_providers_do_not_require_a_builtin_model() {
+        for provider in ["openai", "claude", "ollama", "groq", "openrouter", "custom-openai"] {
+            assert!(summary_model_available_at(None, provider, "configured-model"));
+            assert!(!summary_model_available_at(None, provider, ""));
+        }
+    }
+
     use serde_json::json;
 
     #[test]

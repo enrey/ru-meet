@@ -299,6 +299,17 @@ export function usePaginatedTranscripts({
         };
     }, [meetingId, refetch]);
 
+    // Deferred transcription can finish while this meeting is already open.
+    useEffect(() => {
+        if (!meetingId) return;
+        let cancelled = false;
+        let unlisten: UnlistenFn | undefined;
+        void listen<{ meeting_id: string }>('retranscription-complete', ({ payload }) => {
+            if (!cancelled && payload.meeting_id === meetingId) void refetch();
+        }).then(fn => { if (cancelled) fn(); else unlisten = fn; });
+        return () => { cancelled = true; unlisten?.(); };
+    }, [meetingId, refetch]);
+
     // Convert to segments (memoized)
     const segments = useMemo(() =>
         convertTranscriptsToSegments(transcripts),
