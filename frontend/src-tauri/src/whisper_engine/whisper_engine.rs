@@ -593,7 +593,12 @@ impl WhisperEngine {
         &self,
         audio_data: Vec<f32>,
         language: Option<String>,
-    ) -> Result<(String, f32, bool)> {
+    ) -> Result<(
+        String,
+        f32,
+        bool,
+        Vec<crate::audio::word_timing::WordTiming>,
+    )> {
         let ctx_lock = self.current_context.read().await;
         let ctx = ctx_lock
             .as_ref()
@@ -670,6 +675,7 @@ impl WhisperEngine {
             // Suppressor dropped here, stderr restored
         };
         let mut result = String::new();
+        let mut words = Some(Vec::new());
         let mut total_confidence = 0.0;
         let mut segment_count = 0;
 
@@ -695,6 +701,35 @@ impl WhisperEngine {
                 if !result.is_empty() {
                     result.push(' ');
                 }
+                if let Some(all_words) = &mut words {
+                    let timings = (|| {
+                        let mut tokens = Vec::new();
+                        for j in 0..state.full_n_tokens(i).ok()? {
+                            let token = state.full_get_token_data(i, j).ok()?;
+                            if token.id < ctx.token_eot() {
+                                tokens.push((
+                                    ctx.token_to_cstr(token.id).ok()?.to_bytes(),
+                                    token.t0 as f64 * 0.01,
+                                    token.t1 as f64 * 0.01,
+                                ));
+                            }
+                        }
+                        crate::audio::word_timing::words_from_pieces(
+                            cleaned_text,
+                            tokens,
+                            duration_seconds,
+                            false,
+                        )
+                    })();
+                    if let Some(timings) = timings {
+                        all_words.extend(timings.into_iter().map(|mut word| {
+                            word.byte_start += result.len();
+                            word
+                        }));
+                    } else {
+                        words = None;
+                    }
+                }
                 result.push_str(cleaned_text);
             }
         }
@@ -708,7 +743,13 @@ impl WhisperEngine {
             0.0
         };
 
-        Ok((cleaned_result, avg_confidence, is_partial))
+        // Repetition cleanup can change the text and invalidate byte offsets.
+        let words = if cleaned_result == final_result {
+            words.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Ok((cleaned_result, avg_confidence, is_partial, words))
     }
 
     pub async fn transcribe_audio(

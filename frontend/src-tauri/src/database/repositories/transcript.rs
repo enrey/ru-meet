@@ -1,7 +1,8 @@
 use crate::api::{TranscriptSearchResult, TranscriptSegment};
 use crate::audio::diarization::SpeakerTurn;
+use crate::audio::word_timing::WordTiming;
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Error as SqlxError, SqlitePool};
 use tracing::{error, info};
 use uuid::Uuid;
@@ -17,11 +18,126 @@ pub struct SpeakerLabelUpdate {
     pub speaker: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct DiarizationSource {
+    text: String,
+    start: f64,
+    end: f64,
+    words: Vec<WordTiming>,
+}
+
+#[derive(sqlx::FromRow)]
+struct DiarizationRow {
+    id: String,
+    transcript: String,
+    timestamp: String,
+    audio_start_time: Option<f64>,
+    audio_end_time: Option<f64>,
+    diarization_source: Option<String>,
+    diarization_parent: Option<String>,
+    speaker_edited: bool,
+}
+
+fn overlap(start: f64, end: f64, turn: &SpeakerTurn) -> f64 {
+    (end.min(turn.end) - start.max(turn.start)).max(0.0)
+}
+
+fn segment_speaker(start: f64, end: f64, turns: &[SpeakerTurn]) -> Option<&str> {
+    turns
+        .iter()
+        .map(|turn| (overlap(start, end, turn), turn.speaker.as_str()))
+        .filter(|(amount, _)| *amount > 0.0)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, speaker)| speaker)
+}
+
+impl DiarizationSource {
+    fn is_usable(&self) -> bool {
+        self.start.is_finite()
+            && self.end.is_finite()
+            && self.start >= 0.0
+            && self.end > self.start
+            && self.words.first().is_some_and(|word| word.byte_start == 0)
+            && self.words.iter().all(|word| {
+                word.byte_start < self.text.len()
+                    && self.text.is_char_boundary(word.byte_start)
+                    && word.start >= self.start
+                    && word.end <= self.end + 1e-6
+                    && word.end >= word.start
+            })
+            && self.words.windows(2).all(|pair| {
+                pair[0].byte_start < pair[1].byte_start && pair[0].start <= pair[1].start
+            })
+            && (self.words.len() == 1 || self.words[0].start < self.words.last().unwrap().start)
+    }
+
+    fn split<'a>(&'a self, turns: &'a [SpeakerTurn]) -> Vec<(&'a str, f64, f64, Option<&'a str>)> {
+        let fallback = segment_speaker(self.start, self.end, turns);
+        let mut parts = Vec::new();
+        let (mut byte, mut start, mut speaker) = (0, self.start, None);
+        let mut spoken_end = start;
+        for word in &self.words {
+            // Zero-length token ranges can still locate a word. Treat the end
+            // of a turn as exclusive at such a boundary.
+            let score = |turn: &SpeakerTurn| {
+                if word.start == word.end {
+                    f64::from(turn.start <= word.start && word.start < turn.end)
+                } else {
+                    overlap(word.start, word.end, turn)
+                }
+            };
+            let best = turns.iter().map(score).fold(0.0, f64::max);
+            let next = if best > 0.0 {
+                // Keep the current speaker on near ties. For an initial tie
+                // use the midpoint, then a deterministic speaker order.
+                let midpoint = (word.start + word.end) / 2.0;
+                turns
+                    .iter()
+                    .filter(|turn| score(turn) > 0.0 && best - score(turn) <= 0.001)
+                    .min_by_key(|turn| {
+                        (
+                            speaker != Some(turn.speaker.as_str()),
+                            !(turn.start <= midpoint && midpoint < turn.end),
+                            turn.speaker.as_str(),
+                        )
+                    })
+                    .map(|turn| turn.speaker.as_str())
+            } else {
+                speaker.or(fallback)
+            };
+
+            if word.byte_start == 0 {
+                speaker = next;
+            } else if next != speaker && word.start > start {
+                parts.push((
+                    &self.text[byte..word.byte_start],
+                    start,
+                    spoken_end.min(word.start),
+                    speaker,
+                ));
+                (byte, start, speaker) = (word.byte_start, word.start, next);
+                spoken_end = start;
+            }
+            spoken_end = spoken_end.max(word.end);
+        }
+        parts.push((&self.text[byte..], start, self.end, speaker));
+        parts
+    }
+}
+
 async fn replace_speaker_turns(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     meeting_id: &str,
     turns: &[SpeakerTurn],
-) -> Result<(), SqlxError> {
+) -> Result<Vec<SpeakerTurn>, SqlxError> {
+    let renamed = sqlx::query_as::<_, (f64, f64, String, String)>(
+        "SELECT start_time, end_time, original_speaker, speaker FROM diarization_turns
+         WHERE meeting_id = ? AND original_speaker IS NOT NULL",
+    )
+    .bind(meeting_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut applied = Vec::new();
     sqlx::query("DELETE FROM diarization_turns WHERE meeting_id = ?")
         .bind(meeting_id)
         .execute(&mut **transaction)
@@ -34,15 +150,27 @@ async fn replace_speaker_turns(
         {
             continue;
         }
-        sqlx::query("INSERT INTO diarization_turns (meeting_id, start_time, end_time, speaker) VALUES (?, ?, ?, ?)")
+        let corrected = renamed
+            .iter()
+            .find(|(start, end, original, _)| {
+                *start == turn.start && *end == turn.end && original == &turn.speaker
+            })
+            .map(|(_, _, _, speaker)| speaker);
+        let speaker = corrected.unwrap_or(&turn.speaker);
+        sqlx::query("INSERT INTO diarization_turns (meeting_id, start_time, end_time, speaker, original_speaker) VALUES (?, ?, ?, ?, ?)")
             .bind(meeting_id)
             .bind(turn.start)
             .bind(turn.end)
-            .bind(&turn.speaker)
+            .bind(speaker)
+            .bind(corrected.map(|_| &turn.speaker))
             .execute(&mut **transaction)
             .await?;
+        applied.push(SpeakerTurn {
+            speaker: speaker.clone(),
+            ..turn.clone()
+        });
     }
-    Ok(())
+    Ok(applied)
 }
 
 impl TranscriptsRepository {
@@ -134,20 +262,8 @@ impl TranscriptsRepository {
         // 2. Save each transcript segment with audio timing fields
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
-            let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(&transcript_id)
-            .bind(&meeting_id)
-            .bind(&segment.text)
-            .bind(&segment.timestamp)
-            .bind(segment.audio_start_time)
-            .bind(segment.audio_end_time)
-            .bind(segment.duration)
-            .bind(&segment.speaker)
-            .execute(&mut *transaction)
-            .await;
+            let result =
+                Self::insert_segment(&mut transaction, &meeting_id, &transcript_id, segment).await;
 
             if let Err(e) = result {
                 error!(
@@ -171,6 +287,48 @@ impl TranscriptsRepository {
         Ok(meeting_id)
     }
 
+    pub(crate) async fn insert_segment(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        meeting_id: &str,
+        id: &str,
+        segment: &TranscriptSegment,
+    ) -> Result<(), SqlxError> {
+        let source = match (segment.audio_start_time, segment.audio_end_time) {
+            (Some(start), Some(end)) if !segment.words.is_empty() => {
+                let source = DiarizationSource {
+                    text: segment.text.clone(),
+                    start,
+                    end,
+                    words: segment.words.clone(),
+                };
+                source
+                    .is_usable()
+                    .then(|| {
+                        serde_json::to_string(&source)
+                            .map_err(|error| SqlxError::Encode(error.into()))
+                    })
+                    .transpose()?
+            }
+            _ => None,
+        };
+        sqlx::query(
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, diarization_source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(id)
+        .bind(meeting_id)
+        .bind(&segment.text)
+        .bind(&segment.timestamp)
+        .bind(segment.audio_start_time)
+        .bind(segment.audio_end_time)
+        .bind(segment.duration)
+        .bind(&segment.speaker)
+        .bind(source)
+        .execute(&mut **transaction)
+        .await?;
+        Ok(())
+    }
+
     /// Persists labels produced by the post-save diarization worker. Matching
     /// by recording-relative bounds is stable across frontend and SQLite data.
     pub async fn update_speakers(
@@ -182,16 +340,18 @@ impl TranscriptsRepository {
         let mut conn = pool.acquire().await?;
         let mut transaction = conn.begin().await?;
 
-        sqlx::query("UPDATE transcripts SET speaker = NULL WHERE meeting_id = ?")
-            .bind(meeting_id)
-            .execute(&mut *transaction)
-            .await?;
+        sqlx::query(
+            "UPDATE transcripts SET speaker = NULL WHERE meeting_id = ? AND speaker_edited = 0",
+        )
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
 
         for label in labels {
             sqlx::query(
                 "UPDATE transcripts
                  SET speaker = ?
-                 WHERE meeting_id = ? AND audio_start_time = ? AND audio_end_time = ?",
+                 WHERE meeting_id = ? AND audio_start_time = ? AND audio_end_time = ? AND speaker_edited = 0",
             )
             .bind(&label.speaker)
             .bind(meeting_id)
@@ -210,43 +370,124 @@ impl TranscriptsRepository {
         meeting_id: &str,
         turns: &[SpeakerTurn],
     ) -> Result<(), SqlxError> {
-        let segments = sqlx::query_as::<_, (String, Option<f64>, Option<f64>)>(
-            "SELECT id, audio_start_time, audio_end_time FROM transcripts WHERE meeting_id = ?",
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+        let turns = replace_speaker_turns(&mut transaction, meeting_id, turns).await?;
+        Self::assign_speakers(&mut transaction, meeting_id, &turns).await?;
+        transaction.commit().await
+    }
+
+    /// Reuse the current speaker timeline when replacing a transcript from
+    /// the same recording. In particular, carry over renamed speaker labels.
+    pub(crate) async fn apply_stored_speaker_turns(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        meeting_id: &str,
+    ) -> Result<bool, SqlxError> {
+        let turns = sqlx::query_as::<_, (f64, f64, String)>(
+            "SELECT start_time, end_time, speaker FROM diarization_turns WHERE meeting_id = ? ORDER BY start_time, end_time",
         )
         .bind(meeting_id)
-        .fetch_all(pool)
+        .fetch_all(&mut **transaction)
+        .await?
+        .into_iter()
+        .map(|(start, end, speaker)| SpeakerTurn { start, end, speaker })
+        .collect::<Vec<_>>();
+        if turns.is_empty() {
+            return Ok(false);
+        }
+        Self::assign_speakers(transaction, meeting_id, &turns).await?;
+        Ok(true)
+    }
+
+    async fn assign_speakers(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        meeting_id: &str,
+        turns: &[SpeakerTurn],
+    ) -> Result<(), SqlxError> {
+        let rows = sqlx::query_as::<_, DiarizationRow>(
+            "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, diarization_source,
+                    diarization_parent, speaker_edited FROM transcripts WHERE meeting_id = ? ORDER BY id",
+        )
+        .bind(meeting_id)
+        .fetch_all(&mut **transaction)
         .await?;
-        let mut conn = pool.acquire().await?;
-        let mut transaction = conn.begin().await?;
-
-        sqlx::query("UPDATE transcripts SET speaker = NULL WHERE meeting_id = ?")
-            .bind(meeting_id)
-            .execute(&mut *transaction)
-            .await?;
-
-        for (id, start, end) in segments {
-            let (Some(start), Some(end)) = (start, end) else {
-                continue;
-            };
-            let speaker = turns
-                .iter()
-                .filter_map(|turn| {
-                    let overlap = (end.min(turn.end) - start.max(turn.start)).max(0.0);
-                    (overlap > 0.0).then_some((overlap, &turn.speaker))
-                })
-                .max_by(|left, right| left.0.total_cmp(&right.0))
-                .map(|(_, speaker)| speaker);
-            if let Some(speaker) = speaker {
-                sqlx::query("UPDATE transcripts SET speaker = ? WHERE id = ?")
-                    .bind(speaker)
-                    .bind(id)
-                    .execute(&mut *transaction)
-                    .await?;
+        let mut children = std::collections::HashMap::<_, Vec<_>>::new();
+        for row in &rows {
+            if let Some(parent) = &row.diarization_parent {
+                children.entry(parent.as_str()).or_default().push(row);
             }
         }
 
-        replace_speaker_turns(&mut transaction, meeting_id, turns).await?;
-        transaction.commit().await
+        for row in rows
+            .iter()
+            .filter(|row| row.diarization_parent.is_none() && !row.speaker_edited)
+        {
+            let Some(source) = row
+                .diarization_source
+                .as_deref()
+                .and_then(|source| serde_json::from_str::<DiarizationSource>(source).ok())
+                .filter(DiarizationSource::is_usable)
+            else {
+                let speaker = row
+                    .audio_start_time
+                    .zip(row.audio_end_time)
+                    .and_then(|(start, end)| segment_speaker(start, end, turns));
+                sqlx::query("UPDATE transcripts SET speaker = ? WHERE id = ?")
+                    .bind(speaker)
+                    .bind(&row.id)
+                    .execute(&mut **transaction)
+                    .await?;
+                continue;
+            };
+
+            let siblings = children
+                .get(row.id.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            if siblings.iter().any(|child| child.speaker_edited)
+                || !source.text.bytes().eq(std::iter::once(row)
+                    .chain(siblings.iter().copied())
+                    .flat_map(|part| part.transcript.bytes()))
+            {
+                // Keep edited text and manually assigned speakers as stored.
+                continue;
+            }
+
+            let nearby: Vec<_> = turns
+                .iter()
+                .filter(|turn| overlap(source.start, source.end, turn) > 0.0)
+                .cloned()
+                .collect();
+            let parts = source.split(&nearby);
+            if !siblings.is_empty() {
+                sqlx::query(
+                    "DELETE FROM transcripts WHERE meeting_id = ? AND diarization_parent = ?",
+                )
+                .bind(meeting_id)
+                .bind(&row.id)
+                .execute(&mut **transaction)
+                .await?;
+            }
+            for (index, (text, start, end, speaker)) in parts.into_iter().enumerate() {
+                if index == 0 {
+                    sqlx::query("UPDATE transcripts SET transcript = ?, audio_start_time = ?, audio_end_time = ?, duration = ?, speaker = ? WHERE id = ?")
+                        .bind(text).bind(start).bind(end).bind(end - start).bind(speaker).bind(&row.id)
+                        .execute(&mut **transaction)
+                        .await?;
+                } else {
+                    sqlx::query(
+                        "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, diarization_parent)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    )
+                    .bind(format!("{}-part-{index:08}", row.id))
+                    .bind(meeting_id).bind(text).bind(&row.timestamp)
+                    .bind(start).bind(end).bind(end - start).bind(speaker).bind(&row.id)
+                    .execute(&mut **transaction)
+                    .await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Phrases in transcript order, as the markdown exports need them.
@@ -408,7 +649,7 @@ impl TranscriptsRepository {
         // below are plain relabels, so no constraint stands in the way.
         let merged = existing_count > 0;
         sqlx::query(
-            "UPDATE diarization_turns SET speaker = ? WHERE meeting_id = ? AND speaker = ?",
+            "UPDATE diarization_turns SET speaker = ?, original_speaker = COALESCE(original_speaker, speaker) WHERE meeting_id = ? AND speaker = ?",
         )
         .bind(new_name)
         .bind(meeting_id)
@@ -416,7 +657,7 @@ impl TranscriptsRepository {
         .execute(&mut *transaction)
         .await
         .map_err(|error| error.to_string())?;
-        sqlx::query("UPDATE transcripts SET speaker = ? WHERE meeting_id = ? AND speaker = ?")
+        sqlx::query("UPDATE transcripts SET speaker = ?, speaker_edited = 1 WHERE meeting_id = ? AND speaker = ?")
             .bind(new_name)
             .bind(meeting_id)
             .bind(old_name)
@@ -517,6 +758,182 @@ impl TranscriptsRepository {
             context.push_str("...");
         }
         Some(context)
+    }
+}
+
+#[cfg(test)]
+mod word_timing_tests {
+    use super::*;
+    use crate::database::repositories::meeting::MeetingsRepository;
+
+    #[test]
+    fn word_timing_ties_keep_context_and_points_use_half_open_turns() {
+        let source = DiarizationSource {
+            text: "Раз два три".to_owned(),
+            start: 0.0,
+            end: 3.0,
+            words: [(0, 0.1, 0.5), (7, 0.8, 1.2), (14, 1.5, 1.5)]
+                .into_iter()
+                .map(|(byte_start, start, end)| WordTiming {
+                    byte_start,
+                    start,
+                    end,
+                })
+                .collect(),
+        };
+        let turns = [
+            SpeakerTurn {
+                start: 0.0,
+                end: 1.5,
+                speaker: "А".into(),
+            },
+            SpeakerTurn {
+                start: 0.8,
+                end: 2.0,
+                speaker: "Б".into(),
+            },
+        ];
+        let parts = source.split(&turns);
+        assert_eq!(
+            parts,
+            [
+                ("Раз два ", 0.0, 1.2, Some("А")),
+                ("три", 1.5, 3.0, Some("Б"))
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn word_timing_splits_screen_rows_and_exports_and_preserves_manual_edits() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let turn = |start, end, speaker: &str| SpeakerTurn {
+            start,
+            end,
+            speaker: speaker.into(),
+        };
+        let text = "Начинаем? «Да». Тогда отправлю документы.";
+        let words = ["Начинаем", "«Да»", "Тогда", "отправлю", "документы"]
+            .into_iter()
+            .zip([
+                (12.1, 12.8),
+                (13.0, 13.22),
+                (13.4, 13.6),
+                (13.7, 14.1),
+                (14.2, 14.8),
+            ])
+            .map(|(word, (start, end))| WordTiming {
+                byte_start: text.find(word).unwrap(),
+                start,
+                end,
+            })
+            .collect();
+        let segment = |text: &str, start, end, words| TranscriptSegment {
+            id: String::new(),
+            text: text.into(),
+            timestamp: "00:00:00".into(),
+            audio_start_time: Some(start),
+            audio_end_time: Some(end),
+            duration: Some(end - start),
+            speaker: None,
+            words,
+        };
+        let meeting = TranscriptsRepository::save_transcript(
+            &pool,
+            "word timing",
+            &[
+                segment(text, 12.0, 15.0, words),
+                segment("Старая строка", 20.0, 23.0, vec![]),
+            ],
+            Some(folder.path().to_string_lossy().into_owned()),
+        )
+        .await
+        .unwrap();
+        let turns = [
+            turn(12.0, 13.0, "А"),
+            turn(13.0, 13.25, "Б"),
+            turn(13.25, 15.0, "А"),
+            turn(20.0, 22.0, "А"),
+            turn(22.0, 23.0, "Б"),
+        ];
+        let read = || async {
+            MeetingsRepository::get_meeting_transcripts_paginated(&pool, &meeting, 10, 0)
+                .await
+                .unwrap()
+                .0
+                .into_iter()
+                .map(|row| (row.id, row.transcript, row.speaker.unwrap()))
+                .collect::<Vec<_>>()
+        };
+        TranscriptsRepository::apply_speaker_turns(&pool, &meeting, &turns)
+            .await
+            .unwrap();
+        let first = read().await;
+        assert_eq!(
+            first
+                .iter()
+                .map(|(_, text, speaker)| (text.trim(), speaker.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("Начинаем?", "А"),
+                ("«Да».", "Б"),
+                ("Тогда отправлю документы.", "А"),
+                ("Старая строка", "А")
+            ]
+        );
+        assert_eq!(
+            first
+                .iter()
+                .take(3)
+                .map(|(_, text, _)| text.as_str())
+                .collect::<String>(),
+            text
+        );
+        for _ in 0..2 {
+            TranscriptsRepository::apply_speaker_turns(&pool, &meeting, &turns)
+                .await
+                .unwrap();
+            assert_eq!(read().await, first);
+        }
+        crate::audio::transcript_export::export_diarized_transcripts(&pool, &meeting)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.path().join("transcript_with_speakers.md")).unwrap(),
+            "А: Начинаем?\n\nБ: «Да».\n\nА: Тогда отправлю документы. Старая строка\n"
+        );
+
+        TranscriptsRepository::apply_speaker_turns(&pool, &meeting, &[turn(12.0, 23.0, "А")])
+            .await
+            .unwrap();
+        assert_eq!(read().await.len(), 2);
+        TranscriptsRepository::apply_speaker_turns(&pool, &meeting, &turns)
+            .await
+            .unwrap();
+        assert_eq!(read().await, first);
+        TranscriptsRepository::rename_speaker(&pool, &meeting, "Б", "Борис")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE transcripts SET transcript = ? WHERE id = ?")
+            .bind("Исправленный вопрос? ")
+            .bind(&first[0].0)
+            .execute(&pool)
+            .await
+            .unwrap();
+        TranscriptsRepository::apply_speaker_turns(&pool, &meeting, &turns)
+            .await
+            .unwrap();
+        let edited = read().await;
+        assert_eq!(edited[0].1, "Исправленный вопрос? ");
+        assert_eq!(edited[1].2, "Борис");
+        assert_eq!(
+            TranscriptsRepository::get_speaker_turns(&pool, &meeting)
+                .await
+                .unwrap()[1]
+                .speaker,
+            "Борис"
+        );
     }
 }
 

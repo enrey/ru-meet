@@ -435,6 +435,7 @@ mod tests {
                 text: format!("{} samples", audio.len()),
                 confidence: Some(0.75),
                 is_partial: false,
+                words: Vec::new(),
             })
         }
 

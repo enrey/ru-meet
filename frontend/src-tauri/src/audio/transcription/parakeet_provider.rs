@@ -36,8 +36,9 @@ impl TranscriptionProvider for ParakeetProvider {
         match self.engine.transcribe_audio(audio).await {
             Ok(text) => Ok(TranscriptResult {
                 text: text.trim().to_string(),
-                confidence: None,  // Parakeet doesn't provide confidence scores
-                is_partial: false, // Parakeet doesn't provide partial results
+                confidence: None, // Parakeet doesn't provide confidence scores
+                is_partial: false,
+                words: Vec::new(), // Parakeet doesn't provide partial results
             }),
             Err(e) => Err(TranscriptionError::EngineFailed(e.to_string())),
         }

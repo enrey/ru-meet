@@ -24,6 +24,8 @@ pub struct TranscriptSegment {
     pub sequence_id: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<crate::audio::word_timing::WordTiming>,
 }
 
 /// Meeting metadata structure
@@ -134,6 +136,7 @@ mod transcript_target_tests {
             confidence: 1.0,
             sequence_id,
             speaker: None,
+            words: Vec::new(),
         }
     }
 
@@ -246,6 +249,7 @@ impl RecordingSaver {
             confidence: 1.0,
             sequence_id: 0,
             speaker: None,
+            words: Vec::new(),
         };
         self.add_transcript_segment(segment);
     }

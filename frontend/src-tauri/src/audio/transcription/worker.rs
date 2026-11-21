@@ -45,6 +45,8 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,         // Segment duration in seconds (e.g., 3.3)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<super::super::word_timing::WordTiming>,
 }
 
 /// Optimized parallel transcription task ensuring ZERO chunk loss
@@ -178,7 +180,17 @@ pub fn start_transcription_task<R: Runtime>(
                             match transcribe_chunk_with_provider(&engine_clone, chunk, &app_clone)
                                 .await
                             {
-                                Ok((transcript, confidence_opt, is_partial)) => {
+                                Ok(result) => {
+                                    let super::provider::TranscriptResult {
+                                        text: transcript,
+                                        confidence: confidence_opt,
+                                        is_partial,
+                                        mut words,
+                                    } = result;
+                                    super::super::word_timing::shift_words(
+                                        &mut words,
+                                        chunk_timestamp,
+                                    );
                                     let confidence_str = match confidence_opt {
                                         Some(c) => format!("{:.2}", c),
                                         None => "N/A".to_string(),
@@ -235,6 +247,7 @@ pub fn start_transcription_task<R: Runtime>(
                                             audio_start_time,
                                             audio_end_time,
                                             duration: chunk_duration,
+                                            words,
                                         };
 
                                         transcript_target.upsert(
@@ -248,6 +261,7 @@ pub fn start_transcription_task<R: Runtime>(
                                                 confidence: update.confidence,
                                                 sequence_id: update.sequence_id,
                                                 speaker: None,
+                                                words: update.words.clone(),
                                             },
                                         );
 
@@ -442,7 +456,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
     engine: &TranscriptionEngine,
     chunk: AudioChunk,
     app: &AppHandle<R>,
-) -> std::result::Result<(String, Option<f32>, bool), TranscriptionError> {
+) -> std::result::Result<super::provider::TranscriptResult, TranscriptionError> {
     // Convert to 16kHz mono for transcription
     let transcription_data = if chunk.sample_rate != 16000 {
         crate::audio::audio_processing::resample_audio(&chunk.data, chunk.sample_rate, 16000)
@@ -477,19 +491,16 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
 
     let language = crate::get_language_preference_internal();
     match engine.transcribe(speech_samples, language).await {
-        Ok(result) => {
-            let cleaned_text = result.text.trim().to_string();
-            if cleaned_text.is_empty() {
-                return Ok((String::new(), result.confidence, result.is_partial));
-            }
+        Ok(mut result) => {
+            result.text = result.text.trim().to_owned();
             info!(
                 "{} transcription complete for chunk {}: '{}' (partial: {})",
                 engine.provider_name(),
                 chunk.chunk_id,
-                cleaned_text,
+                result.text,
                 result.is_partial
             );
-            Ok((cleaned_text, result.confidence, result.is_partial))
+            Ok(result)
         }
         Err(error) => {
             error!(

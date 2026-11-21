@@ -58,7 +58,7 @@ pub(crate) enum Request {
 pub(crate) enum Output {
     Transcript {
         duration_seconds: f64,
-        transcripts: Vec<(String, f64, f64)>,
+        transcripts: Vec<crate::audio::common::TimedUtterance>,
         speech_segments: usize,
     },
     Speakers(Vec<SpeakerTurn>),
@@ -112,7 +112,7 @@ pub(crate) async fn transcribe<R: Runtime>(
     allow_empty: bool,
     keep_running: impl Fn() -> bool,
     on_progress: impl Fn(Progress),
-) -> Result<(f64, Vec<(String, f64, f64)>, usize)> {
+) -> Result<(f64, Vec<crate::audio::common::TimedUtterance>, usize)> {
     let (provider, model) = crate::audio::transcription::worker_config(app, provider, model)
         .await
         .map_err(|e| anyhow!(e))?;
@@ -503,9 +503,12 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
                     if !result.text.trim().is_empty() {
                         transcripts.push((
                             source,
-                            result.text,
-                            piece.start_timestamp_ms,
-                            piece.end_timestamp_ms,
+                            (
+                                result.text,
+                                piece.start_timestamp_ms,
+                                piece.end_timestamp_ms,
+                                result.words,
+                            ),
                         ));
                     }
                 }
@@ -655,6 +658,111 @@ mod tests {
         assert!(write.join().unwrap().is_err());
         drop(recording);
         drop(permit);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "uses installed GigaAM v3 and a two-voice Russian WAV with reference turns"]
+    async fn gigaam_audio_word_timing_reaches_screen_rows_and_export() {
+        use crate::database::repositories::{
+            meeting::MeetingsRepository, transcript::TranscriptsRepository,
+        };
+        let _serial = CHILD_TESTS.lock().await;
+        let fixture = PathBuf::from(std::env::var_os("RU_MEET_WORD_TIMING_FIXTURE").unwrap());
+        let models = PathBuf::from(std::env::var_os("RU_MEET_WORD_TIMING_MODELS").unwrap());
+        let dir = tempfile::tempdir().unwrap();
+        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+        let mut input = envelope(dir.path(), false);
+        input.request = Request::Transcribe {
+            path: fixture.join("aba.wav"),
+            copy_to: None,
+            provider: ProviderId::GigaAm,
+            model: crate::gigaam_engine::MODEL_NAME.into(),
+            language: None,
+            allow_empty: false,
+        };
+        input.models = models;
+        input.runtime = Some(resources.join("onnxruntime/onnxruntime.dll"));
+        input.silero = Some(resources.join("silero/silero_vad.onnx"));
+        let scheduler = Arc::new(crate::background_work::Scheduler::default());
+        let Output::Transcript {
+            transcripts,
+            speech_segments,
+            ..
+        } = execute(input, fixture_command, &scheduler, || true, |_| {})
+            .await
+            .unwrap()
+        else {
+            panic!("Expected transcript");
+        };
+        assert_eq!(speech_segments, 1);
+        assert_eq!(transcripts.len(), 1);
+        let segments = crate::audio::common::create_transcript_segments(&transcripts);
+        let segment = &segments[0];
+        eprintln!("GigaAM: {:?}, {:?}", segment.text, segment.words);
+        assert!(segment.audio_start_time.unwrap() > 2.0);
+        assert!(segment.words.first().unwrap().start > 2.0);
+        let turns: Vec<SpeakerTurn> =
+            serde_json::from_slice(&std::fs::read(fixture.join("turns.json")).unwrap()).unwrap();
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let meeting = TranscriptsRepository::save_transcript(
+            &pool,
+            "GigaAM audio test",
+            &segments,
+            Some(dir.path().to_string_lossy().into_owned()),
+        )
+        .await
+        .unwrap();
+        let mut previous = None;
+        for _ in 0..2 {
+            TranscriptsRepository::apply_speaker_turns(&pool, &meeting, &turns)
+                .await
+                .unwrap();
+            let (rows, count) =
+                MeetingsRepository::get_meeting_transcripts_paginated(&pool, &meeting, 10, 0)
+                    .await
+                    .unwrap();
+            assert_eq!(count, 3);
+            assert_eq!(
+                rows.iter()
+                    .map(|row| row.speaker.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                ["A", "B", "A"]
+            );
+            assert_eq!(
+                rows[1]
+                    .transcript
+                    .trim()
+                    .trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase(),
+                "да"
+            );
+            assert_eq!(
+                rows.iter()
+                    .map(|row| row.transcript.as_str())
+                    .collect::<String>(),
+                segment.text
+            );
+            let ids: Vec<_> = rows.into_iter().map(|row| row.id).collect();
+            if let Some(previous) = &previous {
+                assert_eq!(&ids, previous);
+            }
+            previous = Some(ids);
+        }
+        crate::audio::transcript_export::export_diarized_transcripts(&pool, &meeting)
+            .await
+            .unwrap();
+        let export =
+            std::fs::read_to_string(dir.path().join("transcript_with_speakers.md")).unwrap();
+        eprintln!("{export}");
+        assert_eq!(
+            export
+                .lines()
+                .filter_map(|line| line.split_once(": ").map(|(speaker, _)| speaker))
+                .collect::<Vec<_>>(),
+            ["A", "B", "A"]
+        );
     }
 
     #[cfg(windows)]

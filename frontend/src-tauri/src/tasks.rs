@@ -413,9 +413,9 @@ async fn retry<R: Runtime>(app: AppHandle<R>, action: Action) -> Result<(), Stri
         Action::Speakers {
             meeting_id,
             audio_path,
-        } => crate::audio::diarization::start_meeting_diarization(
-            app, pool, meeting_id, audio_path, None,
-        ),
+        } => {
+            crate::audio::diarization::start_meeting_diarization(app, pool, meeting_id, audio_path)
+        }
         Action::Summary {
             meeting_id,
             text,

@@ -2,6 +2,7 @@
 
 use super::common::{create_transcript_segments, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
+use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::state::AppState;
 use anyhow::{anyhow, Result};
 use log::{error, info, warn};
@@ -216,7 +217,7 @@ async fn start_retranscription_job<R: Runtime>(
 
 /// Find audio file in meeting folder
 /// Tries common names first, then scans for any file with an audio extension
-fn find_audio_file(folder: &Path) -> Result<PathBuf> {
+pub(crate) fn find_audio_file(folder: &Path) -> Result<PathBuf> {
     let candidates = [
         "audio.mp4",
         "audio.m4a",
@@ -232,7 +233,7 @@ fn find_audio_file(folder: &Path) -> Result<PathBuf> {
 
     for name in candidates {
         let path = folder.join(name);
-        if path.exists() {
+        if path.is_file() {
             return Ok(path);
         }
     }
@@ -241,7 +242,7 @@ fn find_audio_file(folder: &Path) -> Result<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(folder) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if let Some(ext) = path.extension() {
+            if let Some(ext) = path.extension().filter(|_| path.is_file()) {
                 let ext = ext.to_string_lossy().to_lowercase();
                 if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
                     return Ok(path);
@@ -327,29 +328,28 @@ async fn run_retranscription<R: Runtime>(
         .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
 
     for segment in &segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&segment.id)
-        .bind(&meeting_id)
-        .bind(&segment.text)
-        .bind(&segment.timestamp)
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
+        TranscriptsRepository::insert_segment(&mut tx, &meeting_id, &segment.id, segment)
+            .await
+            .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
 
+    let reused_turns =
+        TranscriptsRepository::apply_stored_speaker_turns(&mut tx, &meeting_id).await?;
+    let segments_count = if reused_turns {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transcripts WHERE meeting_id = ?")
+            .bind(&meeting_id)
+            .fetch_one(&mut *tx)
+            .await? as usize
+    } else {
+        segments.len()
+    };
     tx.commit()
         .await
         .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
 
     info!(
         "Updated {} transcripts for meeting {} in transaction",
-        segments.len(),
+        segments_count,
         meeting_id
     );
 
@@ -362,7 +362,12 @@ async fn run_retranscription<R: Runtime>(
         "Writing transcript files...",
     );
 
-    if let Err(e) = write_transcripts_json(&folder_path, &segments) {
+    let export_result = if reused_turns {
+        super::transcript_export::export_diarized_transcripts(pool, &meeting_id).await
+    } else {
+        write_transcripts_json(&folder_path, &segments)
+    };
+    if let Err(e) = export_result {
         warn!("Failed to write transcripts.json: {}", e);
     }
 
@@ -389,7 +394,7 @@ async fn run_retranscription<R: Runtime>(
 
     Ok(RetranscriptionResult {
         meeting_id,
-        segments_count: segments.len(),
+        segments_count,
         duration_seconds,
         language,
     })
@@ -538,7 +543,7 @@ mod tests {
 
     #[test]
     fn test_create_transcript_segments_empty() {
-        let transcripts: Vec<(String, f64, f64)> = vec![];
+        let transcripts: Vec<crate::audio::common::TimedUtterance> = vec![];
         let segments = create_transcript_segments(&transcripts);
         assert!(segments.is_empty());
     }
@@ -546,7 +551,7 @@ mod tests {
     #[test]
     fn test_create_transcript_segments_single() {
         let transcripts = vec![
-            ("Hello world".to_string(), 0.0, 1500.0), // 0-1.5 seconds
+            ("Hello world".to_string(), 0.0, 1500.0, Vec::new()), // 0-1.5 seconds
         ];
         let segments = create_transcript_segments(&transcripts);
 
@@ -560,9 +565,9 @@ mod tests {
     #[test]
     fn test_create_transcript_segments_multiple() {
         let transcripts = vec![
-            ("First segment".to_string(), 0.0, 2000.0), // 0-2 seconds
-            ("Second segment".to_string(), 3000.0, 5000.0), // 3-5 seconds
-            ("Third segment".to_string(), 6500.0, 8000.0), // 6.5-8 seconds
+            ("First segment".to_string(), 0.0, 2000.0, Vec::new()), // 0-2 seconds
+            ("Second segment".to_string(), 3000.0, 5000.0, Vec::new()), // 3-5 seconds
+            ("Third segment".to_string(), 6500.0, 8000.0, Vec::new()), // 6.5-8 seconds
         ];
         let segments = create_transcript_segments(&transcripts);
 
@@ -589,7 +594,7 @@ mod tests {
 
     #[test]
     fn test_create_transcript_segments_trims_whitespace() {
-        let transcripts = vec![("  Hello with spaces  ".to_string(), 0.0, 1000.0)];
+        let transcripts = vec![("  Hello with spaces  ".to_string(), 0.0, 1000.0, Vec::new())];
         let segments = create_transcript_segments(&transcripts);
 
         assert_eq!(segments.len(), 1);
@@ -599,8 +604,8 @@ mod tests {
     #[test]
     fn test_create_transcript_segments_generates_unique_ids() {
         let transcripts = vec![
-            ("Segment one".to_string(), 0.0, 1000.0),
-            ("Segment two".to_string(), 1000.0, 2000.0),
+            ("Segment one".to_string(), 0.0, 1000.0, Vec::new()),
+            ("Segment two".to_string(), 1000.0, 2000.0, Vec::new()),
         ];
         let segments = create_transcript_segments(&transcripts);
 

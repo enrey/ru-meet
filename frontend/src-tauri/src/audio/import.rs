@@ -573,6 +573,20 @@ async fn run_import<R: Runtime>(
         log.info(line);
     }
 
+    if super::diarization::get_diarization_settings().is_ok_and(|settings| settings.enabled)
+        && !segments.is_empty()
+    {
+        if let Err(error) = super::diarization::start_meeting_diarization(
+            app.clone(),
+            app_state.db_manager.pool().clone(),
+            meeting_id.clone(),
+            meeting_folder.join(&dest_filename),
+        ) {
+            log.warn(format!(
+                "Could not start imported audio diarization: {error}"
+            ));
+        }
+    }
     emit_progress(&app, "complete", 100, "Import complete");
 
     Ok(ImportResult {
@@ -630,18 +644,12 @@ async fn create_meeting_with_transcripts(
 
     // Insert transcripts
     for segment in segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        crate::database::repositories::transcript::TranscriptsRepository::insert_segment(
+            &mut tx,
+            &meeting_id,
+            &segment.id,
+            segment,
         )
-        .bind(&segment.id)
-        .bind(&meeting_id)
-        .bind(&segment.text)
-        .bind(&segment.timestamp)
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
     }
@@ -810,15 +818,21 @@ mod tests {
         let pieces = vec![
             (
                 0usize,
-                "the first half of a sentence".to_string(),
-                0.0,
-                25_000.0,
+                (
+                    "the first half of a sentence".to_string(),
+                    0.0,
+                    25_000.0,
+                    Vec::new(),
+                ),
             ),
             (
                 0usize,
-                "and the second half".to_string(),
-                25_000.0,
-                41_000.0,
+                (
+                    "and the second half".to_string(),
+                    25_000.0,
+                    41_000.0,
+                    Vec::new(),
+                ),
             ),
         ];
         let merged = rejoin_split_utterances(pieces);
@@ -835,8 +849,14 @@ mod tests {
     fn rejoin_keeps_separate_vad_segments_apart() {
         // Different VAD segments are different utterances, however close.
         let pieces = vec![
-            (0usize, "first utterance".to_string(), 0.0, 5_000.0),
-            (1usize, "second utterance".to_string(), 5_000.0, 9_000.0),
+            (
+                0usize,
+                ("first utterance".to_string(), 0.0, 5_000.0, Vec::new()),
+            ),
+            (
+                1usize,
+                ("second utterance".to_string(), 5_000.0, 9_000.0, Vec::new()),
+            ),
         ];
         let merged = rejoin_split_utterances(pieces);
         assert_eq!(merged.len(), 2);
@@ -849,15 +869,21 @@ mod tests {
         let pieces = vec![
             (
                 0usize,
-                "we should ship it on Friday".to_string(),
-                0.0,
-                26_000.0,
+                (
+                    "we should ship it on Friday".to_string(),
+                    0.0,
+                    26_000.0,
+                    Vec::new(),
+                ),
             ),
             (
                 0usize,
-                "on Friday if the tests pass".to_string(),
-                25_000.0,
-                45_000.0,
+                (
+                    "on Friday if the tests pass".to_string(),
+                    25_000.0,
+                    45_000.0,
+                    Vec::new(),
+                ),
             ),
         ];
         let merged = rejoin_split_utterances(pieces);
@@ -867,8 +893,11 @@ mod tests {
     #[test]
     fn rejoin_handles_an_empty_piece() {
         let pieces = vec![
-            (0usize, "spoken text".to_string(), 0.0, 25_000.0),
-            (0usize, "   ".to_string(), 25_000.0, 30_000.0),
+            (
+                0usize,
+                ("spoken text".to_string(), 0.0, 25_000.0, Vec::new()),
+            ),
+            (0usize, ("   ".to_string(), 25_000.0, 30_000.0, Vec::new())),
         ];
         let merged = rejoin_split_utterances(pieces);
         assert_eq!(merged.len(), 1);
@@ -878,14 +907,14 @@ mod tests {
 
     #[test]
     fn test_create_transcript_segments_empty() {
-        let transcripts: Vec<(String, f64, f64)> = vec![];
+        let transcripts: Vec<crate::audio::common::TimedUtterance> = vec![];
         let segments = create_transcript_segments(&transcripts);
         assert!(segments.is_empty());
     }
 
     #[test]
     fn test_create_transcript_segments_single() {
-        let transcripts = vec![("Hello world".to_string(), 0.0, 1500.0)];
+        let transcripts = vec![("Hello world".to_string(), 0.0, 1500.0, Vec::new())];
         let segments = create_transcript_segments(&transcripts);
 
         assert_eq!(segments.len(), 1);
@@ -1058,6 +1087,7 @@ mod tests {
                 audio_end_time: Some(1.5),
                 duration: Some(1.5),
                 speaker: None,
+                words: Vec::new(),
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
@@ -1067,6 +1097,7 @@ mod tests {
                 audio_end_time: Some(3.5),
                 duration: Some(1.5),
                 speaker: None,
+                words: Vec::new(),
             },
         ];
 

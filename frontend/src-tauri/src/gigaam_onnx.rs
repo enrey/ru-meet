@@ -69,6 +69,59 @@ impl AcceleratorKind {
     }
 }
 
+#[cfg(test)]
+mod word_timing_tests {
+    use super::*;
+
+    #[test]
+    fn ctc_keeps_emission_ranges_and_blank_separates_repeated_ids() {
+        let ids = [0, 1, 1, 0, 1, 2, 2, 0];
+        let logits =
+            ndarray::Array3::from_shape_fn(
+                (1, ids.len(), 3),
+                |(_, t, v)| {
+                    if ids[t] == v {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                },
+            );
+        let tokens = ctc_greedy_decode(&logits.view(), ids.len(), 0);
+        assert_eq!(
+            tokens
+                .into_iter()
+                .map(|t| (t.id, t.first_frame, t.end_frame))
+                .collect::<Vec<_>>(),
+            [(1, 1, 3), (1, 4, 5), (2, 5, 7)]
+        );
+    }
+
+    #[test]
+    fn ctc_sentencepiece_joins_russian_subwords_and_keeps_punctuation_out_of_timing() {
+        let vocab = ["▁Нач", "инаем", "?", "<unk>", "▁«", "Да", "».", "▁Дальше"].map(str::to_owned);
+        let emissions: Vec<_> = [1, 4, 7, 8, 9, 10, 12, 14]
+            .into_iter()
+            .enumerate()
+            .map(|(id, frame)| CtcEmission {
+                id: id as i64,
+                first_frame: frame,
+                end_frame: frame + 1,
+            })
+            .collect();
+        let result = sentencepiece_result(&emissions, &vocab, 0.04, 0.01, 1.0);
+        assert_eq!(result.text, "Начинаем? «Да». Дальше");
+        assert_eq!(result.words.len(), 3);
+        let yes = &result.words[1];
+        assert_eq!(
+            &result.text[yes.byte_start..result.words[2].byte_start],
+            "«Да». "
+        );
+        assert!((yes.start - 0.39).abs() < 1e-9);
+        assert!((yes.end - 0.43).abs() < 1e-9);
+    }
+}
+
 /// Which execution provider(s) ONNX Runtime assigned the loaded graph to.
 /// This is read after graph partitioning via `Session_GetEpGraphAssignmentInfo`;
 /// successful accelerator registration alone is deliberately not treated as use.
@@ -291,6 +344,7 @@ pub struct TranscribeOptions;
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
     pub text: String,
+    pub words: Vec<crate::audio::word_timing::WordTiming>,
 }
 
 // ---- Mel spectrogram (ported from transcribe-rs `features/mel.rs`) --------
@@ -444,15 +498,22 @@ fn load_vocab(path: &Path) -> Result<(Vec<String>, Option<i32>)> {
 
 // ---- CTC greedy decode (ported from transcribe-rs `decode/ctc.rs`) -------
 
+#[derive(Debug, PartialEq, Eq)]
+struct CtcEmission {
+    id: i64,
+    first_frame: usize,
+    end_frame: usize,
+}
+
 /// For each time step, selects the token with highest logit. Skips blank
 /// tokens and consecutive repeated tokens.
 fn ctc_greedy_decode(
     logits: &ndarray::ArrayView3<f32>,
     num_frames: usize,
     blank_id: i64,
-) -> Vec<i64> {
+) -> Vec<CtcEmission> {
     let vocab_size = logits.shape()[2];
-    let mut tokens = Vec::new();
+    let mut tokens: Vec<CtcEmission> = Vec::new();
     let mut prev_id: i64 = -1;
 
     for t in 0..num_frames {
@@ -466,8 +527,16 @@ fn ctc_greedy_decode(
             }
         }
 
-        if max_id != blank_id && max_id != prev_id {
-            tokens.push(max_id);
+        if max_id != blank_id {
+            if max_id != prev_id {
+                tokens.push(CtcEmission {
+                    id: max_id,
+                    first_frame: t,
+                    end_frame: t + 1,
+                });
+            } else if let Some(last) = tokens.last_mut() {
+                last.end_frame = t + 1;
+            }
         }
         prev_id = max_id;
     }
@@ -477,14 +546,42 @@ fn ctc_greedy_decode(
 
 // ---- SentencePiece detokenization (ported from `decode/sentencepiece.rs`) -
 
-/// Convert a sequence of SentencePiece tokens to readable text.
-fn sentencepiece_to_text(tokens: &[&str]) -> String {
-    let mut text = String::new();
-    for &token in tokens {
-        text.push_str(&token.replace('\u{2581}', " "));
-    }
-    let text = text.trim().to_string();
-    text.replace(" '", "'")
+/// v3-e2e-ctc uses two time-axis convolutions with stride 2, kernel 5,
+/// symmetric padding 2. Output length is ceil(mel_frames / 4).
+const ENCODER_STRIDE: usize = 4;
+
+fn sentencepiece_result(
+    emissions: &[CtcEmission],
+    vocab: &[String],
+    frame_seconds: f64,
+    first_center: f64,
+    duration: f64,
+) -> TranscriptionResult {
+    let pieces: Vec<_> = emissions
+        .iter()
+        .filter_map(|emission| {
+            let token = vocab.get(emission.id as usize)?.as_str();
+            if token == "<unk>" {
+                return None;
+            }
+            let start =
+                (first_center + (emission.first_frame as f64 - 0.5) * frame_seconds).max(0.0);
+            let end = first_center + (emission.end_frame as f64 - 0.5) * frame_seconds;
+            Some((token.replace('\u{2581}', " "), start, end))
+        })
+        .collect();
+    let raw: String = pieces.iter().map(|(piece, _, _)| piece.as_str()).collect();
+    let text = raw.trim().replace(" '", "'");
+    let words = crate::audio::word_timing::words_from_pieces(
+        &text,
+        pieces
+            .iter()
+            .map(|(piece, start, end)| (piece.as_bytes(), *start, *end)),
+        duration,
+        true,
+    )
+    .unwrap_or_default();
+    TranscriptionResult { text, words }
 }
 
 // ---- Model ------------------------------------------------------------
@@ -643,6 +740,7 @@ impl GigaAMModel {
         if samples.len() < self.mel_config.n_fft {
             return Ok(TranscriptionResult {
                 text: String::new(),
+                words: Vec::new(),
             });
         }
 
@@ -670,28 +768,21 @@ impl GigaAMModel {
 
         // 5. CTC greedy decode
         let num_frames = log_probs.shape()[1];
-        let token_ids = ctc_greedy_decode(&log_probs.view(), num_frames, self.blank_idx);
-
-        // 6. Convert token IDs to text
-        let tokens: Vec<&str> = token_ids
-            .iter()
-            .filter_map(|&id| {
-                let idx = id as usize;
-                if idx < self.vocab.len() {
-                    let token = self.vocab[idx].as_str();
-                    if token == "<unk>" {
-                        None
-                    } else {
-                        Some(token)
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let text = sentencepiece_to_text(&tokens);
-
-        Ok(TranscriptionResult { text })
+        let emissions = ctc_greedy_decode(&log_probs.view(), num_frames, self.blank_idx);
+        let sample_rate = f64::from(self.mel_config.sample_rate);
+        let mut result = sentencepiece_result(
+            &emissions,
+            &self.vocab,
+            (self.mel_config.hop_length * ENCODER_STRIDE) as f64 / sample_rate,
+            self.mel_config.n_fft as f64 / (2.0 * sample_rate),
+            samples.len() as f64 / sample_rate,
+        );
+        if num_frames != time_steps.div_ceil(ENCODER_STRIDE) {
+            log::warn!(
+                "Unexpected GigaAM encoder length: {num_frames} for {time_steps} mel frames"
+            );
+            result.words.clear();
+        }
+        Ok(result)
     }
 }

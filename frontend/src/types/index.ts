@@ -4,6 +4,12 @@ export interface Message {
   timestamp: string;
 }
 
+export interface WordTiming {
+  byte_start: number;
+  start: number;
+  end: number;
+}
+
 export interface Transcript {
   id: string;
   text: string;
@@ -17,6 +23,7 @@ export interface Transcript {
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
   speaker?: string;
+  words?: WordTiming[];
 }
 
 export interface TranscriptUpdate {
@@ -31,6 +38,7 @@ export interface TranscriptUpdate {
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number;   // Seconds from recording start
   duration: number;          // Segment duration in seconds
+  words?: WordTiming[];
 }
 
 export interface Block {

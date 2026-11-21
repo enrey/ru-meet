@@ -148,13 +148,19 @@ impl GigaAmEngine {
     }
 
     pub async fn transcribe_audio(&self, audio: Vec<f32>) -> Result<String> {
+        Ok(self.transcribe_with_words(audio).await?.text)
+    }
+
+    async fn transcribe_with_words(
+        &self,
+        audio: Vec<f32>,
+    ) -> Result<crate::gigaam_onnx::TranscriptionResult> {
         let mut model = self.model.lock().await;
         let model = model
             .as_mut()
             .ok_or_else(|| anyhow!("No GigaAM model loaded"))?;
         model
             .transcribe(&audio, &TranscribeOptions::default())
-            .map(|result| result.text)
             .map_err(|error| anyhow!("GigaAM transcription failed: {error}"))
     }
 
@@ -266,12 +272,13 @@ impl TranscriptionProvider for GigaAmEngine {
     ) -> std::result::Result<TranscriptResult, TranscriptionError> {
         // GigaAM v3 is a Russian-only acoustic model. Unlike Whisper, it has no
         // runtime language switch: every inference is inherently Russian.
-        self.transcribe_audio(audio)
+        self.transcribe_with_words(audio)
             .await
-            .map(|text| TranscriptResult {
-                text,
+            .map(|result| TranscriptResult {
+                text: result.text,
                 confidence: None,
                 is_partial: false,
+                words: result.words,
             })
             .map_err(|error| TranscriptionError::EngineFailed(error.to_string()))
     }

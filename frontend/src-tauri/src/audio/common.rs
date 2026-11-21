@@ -1,17 +1,18 @@
+use super::word_timing::{shift_words, WordTiming};
 use crate::api::TranscriptSegment;
 use anyhow::Result;
 use log::{debug, info};
 use std::path::Path;
 use uuid::Uuid;
 
+pub(crate) type TimedUtterance = (String, f64, f64, Vec<WordTiming>);
+
 /// Create transcript segments from transcription results.
-/// Each tuple is (text, start_ms, end_ms) from VAD timestamps.
-pub(crate) fn create_transcript_segments(
-    transcripts: &[(String, f64, f64)],
-) -> Vec<TranscriptSegment> {
+/// VAD bounds are in milliseconds; word times are in file-relative seconds.
+pub(crate) fn create_transcript_segments(transcripts: &[TimedUtterance]) -> Vec<TranscriptSegment> {
     transcripts
         .iter()
-        .map(|(text, start_ms, end_ms)| {
+        .map(|(text, start_ms, end_ms, words)| {
             let start_seconds = start_ms / 1000.0;
             let end_seconds = end_ms / 1000.0;
             let duration = end_seconds - start_seconds;
@@ -24,6 +25,7 @@ pub(crate) fn create_transcript_segments(
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
                 speaker: None,
+                words: words.clone(),
             }
         })
         .collect()
@@ -47,6 +49,7 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
                 "speaker": s.speaker,
+                "words": s.words,
                 "sequence_id": i
             })
         }).collect::<Vec<_>>()
@@ -92,13 +95,14 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
 /// quiet point it repeats a second of audio on both sides of the cut, so the
 /// same words appear at the end of one piece and the start of the next.
 /// Joining those would stutter, so only contiguous cuts are rejoined.
-pub(crate) fn rejoin_split_utterances(pieces: Vec<(usize, String, f64, f64)>) -> Vec<(String, f64, f64)> {
-    let mut merged: Vec<(usize, String, f64, f64)> = Vec::with_capacity(pieces.len());
+pub(crate) fn rejoin_split_utterances(pieces: Vec<(usize, TimedUtterance)>) -> Vec<TimedUtterance> {
+    let mut merged: Vec<(usize, TimedUtterance)> = Vec::with_capacity(pieces.len());
 
-    for (source_index, text, start_ms, end_ms) in pieces {
+    for (source_index, (text, start_ms, end_ms, mut words)) in pieces {
+        shift_words(&mut words, start_ms / 1000.0);
         let text = text.trim().to_owned();
         match merged.last_mut() {
-            Some((previous_index, previous_text, _, previous_end))
+            Some((previous_index, (previous_text, _, previous_end, previous_words)))
                 // 1ms of slack absorbs the rounding in the splitter's
                 // per-sample timestamps; a real overlap is a full second, so it
                 // cannot slip through this check.
@@ -108,18 +112,25 @@ pub(crate) fn rejoin_split_utterances(pieces: Vec<(usize, String, f64, f64)>) ->
                     if !previous_text.is_empty() {
                         previous_text.push(' ');
                     }
+                    if !previous_words.is_empty() && !words.is_empty() {
+                        previous_words.extend(words.into_iter().map(|mut word| {
+                            word.byte_start += previous_text.len();
+                            word
+                        }));
+                    } else if previous_text.is_empty() {
+                        *previous_words = words;
+                    } else {
+                        previous_words.clear();
+                    }
                     previous_text.push_str(&text);
                 }
                 *previous_end = end_ms;
             }
-            _ => merged.push((source_index, text, start_ms, end_ms)),
+            _ => merged.push((source_index, (text, start_ms, end_ms, words))),
         }
     }
 
-    merged
-        .into_iter()
-        .map(|(_, text, start_ms, end_ms)| (text, start_ms, end_ms))
-        .collect()
+    merged.into_iter().map(|(_, utterance)| utterance).collect()
 }
 
 /// to avoid cutting words at boundaries.

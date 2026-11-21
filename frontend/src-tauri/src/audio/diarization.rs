@@ -584,7 +584,7 @@ pub async fn rename_meeting_speaker(
     let pool = state.db_manager.pool();
     let merged =
         TranscriptsRepository::rename_speaker(pool, &meeting_id, &old_name, new_name).await?;
-    crate::audio::transcript_export::export_meeting_transcripts_logged(pool, &meeting_id).await;
+    crate::audio::transcript_export::export_diarized_transcripts_logged(pool, &meeting_id).await;
     Ok(merged)
 }
 
@@ -611,20 +611,9 @@ pub(crate) fn start_for_folder<R: Runtime>(
     meeting_id: String,
     folder: &std::path::Path,
 ) -> Result<(), String> {
-    let audio_path = [
-        "audio.mp4",
-        "audio.m4a",
-        "audio.wav",
-        "audio.mp3",
-        "audio.flac",
-        "audio.ogg",
-        "audio.webm",
-    ]
-    .iter()
-    .map(|name| folder.join(name))
-    .find(|path| path.is_file())
-    .ok_or_else(|| "No recording audio was found for this meeting".to_string())?;
-    start_meeting_diarization(app, pool, meeting_id, audio_path, None)
+    let audio_path = super::retranscription::find_audio_file(folder)
+        .map_err(|error| error.to_string())?;
+    start_meeting_diarization(app, pool, meeting_id, audio_path)
 }
 
 /// Register before returning from Stop so a newly opened meeting can query
@@ -634,7 +623,6 @@ pub fn start_recording_diarization<R: Runtime>(
     pool: sqlx::SqlitePool,
     meeting_id: String,
     audio_path: Option<String>,
-    target: DiarizationTarget,
 ) -> String {
     match get_diarization_settings() {
         Ok(settings) if !settings.enabled => return "skipped".into(),
@@ -647,13 +635,7 @@ pub fn start_recording_diarization<R: Runtime>(
     let Some(audio_path) = audio_path else {
         return "skipped".into();
     };
-    match start_meeting_diarization(
-        app.clone(),
-        pool,
-        meeting_id.clone(),
-        audio_path.into(),
-        Some(target),
-    ) {
+    match start_meeting_diarization(app.clone(), pool, meeting_id.clone(), audio_path.into()) {
         Ok(()) => "pending".into(),
         Err(error) => {
             emit_rerun_error(&app, &meeting_id, error);
@@ -667,7 +649,6 @@ pub(crate) fn start_meeting_diarization<R: Runtime>(
     pool: sqlx::SqlitePool,
     meeting_id: String,
     audio_path: PathBuf,
-    target: Option<DiarizationTarget>,
 ) -> Result<(), String> {
     let (engine, collapse) = {
         let settings = SETTINGS
@@ -733,10 +714,7 @@ pub(crate) fn start_meeting_diarization<R: Runtime>(
             Ok(turns) => {
                 match TranscriptsRepository::apply_speaker_turns(&pool, &meeting_id, &turns).await {
                     Ok(()) => {
-                        if let Some(target) = target {
-                            target.apply_speaker_turns(&turns);
-                        }
-                        crate::audio::transcript_export::export_meeting_transcripts_logged(
+                        crate::audio::transcript_export::export_diarized_transcripts_logged(
                             &pool,
                             &meeting_id,
                         )
@@ -747,6 +725,10 @@ pub(crate) fn start_meeting_diarization<R: Runtime>(
                         "speakers": turns.iter().map(|turn| &turn.speaker).collect::<std::collections::BTreeSet<_>>().len(),
                         "labels": [],
                     }));
+                        let _ = app.emit(
+                            "transcript-speakers-updated",
+                            serde_json::json!({"meetingId": meeting_id}),
+                        );
                         let _ = app.emit(
                             "diarization-labels-saved",
                             serde_json::json!({"meetingId": meeting_id}),

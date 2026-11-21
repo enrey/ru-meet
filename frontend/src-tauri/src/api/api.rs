@@ -1,7 +1,7 @@
 use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Emitter, Runtime};
 use tauri_plugin_store::StoreExt;
 
 use crate::{
@@ -351,6 +351,8 @@ pub struct TranscriptSegment {
     pub duration: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<crate::audio::word_timing::WordTiming>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1251,7 +1253,7 @@ pub async fn api_save_transcript<R: Runtime>(
 /// Save speaker labels once the asynchronous diarization pass has finished.
 #[tauri::command]
 pub async fn api_update_transcript_speakers<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     meeting_id: String,
     labels: Vec<crate::database::repositories::transcript::SpeakerLabelUpdate>,
@@ -1271,7 +1273,11 @@ pub async fn api_update_transcript_speakers<R: Runtime>(
     };
     result.map_err(|error| format!("Failed to save diarization labels: {error}"))?;
 
-    crate::audio::transcript_export::export_meeting_transcripts_logged(pool, &meeting_id).await;
+    crate::audio::transcript_export::export_diarized_transcripts_logged(pool, &meeting_id).await;
+    let _ = app.emit(
+        "transcript-speakers-updated",
+        serde_json::json!({"meetingId": meeting_id}),
+    );
     Ok(())
 }
 

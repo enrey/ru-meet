@@ -117,6 +117,12 @@ pub fn write_transcript_exports(folder: &Path, lines: &[ExportLine]) -> Result<(
     )?;
     if let Some(dialogue) = render_transcript_with_speakers_markdown(lines) {
         write_atomic(folder, TRANSCRIPT_WITH_SPEAKERS_FILE, &dialogue)?;
+    } else {
+        match std::fs::remove_file(folder.join(TRANSCRIPT_WITH_SPEAKERS_FILE)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     Ok(())
 }
@@ -157,6 +163,37 @@ pub async fn export_meeting_transcripts(pool: &SqlitePool, meeting_id: &str) -> 
         .collect::<Vec<_>>();
 
     write_transcript_exports(&folder, &lines)
+}
+
+/// Mirror the same ordered rows the meeting screen reads into all transcript
+/// files after diarization, including the JSON originally saved by recording.
+pub(crate) async fn export_diarized_transcripts_logged(pool: &SqlitePool, meeting_id: &str) {
+    if let Err(error) = export_diarized_transcripts(pool, meeting_id).await {
+        warn!("Failed to export diarized transcripts for meeting {meeting_id}: {error:#}");
+    }
+}
+
+pub(crate) async fn export_diarized_transcripts(pool: &SqlitePool, meeting_id: &str) -> Result<()> {
+    let Some(folder) = meeting_folder(pool, meeting_id).await? else {
+        return Ok(());
+    };
+    let (rows, _) =
+        MeetingsRepository::get_meeting_transcripts_paginated(pool, meeting_id, i64::MAX, 0)
+            .await?;
+    let segments: Vec<_> = rows
+        .into_iter()
+        .map(|row| crate::api::TranscriptSegment {
+            id: row.id,
+            text: row.transcript,
+            timestamp: row.timestamp,
+            audio_start_time: row.audio_start_time,
+            audio_end_time: row.audio_end_time,
+            duration: row.duration,
+            speaker: row.speaker,
+            words: Vec::new(),
+        })
+        .collect();
+    super::common::write_transcripts_json(&folder, &segments)
 }
 
 pub async fn export_meeting_transcripts_logged(pool: &SqlitePool, meeting_id: &str) {

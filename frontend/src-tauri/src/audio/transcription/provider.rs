@@ -43,6 +43,8 @@ pub struct TranscriptResult {
     pub text: String,
     pub confidence: Option<f32>, // None if provider doesn't support confidence scores
     pub is_partial: bool,
+    /// Times in seconds from the start of the provider audio.
+    pub words: Vec<crate::audio::word_timing::WordTiming>,
 }
 
 /// Trait for transcription providers (Whisper, Parakeet, future providers)

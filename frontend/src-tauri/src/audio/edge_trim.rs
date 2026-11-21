@@ -47,6 +47,7 @@ pub(crate) fn shift_segments(segments: &mut [TranscriptSegment], offset: f64) {
     for segment in segments {
         segment.audio_start_time = (segment.audio_start_time - offset).max(0.0);
         segment.audio_end_time = (segment.audio_end_time - offset).max(0.0);
+        super::word_timing::shift_words(&mut segment.words, -offset);
     }
 }
 
@@ -177,6 +178,7 @@ mod tests {
             confidence: 1.0,
             sequence_id: 0,
             speaker: None,
+            words: Vec::new(),
         }
     }
 
@@ -219,10 +221,19 @@ mod tests {
     #[test]
     fn shifting_keeps_segments_on_the_new_timeline() {
         let mut segments = [segment(120.0, 130.0), segment(117.5, 119.0)];
+        segments[0]
+            .words
+            .push(super::super::word_timing::WordTiming {
+                byte_start: 0,
+                start: 120.5,
+                end: 121.0,
+            });
         shift_segments(&mut segments, 118.0);
         assert_eq!(segments[0].audio_start_time, 2.0);
         assert_eq!(segments[0].audio_end_time, 12.0);
         assert_eq!(segments[1].audio_start_time, 0.0);
         assert_eq!(segments[1].audio_end_time, 1.0);
+        assert_eq!(segments[0].words[0].start, 2.5);
+        assert_eq!(segments[0].words[0].end, 3.0);
     }
 }

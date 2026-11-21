@@ -326,7 +326,6 @@ impl RecordingSession {
             .manager
             .get_meeting_folder()
             .map(|path| path.to_string_lossy().to_string());
-        let diarization_target = resources.manager.diarization_target();
         let _ = app.emit("recording-shutdown-progress", serde_json::json!({"stage":"finalizing", "message":"Finalizing recording...", "progress":70}));
         let audio_path = resources
             .manager
@@ -345,6 +344,7 @@ impl RecordingSession {
                 audio_end_time: Some(segment.audio_end_time),
                 duration: Some(segment.duration),
                 speaker: segment.speaker.clone(),
+                words: segment.words.clone(),
             })
             .collect();
         let app_state = app
@@ -365,7 +365,6 @@ impl RecordingSession {
                 app_state.db_manager.pool().clone(),
                 meeting_id.clone(),
                 audio_path,
-                diarization_target,
             );
             // Speakers (already started above), summary and reading aloud, in
             // the background and whether or not the meeting page is opened.
