@@ -16,6 +16,9 @@ on:
       release-id:
         required: false
         type: string
+      app-version:
+        required: false
+        type: string
       asset-prefix:
         required: false
         type: string
@@ -57,14 +60,6 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
-      - name: Get version from tauri.conf.json.
-        id: get-version
-        shell: bash
-        run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
-          echo "Application version from tauri.conf.json: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
       - name: Determine build profile
         id: build-profile
         shell: bash
@@ -87,6 +82,21 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: '24'
+
+      - name: Set release version
+        if: inputs.app-version != ''
+        shell: bash
+        env:
+          VERSION: ${{ inputs.app-version }}
+        run: node frontend/scripts/set-version.mjs "$VERSION"
+
+      - name: Get version from tauri.conf.json
+        id: get-version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./frontend/src-tauri/tauri.conf.json').version")
+          echo "Application version from tauri.conf.json: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Get pnpm store directory
         shell: bash

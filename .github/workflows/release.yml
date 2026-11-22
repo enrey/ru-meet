@@ -2,6 +2,12 @@ name: "Release"
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (auto increments the latest patch version)"
+        required: true
+        type: string
+        default: "auto"
 
 # Prevent duplicate releases
 concurrency:
@@ -16,45 +22,64 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release-id: ${{ steps.create-release.outputs.result }}
-      version: ${{ steps.get-version.outputs.version }}
+      version: ${{ steps.set-version.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Fetch all tags
 
-      - name: Get version from tauri.conf.json and ensure it is new
-        id: get-version
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Set release version
+        id: set-version
         shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          BASE_VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
-          echo "Base version from tauri.conf.json: $BASE_VERSION"
-
-          # Fetch all tags
-          git fetch --tags
-
-          # An updater release must have a strictly newer application version.
-          # Tauri uses semantic versions, so do not invent a fourth numeric component.
-          if git tag -l "v${BASE_VERSION}" | grep -q .; then
-            echo "ERROR: Tag v${BASE_VERSION} already exists."
-            echo "Bump the version in frontend/src-tauri/tauri.conf.json and frontend/src-tauri/Cargo.toml before releasing."
+          if [[ "$GITHUB_REF_TYPE" != branch ]]; then
+            echo "::error::Run Release from the branch that should receive the version commit."
+            exit 1
+          fi
+          version_pattern='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          if [[ "$VERSION" == auto ]]; then
+            current_version=$(node -p "require('./frontend/src-tauri/tauri.conf.json').version")
+            latest_version=$(
+              { printf 'v%s\n' "$current_version"; git tag --list 'v*'; } |
+                grep -E "^v${version_pattern}$" | sort -V | tail -n 1
+            )
+            IFS=. read -r major minor patch <<< "${latest_version#v}"
+            VERSION="${major}.${minor}.$((patch + 1))"
+            echo "Selected $VERSION from ${latest_version#v}."
+          fi
+          if [[ ! "$VERSION" =~ ^${version_pattern}$ ]]; then
+            echo "::error::Enter auto or a version in X.Y.Z format, for example 0.10.0."
+            exit 1
+          fi
+          if git show-ref --verify --quiet "refs/tags/v${VERSION}"; then
+            echo "::error::Tag v${VERSION} already exists."
             exit 1
           fi
 
-          VERSION="${BASE_VERSION}"
-          echo "Final version: $VERSION"
+          node frontend/scripts/set-version.mjs "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create Draft Release
         id: create-release
         uses: actions/github-script@v9
+        env:
+          VERSION: ${{ steps.set-version.outputs.version }}
         with:
           script: |
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              tag_name: `v${{ steps.get-version.outputs.version }}`,
-              name: `Ru-Meet v${{ steps.get-version.outputs.version }}`,
+              tag_name: `v${process.env.VERSION}`,
+              target_commitish: context.sha,
+              name: `Ru-Meet v${process.env.VERSION}`,
               draft: true,
               prerelease: false,
               generate_release_notes: true
@@ -84,13 +109,15 @@ jobs:
       platform: ${{ matrix.platform }}
       target: ${{ matrix.target }}
       build-args: ${{ matrix.args }}
+      ref: ${{ github.sha }}
+      app-version: ${{ needs.create-release.outputs.version }}
       sign-binaries: false
       asset-prefix: "ru_meet"
       upload-artifacts: false  # tauri-action uploads directly to release
       release-id: ${{ needs.create-release.outputs.release-id }}
     secrets: inherit
 
-  # STEP 3: Show release summary
+  # STEP 3: Record the version after both builds and show the release summary
   release-summary:
     needs: [create-release, build-all-platforms]
     runs-on: ubuntu-latest
@@ -134,6 +161,64 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Checkout release source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Commit release version and update draft
+        id: commit-version
+        shell: bash
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release-id }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node frontend/scripts/set-version.mjs "$VERSION"
+          git add -- Cargo.lock frontend/package.json frontend/src-tauri/Cargo.toml frontend/src-tauri/tauri.conf.json
+
+          release_commit="$GITHUB_SHA"
+          push_version=false
+          if ! git diff --cached --quiet; then
+            git fetch origin "$GITHUB_REF"
+            branch_tip=$(git rev-parse FETCH_HEAD)
+            if [[ "$branch_tip" == "$GITHUB_SHA" ]]; then
+              git -c user.name='github-actions[bot]' \
+                  -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                  commit -m "Bump version to $VERSION"
+              release_commit=$(git rev-parse HEAD)
+              push_version=true
+            elif [[ "$(git show -s --format=%P "$branch_tip")" == "$GITHUB_SHA" &&
+                    "$(git rev-parse "$branch_tip^{tree}")" == "$(git write-tree)" ]]; then
+              # A previous attempt already pushed the same version commit.
+              release_commit="$branch_tip"
+            else
+              echo "::error::The branch advanced during the release build. Start Release again from its current tip."
+              exit 1
+            fi
+          fi
+
+          tag_commit=$(git rev-parse --verify --quiet "refs/tags/v${VERSION}^{commit}" || true)
+          if [[ -n "$tag_commit" && "$tag_commit" != "$release_commit" ]]; then
+            echo "::error::Tag v${VERSION} already points to a different commit."
+            exit 1
+          fi
+
+          if [[ "$push_version" == true ]]; then
+            git push origin "${release_commit}:${GITHUB_REF}"
+          fi
+          if [[ -z "$tag_commit" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+              -f target_commitish="$release_commit" --silent
+          fi
+          echo "commit=$release_commit" >> "$GITHUB_OUTPUT"
+
       - name: Release Summary
         run: |
           echo "============================================"
@@ -157,6 +242,7 @@ jobs:
           echo "## Release Created Successfully" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** v${{ needs.create-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Source commit:** ${{ steps.commit-version.outputs.commit }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Release URL:** [View Release](https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

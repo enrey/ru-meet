@@ -90,3 +90,4 @@ AGENTS.override.md
 /.claude/
 /skills-lock.json
 /frontend/.stitch-screens/
+docs/specs/
