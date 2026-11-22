@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
 import { useOnboarding } from '@/contexts/OnboardingContext';
+import { usePlatform } from '@/hooks/usePlatform';
 import {
   WelcomeStep,
   PermissionsStep,
@@ -15,23 +15,7 @@ interface OnboardingFlowProps {
 export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   const { currentStep, databaseReady } = useOnboarding();
   const { t } = useI18n();
-  const [isMac, setIsMac] = React.useState(false);
-
-  useEffect(() => {
-    // Check if running on macOS
-    const checkPlatform = async () => {
-      try {
-        // Dynamic import to avoid SSR issues if any
-        const { platform } = await import('@tauri-apps/plugin-os');
-        setIsMac(platform() === 'macos');
-      } catch (e) {
-        console.error('Failed to detect platform:', e);
-        // Fallback
-        setIsMac(navigator.userAgent.includes('Mac'));
-      }
-    };
-    checkPlatform();
-  }, []);
+  const isMac = usePlatform() === 'macos';
 
   // 4-Step Onboarding Flow (System-Recommended Models):
   // Step 1: Welcome - Introduce Meetily features
@@ -46,8 +30,8 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
   return (
     <div className="onboarding-flow">
       {currentStep === 1 && <WelcomeStep />}
-      {currentStep === 2 && <SetupOverviewStep />}
-      {currentStep === 3 && <DownloadProgressStep />}
+      {currentStep === 2 && <SetupOverviewStep isMac={isMac} />}
+      {currentStep === 3 && <DownloadProgressStep isMac={isMac} />}
       {currentStep === 4 && isMac && <PermissionsStep />}
     </div>
   );

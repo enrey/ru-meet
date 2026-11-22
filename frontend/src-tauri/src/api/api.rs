@@ -38,6 +38,10 @@ pub struct MeetingListItem {
     pub duration_seconds: Option<f64>,
     /// Distinct diarized speakers; 0 when diarization has not run.
     pub speaker_count: i64,
+    /// Speakers that were given a name, most talkative first.
+    pub speaker_names: Vec<String>,
+    /// Names the voice library suggests for unnamed speakers, not confirmed yet.
+    pub suggested_speaker_names: Vec<String>,
     /// Lowercased `summary_processes.status`, `None` when no summary was requested.
     pub summary_status: Option<String>,
     pub has_summary: bool,
@@ -46,6 +50,13 @@ pub struct MeetingListItem {
     pub stages: MeetingStages,
     /// The step the background processing (`crate::processing`) is on.
     pub processing: Option<crate::processing::Step>,
+}
+
+/// Names the meeting list query joins with U+001F.
+fn split_names(names: Option<&str>) -> Vec<String> {
+    names
+        .map(|names| names.split('\u{1f}').map(str::to_owned).collect())
+        .unwrap_or_default()
 }
 
 /// What the background processing needs to know about one meeting: the same
@@ -515,6 +526,8 @@ pub async fn api_get_meetings<R: Runtime>(
                         created_at: row.created_at,
                         duration_seconds: row.duration_seconds,
                         speaker_count: row.speaker_count,
+                        speaker_names: split_names(row.named_speakers.as_deref()),
+                        suggested_speaker_names: split_names(row.suggested_speakers.as_deref()),
                         summary_status: row.summary_status,
                         has_summary,
                         preview,
@@ -1272,6 +1285,7 @@ pub async fn api_update_transcript_speakers<R: Runtime>(
         TranscriptsRepository::apply_speaker_turns(pool, &meeting_id, &turns).await
     };
     result.map_err(|error| format!("Failed to save diarization labels: {error}"))?;
+    crate::audio::voiceprint::spawn_suggestions(app.clone(), pool.clone(), meeting_id.clone());
 
     crate::audio::transcript_export::export_diarized_transcripts_logged(pool, &meeting_id).await;
     let _ = app.emit(

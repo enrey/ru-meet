@@ -398,6 +398,16 @@ fn convert_to_wav_with_ffmpeg(
     Ok(temp_path)
 }
 
+/// Make the next packet start at sample `position`: drop what earlier frames
+/// decoded past it, or fill a gap in the stream with silence.
+fn align_to_timestamp(samples: &mut Vec<f32>, position: usize) {
+    if position < samples.len() {
+        samples.truncate(position);
+    } else {
+        samples.resize(position, 0.0);
+    }
+}
+
 /// Decode an audio file (MP4, M4A, WAV, etc.) to raw samples
 pub fn decode_audio_file(path: &Path) -> Result<DecodedAudio> {
     decode_audio_file_with_progress(path, None)
@@ -503,6 +513,15 @@ pub fn decode_audio_file_with_progress(
         expected_duration.map(|dur| (dur * sample_rate as f64 * channels as f64) as usize);
 
     let mut last_progress = 0u32;
+    // Recordings are 30-second AAC checkpoints joined without re-encoding.
+    // At each joint the container shortens two packets to drop the encoder's
+    // priming and padding (1792 samples), but the decoder still returns full
+    // 1024-sample frames. Players follow the timestamps; counting decoded
+    // samples instead put transcripts and speaker turns 37 ms later per
+    // joint, almost 5 s after an hour. Each packet therefore starts at its
+    // timestamp, measured from the first packet.
+    let time_base = track.codec_params.time_base;
+    let mut first_ts = None;
 
     loop {
         // Get the next packet
@@ -557,8 +576,14 @@ pub fn decode_audio_file_with_progress(
                     sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
                 }
 
-                // Copy samples to buffer
+                // Copy samples to buffer, placed at the packet's timestamp.
                 if let Some(ref mut buf) = sample_buf {
+                    if let Some(time_base) = time_base {
+                        let first = *first_ts.get_or_insert(packet.ts());
+                        let time = time_base.calc_time(packet.ts().saturating_sub(first));
+                        let frame = ((time.seconds as f64 + time.frac) * sample_rate as f64).round() as usize;
+                        align_to_timestamp(&mut all_samples, frame * channels as usize);
+                    }
                     buf.copy_interleaved_ref(decoded);
                     all_samples.extend_from_slice(buf.samples());
                 }
@@ -748,6 +773,36 @@ mod tests {
                 sample
             );
         }
+    }
+
+    #[test]
+    fn chunked_resample_keeps_the_timeline() {
+        // A click 130 s into a 150 s recording must stay at 130 s after
+        // the 60-second chunks are resampled and joined.
+        let mut input = vec![0.0f32; 48000 * 150];
+        for sample in &mut input[48000 * 130..48000 * 130 + 48] {
+            *sample = 0.9;
+        }
+        let output = chunked_resample_with_progress(&input, 48000, 16000, None);
+        assert_eq!(output.len(), 16000 * 150);
+        let peak = output
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .map(|(index, _)| index)
+            .unwrap();
+        assert!((peak as i64 - 16000 * 130 - 8).abs() <= 8, "click moved to sample {peak}");
+    }
+
+    #[test]
+    fn packets_are_placed_at_their_timestamps() {
+        let mut samples = vec![1.0; 1024];
+        // The container shortened the previous packet to 1 sample.
+        align_to_timestamp(&mut samples, 1);
+        assert_eq!(samples, [1.0]);
+        // A gap in the stream is silence.
+        align_to_timestamp(&mut samples, 4);
+        assert_eq!(samples, [1.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]

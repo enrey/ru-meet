@@ -49,6 +49,7 @@ pub mod tts;
 // Shared utilities for import and retranscription
 pub(crate) mod common;
 pub mod word_timing;
+pub mod voiceprint;
 
 // Markdown transcript exports written next to transcripts.json
 pub mod transcript_export;

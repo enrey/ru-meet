@@ -36,6 +36,11 @@ pub(crate) enum Request {
         engine: String,
         collapse: bool,
     },
+    /// Voiceprint embeddings of recording intervals, in seconds.
+    Voiceprints {
+        path: PathBuf,
+        clips: Vec<(f64, f64)>,
+    },
     Summary {
         data: PathBuf,
         model: String,
@@ -62,6 +67,7 @@ pub(crate) enum Output {
         speech_segments: usize,
     },
     Speakers(Vec<SpeakerTurn>),
+    Voiceprints(Vec<Option<Vec<f32>>>),
     Summary(String),
     Audio {
         name: String,
@@ -160,6 +166,16 @@ pub(crate) async fn speakers<R: Runtime>(
     .await?
     {
         Output::Speakers(turns) => Ok(turns),
+        _ => bail!("Unexpected worker result"),
+    }
+}
+pub(crate) async fn voiceprints<R: Runtime>(
+    app: &AppHandle<R>,
+    path: PathBuf,
+    clips: Vec<(f64, f64)>,
+) -> Result<Vec<Option<Vec<f32>>>> {
+    match run(app, Request::Voiceprints { path, clips }, || true, |_| {}).await? {
+        Output::Voiceprints(embeddings) => Ok(embeddings),
         _ => bail!("Unexpected worker result"),
     }
 }
@@ -421,6 +437,14 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
             progress("decoding", 5, "Decoding audio for speaker diarization");
             let turns = crate::audio::diarization::compute_in_worker(&path, &engine, collapse)?;
             Ok(Output::Speakers(turns))
+        }
+        Request::Voiceprints { path, clips } => {
+            progress("decoding", 5, "Decoding audio for voiceprints");
+            // The extractor model may still need a (blocking) download.
+            let embeddings = tokio::task::block_in_place(|| {
+                crate::audio::voiceprint::embed_in_worker(&path, &clips)
+            })?;
+            Ok(Output::Voiceprints(embeddings))
         }
         Request::Transcribe {
             path,

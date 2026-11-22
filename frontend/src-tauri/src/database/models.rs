@@ -20,6 +20,10 @@ pub struct MeetingListRow {
     pub created_at: DateTimeUtc,
     pub duration_seconds: Option<f64>,
     pub speaker_count: i64,
+    /// Named speakers, most talkative first, joined with U+001F.
+    pub named_speakers: Option<String>,
+    /// Names the voice library suggests for unnamed speakers, joined with U+001F.
+    pub suggested_speakers: Option<String>,
     pub summary_status: Option<String>,
     pub summary_error: Option<String>,
     pub summary_markdown: Option<String>,

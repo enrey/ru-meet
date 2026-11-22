@@ -1,6 +1,7 @@
 use crate::api::{TranscriptSearchResult, TranscriptSegment};
 use crate::audio::diarization::SpeakerTurn;
 use crate::audio::word_timing::WordTiming;
+use crate::database::repositories::voiceprint::VoiceprintRepository;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, Error as SqlxError, SqlitePool};
@@ -362,6 +363,7 @@ impl TranscriptsRepository {
         }
 
         replace_speaker_turns(&mut transaction, meeting_id, turns).await?;
+        VoiceprintRepository::reconcile_after_diarization(&mut transaction, meeting_id).await?;
         transaction.commit().await
     }
 
@@ -373,6 +375,7 @@ impl TranscriptsRepository {
         let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
         let turns = replace_speaker_turns(&mut transaction, meeting_id, turns).await?;
         Self::assign_speakers(&mut transaction, meeting_id, &turns).await?;
+        VoiceprintRepository::reconcile_after_diarization(&mut transaction, meeting_id).await?;
         transaction.commit().await
     }
 
@@ -662,6 +665,9 @@ impl TranscriptsRepository {
             .bind(meeting_id)
             .bind(old_name)
             .execute(&mut *transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+        VoiceprintRepository::follow_speaker_rename(&mut transaction, meeting_id, old_name, new_name)
             .await
             .map_err(|error| error.to_string())?;
         transaction

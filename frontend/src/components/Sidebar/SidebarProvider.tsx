@@ -21,6 +21,10 @@ export interface MeetingListItem extends CurrentMeeting {
   durationSeconds: number | null;
   /** Distinct diarized speakers; 0 when diarization has not run. */
   speakerCount: number;
+  /** Speakers given a name (renamed or recognised), most talkative first. */
+  speakerNames: string[];
+  /** Names the voice library suggests for unnamed speakers, not confirmed yet. */
+  suggestedSpeakerNames: string[];
   /** Lowercased summary process status, null when no summary was requested. */
   summaryStatus: string | null;
   hasSummary: boolean;

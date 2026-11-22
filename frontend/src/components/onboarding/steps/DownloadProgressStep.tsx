@@ -23,7 +23,7 @@ const DOWNLOAD_STATUS_LABELS: Record<Download['status'], string> = {
   error: 'Error',
 };
 
-export function DownloadProgressStep() {
+export function DownloadProgressStep({ isMac }: { isMac: boolean }) {
   const {
     goNext, goPrevious, transcriptionProvider, downloadTranscription, downloadSummary,
     downloadDiarization, diarizationEngine, downloadTts,
@@ -43,7 +43,6 @@ export function DownloadProgressStep() {
   const [vadBundled, setVadBundled] = useState<boolean | null>(null);
   const vadStarted = useRef(false);
   const [isCompleting, setIsCompleting] = useState(false);
-  const [isMac, setIsMac] = useState(false);
   const started = useRef(false);
   const summaryStarted = useRef(false);
   const diarizationStarted = useRef(false);
@@ -52,12 +51,6 @@ export function DownloadProgressStep() {
   const initCommand = transcriptionProvider === 'gigaam' ? 'gigaam_init' : 'parakeet_init';
   const readyCommand = transcriptionProvider === 'gigaam' ? 'gigaam_has_available_models' : 'parakeet_has_available_models';
   const eventPrefix = transcriptionProvider === 'gigaam' ? 'gigaam' : 'parakeet';
-
-  useEffect(() => {
-    import('@tauri-apps/plugin-os')
-      .then(({ platform }) => setIsMac(typeof platform === 'function' ? platform() === 'macos' : navigator.userAgent.includes('Mac')))
-      .catch(() => setIsMac(navigator.userAgent.includes('Mac')));
-  }, []);
 
   useEffect(() => {
     let disposed = false;

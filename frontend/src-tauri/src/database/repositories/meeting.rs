@@ -75,6 +75,8 @@ impl MeetingsRepository {
                 durations.duration_seconds,
                 COALESCE(durations.transcript_count, 0) AS transcript_count,
                 COALESCE(speakers.speaker_count, 0) AS speaker_count,
+                named.named_speakers,
+                suggested.suggested_speakers,
                 LOWER(s.status) AS summary_status,
                 s.error AS summary_error,
                 CASE WHEN json_valid(s.result) THEN json_extract(s.result, '$.markdown') END
@@ -95,6 +97,29 @@ impl MeetingsRepository {
                 SELECT meeting_id, COUNT(DISTINCT speaker) AS speaker_count
                 FROM diarization_turns GROUP BY meeting_id
             ) speakers ON speakers.meeting_id = m.id
+            LEFT JOIN (
+                -- Speakers given a name: renamed by hand or after a confirmed
+                -- voice match. Diarization itself only labels "Speaker N" and
+                -- "Others". Most talkative first, separated by U+001F.
+                SELECT meeting_id, GROUP_CONCAT(speaker, char(31)) AS named_speakers
+                FROM (
+                    SELECT meeting_id, speaker, SUM(end_time - start_time) AS talk
+                    FROM diarization_turns
+                    WHERE original_speaker IS NOT NULL
+                        OR (speaker NOT GLOB 'Speaker [0-9]*' AND speaker <> 'Others')
+                    GROUP BY meeting_id, speaker
+                    ORDER BY meeting_id, talk DESC
+                )
+                GROUP BY meeting_id
+            ) named ON named.meeting_id = m.id
+            LEFT JOIN (
+                -- Voice library matches waiting for the user's confirmation.
+                SELECT l.meeting_id, GROUP_CONCAT(p.name, char(31)) AS suggested_speakers
+                FROM meeting_speaker_profiles l
+                JOIN voice_profiles p ON p.id = l.profile_id
+                WHERE l.status = 'suggested'
+                GROUP BY l.meeting_id
+            ) suggested ON suggested.meeting_id = m.id
             LEFT JOIN summary_processes s ON s.meeting_id = m.id
             ORDER BY m.created_at DESC
             "#,
@@ -487,12 +512,16 @@ mod tests {
         for ddl in [
             "CREATE TABLE meetings (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT, folder_path TEXT)",
             "CREATE TABLE transcripts (id TEXT, meeting_id TEXT, transcript TEXT, audio_start_time REAL, audio_end_time REAL)",
-            "CREATE TABLE diarization_turns (meeting_id TEXT, start_time REAL, end_time REAL, speaker TEXT)",
+            "CREATE TABLE diarization_turns (meeting_id TEXT, start_time REAL, end_time REAL, speaker TEXT, original_speaker TEXT)",
             "CREATE TABLE summary_processes (meeting_id TEXT PRIMARY KEY, status TEXT, result TEXT, error TEXT)",
+            "CREATE TABLE voice_profiles (id TEXT PRIMARY KEY, name TEXT)",
+            "CREATE TABLE meeting_speaker_profiles (meeting_id TEXT, speaker TEXT, profile_id TEXT, status TEXT)",
+            "INSERT INTO voice_profiles VALUES ('p1', 'Вера'), ('p2', 'Глеб')",
+            "INSERT INTO meeting_speaker_profiles VALUES ('b', 'Speaker 1', 'p1', 'suggested'), ('b', 'Speaker 3', 'p2', 'rejected')",
             "INSERT INTO meetings VALUES ('a', 'Old', '2026-10-01T10:00:00Z', '2026-10-01T10:00:00Z', NULL)",
             "INSERT INTO meetings VALUES ('b', 'New', '2026-10-02T10:00:00Z', '2026-10-02T10:00:00Z', NULL)",
             "INSERT INTO transcripts VALUES ('1', 'b', 'second', 5.0, 61.5), ('2', 'b', 'first', 0.0, 4.0)",
-            "INSERT INTO diarization_turns VALUES ('b', 0, 1, 'S1'), ('b', 1, 2, 'S2'), ('b', 2, 3, 'S1')",
+            "INSERT INTO diarization_turns VALUES ('b', 0, 1, 'Speaker 1', NULL), ('b', 1, 2, 'Анна', 'Speaker 2'), ('b', 2, 3, 'Speaker 1', NULL), ('b', 3, 3.5, 'Others', NULL), ('b', 4, 9, 'Борис', NULL)",
             "INSERT INTO summary_processes VALUES ('b', 'COMPLETED', '{\"markdown\":\"Итог\"}', NULL), ('a', 'FAILED', NULL, 'boom')",
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
@@ -502,7 +531,8 @@ mod tests {
         assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         let new = &rows[0];
         assert_eq!(new.duration_seconds, Some(61.5));
-        assert_eq!(new.speaker_count, 2);
+        assert_eq!(new.speaker_count, 4);
+        assert_eq!(new.named_speakers.as_deref(), Some("Борис\u{1f}Анна"));
         assert_eq!(new.summary_status.as_deref(), Some("completed"));
         assert_eq!(new.summary_markdown.as_deref(), Some("Итог"));
         assert_eq!(new.first_transcript.as_deref(), Some("first"));
@@ -510,6 +540,9 @@ mod tests {
         let old = &rows[1];
         assert_eq!((old.duration_seconds, old.speaker_count), (None, 0));
         assert_eq!(old.transcript_count, 0);
+        assert_eq!(old.named_speakers, None);
+        assert_eq!(new.suggested_speakers.as_deref(), Some("Вера"));
+        assert_eq!(old.suggested_speakers, None);
         assert_eq!(old.summary_status.as_deref(), Some("failed"));
         assert_eq!(old.summary_error.as_deref(), Some("boom"));
         assert_eq!(old.summary_markdown, None);

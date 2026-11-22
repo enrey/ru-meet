@@ -147,6 +147,7 @@ impl Queue {
                 },
                 error: Some(failure.error),
                 created_at: failure.failed_at.clone(),
+                started_at: None,
                 finished_at: if scheduled {
                     None
                 } else {

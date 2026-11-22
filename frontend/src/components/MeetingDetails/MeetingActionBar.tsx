@@ -145,7 +145,7 @@ export function MeetingActionBar({
   const hasTranscripts = transcriptCount > 0;
   const hasSummary = hasVisibleSummaryContent(aiSummary);
   const isGenerating = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
-  const canEnhance = betaFeatures.importAndRetranscribe && hasFolder;
+  const canRetranscribe = betaFeatures.importAndRetranscribe && hasFolder;
 
   // --- Diarization -------------------------------------------------------
   const [isStartingDiarization, setIsStartingDiarization] = useState(false);
@@ -293,6 +293,18 @@ export function MeetingActionBar({
             </DropdownMenuTrigger>
           </PopoverAnchor>
           <DropdownMenuContent align="end" className="w-64">
+            {canRetranscribe && (
+              <DropdownMenuItem onSelect={afterMenuCloses(() => setShowRetranscribeDialog(true))}>
+                <RefreshCw className="h-4 w-4" />
+                {t('Transcribe again')}
+              </DropdownMenuItem>
+            )}
+            {hasFolder && !isDiarizing && (
+              <DropdownMenuItem onSelect={() => void handleDiarize()} disabled={isStartingDiarization || processing.busy}>
+                <UsersRound className="h-4 w-4" />
+                {t('Identify speakers')}
+              </DropdownMenuItem>
+            )}
             {hasTranscripts && (
               <DropdownMenuItem
                 onSelect={() => void onGenerateSummary(customPrompt)}
@@ -302,19 +314,13 @@ export function MeetingActionBar({
                 {hasSummary ? t('Regenerate Summary') : t('Generate Summary')}
               </DropdownMenuItem>
             )}
-            {hasFolder && !isDiarizing && (
-              <DropdownMenuItem onSelect={() => void handleDiarize()} disabled={isStartingDiarization || processing.busy}>
-                <UsersRound className="h-4 w-4" />
-                {t('Identify speakers')}
-              </DropdownMenuItem>
-            )}
             {hasSummary && onListenSummary && (
               <DropdownMenuItem onSelect={onListenSummary} disabled={isGenerating}>
                 <Volume2 className="h-4 w-4" />
                 {t('Read the summary aloud')}
               </DropdownMenuItem>
             )}
-            {(hasTranscripts || (hasFolder && !isDiarizing) || (hasSummary && onListenSummary)) && <DropdownMenuSeparator />}
+            {(hasTranscripts || (hasFolder && !isDiarizing) || (hasSummary && onListenSummary) || canRetranscribe) && <DropdownMenuSeparator />}
             <DropdownMenuItem onSelect={onCopyTranscript} disabled={!hasTranscripts}>
               <Copy className="h-4 w-4" />
               {t('Copy Transcript')}
@@ -323,12 +329,6 @@ export function MeetingActionBar({
               <DropdownMenuItem onSelect={() => void onCopySummary()}>
                 <Copy className="h-4 w-4" />
                 {t('Copy Summary')}
-              </DropdownMenuItem>
-            )}
-            {canEnhance && (
-              <DropdownMenuItem onSelect={afterMenuCloses(() => setShowRetranscribeDialog(true))}>
-                <RefreshCw className="h-4 w-4" />
-                {t('Enhance')}
               </DropdownMenuItem>
             )}
 
@@ -419,7 +419,7 @@ export function MeetingActionBar({
         </DialogContent>
       </Dialog>
 
-      {canEnhance && meetingFolderPath && (
+      {canRetranscribe && meetingFolderPath && (
         <RetranscribeDialog
           open={showRetranscribeDialog}
           onOpenChange={setShowRetranscribeDialog}

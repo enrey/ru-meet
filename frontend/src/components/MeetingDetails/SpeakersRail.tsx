@@ -1,13 +1,18 @@
 'use client';
 
 import { useMemo, useRef, useState } from 'react';
-import { Pencil } from 'lucide-react';
+import { Check, Loader2, Pencil, Play, ScanSearch, UserRoundCheck, UserRoundPlus, X } from 'lucide-react';
+import { toast } from 'sonner';
 import { useMeetingSpeakers } from '@/contexts/MeetingSpeakersContext';
 import { formatPlaybackTime, useMeetingPlayback } from '@/contexts/MeetingPlaybackContext';
 import { useI18n, type TranslateFn } from '@/lib/i18n';
 import { SpeakerRenamePopover } from './SpeakerName';
+import { RememberVoiceDialog } from './RememberVoiceDialog';
+import { voiceprints } from '@/services/voiceprintService';
 
 const NO_COLOR = '#94a3b8';
+/** Matches `OTHERS_SPEAKER` in `src-tauri/src/audio/diarization.rs`. */
+const OTHERS_LABEL = 'Others';
 
 function formatTalkTime(seconds: number, t: TranslateFn): string {
   if (seconds < 60) return t('{seconds} s', { seconds: Math.max(1, Math.round(seconds)) });
@@ -27,6 +32,8 @@ export function SpeakersRail({ onSelectTime }: { onSelectTime?: (speaker: string
   const playback = useMeetingPlayback();
   const stripRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ y: number; time: number; speaker?: string } | null>(null);
+  const [remembering, setRemembering] = useState<{ speaker: string; profileId?: string } | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const stats = useMemo(() => {
     const turns = (meetingSpeakers?.turns ?? [])
@@ -63,6 +70,25 @@ export function SpeakersRail({ onSelectTime }: { onSelectTime?: (speaker: string
     return own.find((turn) => turn.start > currentTime + 0.5) ?? own[0];
   };
 
+  const longestTurnOf = (speaker: string) => stats.turns
+    .filter((turn) => turn.speaker === speaker)
+    .reduce<(typeof stats.turns)[number] | undefined>((best, turn) => (!best || turn.end - turn.start > best.end - best.start ? turn : best), undefined);
+
+  const findVoices = async () => {
+    if (searching) return;
+    setSearching(true);
+    try {
+      const found = await voiceprints.refresh(meetingSpeakers.meetingId);
+      meetingSpeakers.reloadVoiceLinks();
+      if (found > 0) toast.success(t('Familiar voices found: {count}', { count: found }));
+      else toast(t('No familiar voices among unnamed speakers'));
+    } catch (error) {
+      toast.error(t('Could not look for familiar voices'), { description: t(String(error)) });
+    } finally {
+      setSearching(false);
+    }
+  };
+
   const timeAtY = (clientY: number) => {
     const rect = stripRef.current?.getBoundingClientRect();
     if (!rect || !rect.height) return null;
@@ -75,6 +101,18 @@ export function SpeakersRail({ onSelectTime }: { onSelectTime?: (speaker: string
       <div className="flex items-center gap-2">
         <h2 className="text-sm font-semibold text-slate-900">{t('Speakers')}</h2>
         <span className="rounded-full bg-slate-100 px-1.5 text-xs tabular-nums text-slate-500">{stats.speakers.length}</span>
+        {meetingSpeakers.hasVoiceLibrary && (
+          <button
+            type="button"
+            onClick={() => void findVoices()}
+            disabled={searching}
+            title={t('Look for familiar voices from the voice library')}
+            aria-label={t('Look for familiar voices from the voice library')}
+            className="ml-auto grid h-6 w-6 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-60"
+          >
+            {searching ? <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" /> : <ScanSearch className="h-3.5 w-3.5" />}
+          </button>
+        )}
       </div>
 
       <div className="mt-3 flex h-1 w-full overflow-hidden rounded-full bg-slate-100" title={t('Share of speaking time')}>
@@ -171,8 +209,18 @@ export function SpeakersRail({ onSelectTime }: { onSelectTime?: (speaker: string
             const name = meetingSpeakers.displayName(speaker);
             const color = meetingSpeakers.colorFor(speaker) ?? NO_COLOR;
             const speaking = speakingTurn?.speaker === speaker;
+            const link = meetingSpeakers.voiceLinkFor(speaker);
+            const suggested = link?.status === 'suggested' ? link : undefined;
+            const confirmed = link?.status === 'confirmed' ? link : undefined;
+            const rememberLabel = confirmed
+              ? t('Add voice samples to “{name}”', { name: confirmed.profileName })
+              : t('Remember voice…');
+            const recognised = confirmed && t('Recognised from the voice library: {name}', { name: confirmed.profileName });
             return (
-              <li key={speaker} className="group flex items-center rounded-lg transition-colors hover:bg-slate-50">
+              <li key={speaker} className="group rounded-lg transition-colors hover:bg-slate-50">
+              {/* The name has a line of its own, wrapping to a second one when
+                  long; time and actions share the line below it. */}
+              <div className="relative">
                 <button
                   type="button"
                   onClick={() => {
@@ -180,33 +228,101 @@ export function SpeakersRail({ onSelectTime }: { onSelectTime?: (speaker: string
                     if (turn) select(speaker, turn.start);
                   }}
                   title={t('Go to the next turn of {speaker}', { speaker: name })}
-                  className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg py-1.5 pl-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                  className="block w-full rounded-lg py-1.5 pl-2 pr-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
                 >
-                  <span className="relative h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }}>
-                    {speaking && playback?.isPlaying && (
-                      <span className="absolute inset-0 animate-ping rounded-full opacity-60" style={{ backgroundColor: color }} />
-                    )}
+                  <span className="flex items-start gap-2.5">
+                    <span className="relative mt-[7px] h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }}>
+                      {speaking && playback?.isPlaying && (
+                        <span className="absolute inset-0 animate-ping rounded-full opacity-60" style={{ backgroundColor: color }} />
+                      )}
+                    </span>
+                    <span className={`line-clamp-2 min-w-0 break-words text-sm leading-5 ${speaking ? 'font-semibold text-indigo-700' : 'text-slate-800'}`}>
+                      {name}
+                      {recognised && (
+                        <span title={recognised} aria-label={recognised} className="ml-1 inline-block align-[-2px] text-emerald-600">
+                          <UserRoundCheck className="h-3.5 w-3.5" />
+                        </span>
+                      )}
+                    </span>
                   </span>
-                  <span className={`min-w-0 flex-1 truncate text-sm ${speaking ? 'font-semibold text-indigo-700' : 'text-slate-800'}`}>{name}</span>
-                  <span className="shrink-0 text-xs tabular-nums text-slate-400">
+                  <span className="mt-0.5 block h-6 pl-[18px] text-xs leading-6 tabular-nums text-slate-400">
                     {formatTalkTime(seconds, t)} · {Math.round(share * 100)}%
                   </span>
                 </button>
-                <SpeakerRenamePopover speaker={speaker}>
+                <div className="absolute bottom-1.5 right-1 flex items-center gap-0.5">
+                  <SpeakerRenamePopover speaker={speaker}>
+                    <button
+                      type="button"
+                      title={t('Rename {speaker}', { speaker: name })}
+                      aria-label={t('Rename {speaker}', { speaker: name })}
+                      className="grid h-6 w-6 place-items-center rounded-md text-slate-400 opacity-0 transition-opacity hover:bg-slate-200/70 hover:text-slate-700 focus:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </SpeakerRenamePopover>
+                  {speaker !== OTHERS_LABEL && (
+                    <button
+                      type="button"
+                      onClick={() => setRemembering({ speaker, profileId: confirmed?.profileId })}
+                      title={rememberLabel}
+                      aria-label={rememberLabel}
+                      className="grid h-6 w-6 place-items-center rounded-md text-slate-400 opacity-0 transition-opacity hover:bg-slate-200/70 hover:text-slate-700 focus:opacity-100 group-hover:opacity-100"
+                    >
+                      <UserRoundPlus className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              {suggested && (
+                <div className="mb-1 ml-6 mr-1 flex items-center gap-1 rounded-md bg-indigo-50 py-1 pl-2 pr-1 text-xs text-indigo-900">
+                  <span className="min-w-0 flex-1 truncate" title={t('Sounds like {name}', { name: suggested.profileName })}>
+                    {t('Sounds like {name}', { name: suggested.profileName })}
+                  </span>
                   <button
                     type="button"
-                    title={t('Rename {speaker}', { speaker: name })}
-                    aria-label={t('Rename {speaker}', { speaker: name })}
-                    className="mx-1 grid h-6 w-6 shrink-0 place-items-center rounded-md text-slate-400 opacity-0 transition-opacity hover:bg-slate-100 hover:text-slate-700 focus:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                    onClick={() => {
+                      const turn = longestTurnOf(speaker);
+                      if (turn) playback?.play(turn.start);
+                    }}
+                    title={t('Listen to {speaker}', { speaker: name })}
+                    aria-label={t('Listen to {speaker}', { speaker: name })}
+                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-indigo-700 hover:bg-indigo-100"
                   >
-                    <Pencil className="h-3 w-3" />
+                    <Play className="h-3 w-3 fill-current" />
                   </button>
-                </SpeakerRenamePopover>
+                  <button
+                    type="button"
+                    onClick={() => void meetingSpeakers.confirmVoice(speaker)}
+                    title={t('Confirm')}
+                    aria-label={t('Confirm')}
+                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-emerald-700 hover:bg-emerald-100"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void meetingSpeakers.rejectVoice(speaker)}
+                    title={t('Reject')}
+                    aria-label={t('Reject')}
+                    className="grid h-6 w-6 shrink-0 place-items-center rounded text-slate-500 hover:bg-slate-200"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
               </li>
             );
           })}
         </ul>
       </div>
+      {remembering && (
+        <RememberVoiceDialog
+          speaker={remembering.speaker}
+          profileId={remembering.profileId}
+          open
+          onOpenChange={(open) => !open && setRemembering(null)}
+        />
+      )}
     </aside>
   );
 }

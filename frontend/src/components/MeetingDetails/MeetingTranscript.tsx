@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Check, Copy, Play } from 'lucide-react';
+import { Check, Copy, Play, Square } from 'lucide-react';
 import { TranscriptSegmentData } from '@/types';
 import { formatPlaybackTime, useMeetingPlayback, type PlaybackControls } from '@/contexts/MeetingPlaybackContext';
 import { useI18n } from '@/lib/i18n';
@@ -145,26 +145,31 @@ function cleanText(text: string, silence: string): string {
 const TurnRow = memo(function TurnRow({
   turn,
   activeId,
-  isPlaying,
+  isTurnPlaying,
   targetId,
   canPlay,
   onPlay,
+  onStop,
   highlightQuery,
 }: {
   turn: Turn;
   /** The line playing now, when it belongs to this turn. */
   activeId: string | null;
-  isPlaying: boolean;
+  isTurnPlaying: boolean;
   /** The line a jump or search landed on, when it belongs to this turn. */
   targetId: string | null;
   canPlay: boolean;
   onPlay: (time: number) => void;
+  onStop: () => void;
   highlightQuery?: string;
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const active = activeId !== null;
   const silence = t('Silence');
+  const playbackLabel = isTurnPlaying
+    ? t('Stop playback')
+    : t('Play from {time}', { time: formatPlaybackTime(turn.start) });
 
   const copy = () => {
     const text = turn.segments.map((segment) => cleanText(segment.text, silence)).join(' ');
@@ -189,7 +194,7 @@ const TurnRow = memo(function TurnRow({
           >
             {formatPlaybackTime(turn.start)}
           </button>
-          {active && isPlaying && (
+          {isTurnPlaying && (
             <span aria-hidden className="ml-1 inline-flex h-3 items-end gap-0.5">
               <span className="h-1.5 w-[3px] animate-pulse rounded-full bg-indigo-500" />
               <span className="h-3 w-[3px] animate-pulse rounded-full bg-indigo-500 [animation-delay:150ms]" />
@@ -221,16 +226,16 @@ const TurnRow = memo(function TurnRow({
           })}
         </p>
       </div>
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/turn:opacity-100">
+      <div className="group/actions flex shrink-0 items-center gap-0.5">
         {canPlay && (
           <button
             type="button"
-            onClick={() => onPlay(turn.start)}
-            title={t('Play from {time}', { time: formatPlaybackTime(turn.start) })}
-            aria-label={t('Play from {time}', { time: formatPlaybackTime(turn.start) })}
-            className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-white hover:text-indigo-600"
+            onClick={isTurnPlaying ? onStop : () => onPlay(turn.start)}
+            title={playbackLabel}
+            aria-label={playbackLabel}
+            className={`grid h-7 w-7 place-items-center rounded-md text-slate-400 transition-opacity hover:bg-white hover:text-indigo-600 group-focus-within/actions:opacity-100 group-hover/turn:opacity-100 ${isTurnPlaying ? 'opacity-100' : 'opacity-0'}`}
           >
-            <Play className="h-3.5 w-3.5" />
+            {isTurnPlaying ? <Square className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
           </button>
         )}
         <button
@@ -238,7 +243,7 @@ const TurnRow = memo(function TurnRow({
           onClick={copy}
           title={t('Copy')}
           aria-label={t('Copy')}
-          className="grid h-7 w-7 place-items-center rounded-md text-slate-400 hover:bg-white hover:text-slate-700"
+          className="grid h-7 w-7 place-items-center rounded-md text-slate-400 opacity-0 transition-opacity hover:bg-white hover:text-slate-700 group-focus-within/actions:opacity-100 group-hover/turn:opacity-100"
         >
           {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
         </button>
@@ -306,6 +311,7 @@ export function MeetingTranscript({
   const playbackRef = useRef(playback);
   playbackRef.current = playback;
   const play = useCallback((time: number) => playbackRef.current?.play(time), []);
+  const stop = useCallback(() => playbackRef.current?.pause(), []);
 
   // Jumps from search and the speaker timeline.
   useEffect(() => {
@@ -396,10 +402,11 @@ export function MeetingTranscript({
               <TurnRow
                 turn={turn}
                 activeId={ownsActive ? activeId : null}
-                isPlaying={isPlaying}
+                isTurnPlaying={ownsActive && isPlaying}
                 targetId={target}
                 canPlay={canPlay}
                 onPlay={play}
+                onStop={stop}
                 highlightQuery={highlightQuery}
               />
             </div>

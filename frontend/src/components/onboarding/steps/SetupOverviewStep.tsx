@@ -17,7 +17,7 @@ const SUMMARY_MODELS = [
   { id: 'qwen3.5:2b', name: 'Qwen 3.5 2B', tier: 'Balanced' },
 ];
 
-export function SetupOverviewStep() {
+export function SetupOverviewStep({ isMac }: { isMac: boolean }) {
   const {
     goNext, goPrevious, transcriptionProvider, setTranscriptionProvider,
     downloadTranscription, setDownloadTranscription, downloadSummary, setDownloadSummary,
@@ -26,7 +26,6 @@ export function SetupOverviewStep() {
     selectedSummaryModel, recommendedSummaryModel, selectSummaryModel,
   } = useOnboarding();
   const { t } = useI18n();
-  const [isMac, setIsMac] = useState(false);
   /** Null until known: the installer ships the model on Windows only. */
   const [vadBundled, setVadBundled] = useState<boolean | null>(null);
 
@@ -34,12 +33,6 @@ export function SetupOverviewStep() {
     invoke<{ bundled: boolean }>('vad_model_status')
       .then(({ bundled }) => setVadBundled(bundled))
       .catch(() => setVadBundled(false));
-  }, []);
-
-  useEffect(() => {
-    import('@tauri-apps/plugin-os')
-      .then(({ platform }) => setIsMac(typeof platform === 'function' ? platform() === 'macos' : navigator.userAgent.includes('Mac')))
-      .catch(() => setIsMac(navigator.userAgent.includes('Mac')));
   }, []);
 
   return (

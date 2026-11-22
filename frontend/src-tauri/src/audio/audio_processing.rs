@@ -595,24 +595,42 @@ pub fn resample(input: &[f32], from_sample_rate: u32, to_sample_rate: u32) -> Re
         window: WindowFunction::BlackmanHarris2, // Best window for audio
     };
 
+    // One `process` call returns about half a filter length (`output_delay`)
+    // less than the input covers: the last input samples stay inside the
+    // filter. Its content is not delayed, though (checked by
+    // `chunked_resample_keeps_the_timeline`). Pad the input so the tail comes
+    // out and cut to the exact length: pieces resampled one after another
+    // then stay where they belong on the timeline.
+    let padding = sinc_len;
     let mut resampler = SincFixedIn::<f32>::new(
         ratio,
         2.0, // Maximum relative deviation
         params,
-        input.len(),
+        input.len() + padding,
         1, // Mono
     )?;
 
-    let waves_in = vec![input.to_vec()];
-    let waves_out = resampler.process(&waves_in, None)?;
+    let mut padded = Vec::with_capacity(input.len() + padding);
+    padded.extend_from_slice(input);
+    padded.resize(input.len() + padding, 0.0);
+    let waves_out = resampler.process(&[padded], None)?;
+    let expected = (input.len() as f64 * ratio).round() as usize;
+    let mut output: Vec<f32> = waves_out
+        .into_iter()
+        .next()
+        .unwrap()
+        .into_iter()
+        .take(expected)
+        .collect();
+    output.resize(expected, 0.0);
 
     debug!(
         "Resampling complete: {} samples → {} samples",
         input.len(),
-        waves_out[0].len()
+        output.len()
     );
 
-    Ok(waves_out.into_iter().next().unwrap())
+    Ok(output)
 }
 
 // Alias for compatibility with existing code

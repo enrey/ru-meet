@@ -48,6 +48,10 @@ pub(crate) enum Action {
         provider: Option<String>,
         process_after: bool,
     },
+    /// Look for the voice library's people among a meeting's unnamed speakers.
+    VoiceMatch {
+        meeting_id: String,
+    },
 }
 
 impl Action {
@@ -58,6 +62,7 @@ impl Action {
             Self::Summary { .. } | Self::RecoverSummary { .. } => "summary",
             Self::Import { .. } => "import",
             Self::Retranscription { .. } => "retranscription",
+            Self::VoiceMatch { .. } => "voice-match",
         }
     }
     fn meeting_id(&self) -> Option<&str> {
@@ -66,7 +71,8 @@ impl Action {
             | Self::Speakers { meeting_id, .. }
             | Self::RecoverSummary { meeting_id }
             | Self::Summary { meeting_id, .. }
-            | Self::Retranscription { meeting_id, .. } => Some(meeting_id),
+            | Self::Retranscription { meeting_id, .. }
+            | Self::VoiceMatch { meeting_id } => Some(meeting_id),
             Self::Import { .. } => None,
         }
     }
@@ -101,6 +107,8 @@ pub struct TaskView {
     status: Status,
     error: Option<String>,
     created_at: String,
+    /// When the task last began to run; with `finished_at` it times the work.
+    started_at: Option<String>,
     finished_at: Option<String>,
     can_retry: bool,
     scheduled_at: Option<String>,
@@ -146,6 +154,7 @@ impl Task {
             status: Status::Queued,
             error: None,
             created_at: chrono::Utc::now().to_rfc3339(),
+            started_at: None,
             finished_at: None,
             can_retry: false,
             scheduled_at: None,
@@ -203,6 +212,9 @@ fn set_status(id: u64, status: Status, error: Option<String>) {
         .iter_mut()
         .find(|entry| entry.view.id == id)
     {
+        if status == Status::Running {
+            entry.view.started_at = Some(chrono::Utc::now().to_rfc3339());
+        }
         entry.view.status = status;
         entry.view.error = error;
     }
@@ -248,6 +260,18 @@ fn finish(id: u64, fallback: Status) {
         recovery::completed(action, status, error);
     }
     CHANGED.notify_waiters();
+}
+
+/// Whether `action` waits in the queue and has not started yet: it will then
+/// see every change made before it starts, so a second copy is not needed.
+pub(crate) fn is_waiting(action: &Action) -> bool {
+    let key = action.key();
+    QUEUE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .entries
+        .iter()
+        .any(|entry| !entry.finished && entry.key == key && entry.view.status == Status::Queued)
 }
 
 pub(crate) fn fail_current(error: impl ToString) {
@@ -474,6 +498,10 @@ async fn retry<R: Runtime>(app: AppHandle<R>, action: Action) -> Result<(), Stri
                 )
                 .await;
             });
+            Ok(())
+        }
+        Action::VoiceMatch { meeting_id } => {
+            crate::audio::voiceprint::queue_meeting_matching(app, meeting_id);
             Ok(())
         }
     }

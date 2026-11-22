@@ -299,7 +299,7 @@ const MINOR_SPEAKER_MAX_SECONDS: f64 = 30.0;
 /// Never collapse the busiest speakers, whatever the arithmetic says, so a
 /// badly fragmented diarization cannot turn the whole meeting into `Others`.
 const MIN_KEPT_SPEAKERS: usize = 2;
-const OTHERS_SPEAKER: &str = "Others";
+pub(crate) const OTHERS_SPEAKER: &str = "Others";
 
 /// Merge speakers with a negligible amount of speech into a single `Others`.
 ///
@@ -720,6 +720,7 @@ pub(crate) fn start_meeting_diarization<R: Runtime>(
                         )
                         .await;
                         set_meeting_job_status(&meeting_id, false, "Speaker labels are ready");
+                        crate::audio::voiceprint::spawn_suggestions(app.clone(), pool.clone(), meeting_id.clone());
                         let _ = app.emit("diarization-complete", serde_json::json!({
                         "meetingId": meeting_id,
                         "speakers": turns.iter().map(|turn| &turn.speaker).collect::<std::collections::BTreeSet<_>>().len(),

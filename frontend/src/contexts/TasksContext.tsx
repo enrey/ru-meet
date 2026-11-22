@@ -6,16 +6,27 @@ import { invoke } from '@tauri-apps/api/core';
 export type TaskStatus = 'queued' | 'scheduled' | 'running' | 'paused' | 'failed' | 'done' | 'cancelled';
 export interface BackgroundTask {
   id: number;
-  kind: 'tts' | 'diarization' | 'summary' | 'import' | 'retranscription';
+  kind: 'tts' | 'diarization' | 'summary' | 'import' | 'retranscription' | 'voice-match';
   meetingId: string | null;
   title: string | null;
   status: TaskStatus;
   error: string | null;
   createdAt: string;
+  /** When the task last began to run. */
+  startedAt: string | null;
   finishedAt: string | null;
   canRetry: boolean;
   scheduledAt: string | null;
 }
+/** English source text of each kind's name; pass it through `t`. */
+export const TASK_KIND_LABELS: Record<BackgroundTask['kind'], string> = {
+  tts: 'Summary speech',
+  diarization: 'Speaker diarization',
+  summary: 'Summary generation',
+  import: 'Audio import',
+  retranscription: 'Retranscription',
+  'voice-match': 'Speaker identification by voice library',
+};
 interface Snapshot {
   tasks: BackgroundTask[];
   recordingPaused: boolean;

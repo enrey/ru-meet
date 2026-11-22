@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Home, Library, ListTodo, Loader2, Mic, Moon, PanelLeftClose, PanelLeftOpen, Settings, Square, Sun, Unplug, Upload } from 'lucide-react';
+import { Home, Library, ListTodo, Loader2, Mic, Moon, PanelLeftClose, PanelLeftOpen, Settings, Square, Sun, Unplug, Upload, UserRound } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -156,6 +156,14 @@ const Sidebar: React.FC = () => {
           active={isLibraryPage}
           onClick={() => router.push('/meetings')}
           trailing={meetings.length > 0 && <span className="text-xs text-slate-400">{meetings.length}</span>}
+        />
+
+        <NavItem
+          collapsed={isCollapsed}
+          icon={<UserRound className="h-5 w-5" />}
+          label={t('Voices')}
+          active={pathname === '/voices'}
+          onClick={() => router.push('/voices')}
         />
 
         <NavItem

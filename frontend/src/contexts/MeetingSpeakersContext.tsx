@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import type { SpeakerTurn } from '@/services/storageService';
 import { useI18n } from '@/lib/i18n';
+import { voiceprints, type VoiceLink } from '@/services/voiceprintService';
 
 /** One colour per speaker, shared by the timeline and the transcript. */
 export const SPEAKER_COLORS = ['#6366f1', '#06b6d4', '#f59e0b', '#ec4899', '#10b981', '#8b5cf6'];
@@ -33,6 +34,17 @@ interface MeetingSpeakersValue {
   requestRename: (from: string, typed: string) => Promise<SpeakerRenameResult>;
   /** Rename (or merge) without further checks, after the user confirmed. */
   commitRename: (from: string, to: string) => Promise<boolean>;
+  /** Reflect a rename the backend already made (e.g. after remembering a voice). */
+  applyRename: (from: string, to: string) => void;
+  /** Voice library suggestions and confirmations for this meeting's speakers. */
+  voiceLinks: VoiceLink[];
+  voiceLinkFor: (speaker: string) => VoiceLink | undefined;
+  /** The voice library has at least one profile. */
+  hasVoiceLibrary: boolean;
+  confirmVoice: (speaker: string) => Promise<void>;
+  rejectVoice: (speaker: string) => Promise<void>;
+  reloadVoiceLinks: () => void;
+  meetingId: string;
 }
 
 const MeetingSpeakersContext = createContext<MeetingSpeakersValue | null>(null);
@@ -59,6 +71,31 @@ export function MeetingSpeakersProvider({
   const { t } = useI18n();
   const [turns, setTurns] = useState<SpeakerTurn[]>([]);
   const [inProgress, setInProgress] = useState(false);
+  const [voiceLinks, setVoiceLinks] = useState<VoiceLink[]>([]);
+  const [hasVoiceLibrary, setHasVoiceLibrary] = useState(false);
+
+  const reloadVoiceLinks = useCallback(() => {
+    void voiceprints.links(meetingId)
+      .then(setVoiceLinks)
+      .catch((error) => console.warn('Failed to load voice suggestions:', error));
+    void voiceprints.profiles()
+      .then((profiles) => setHasVoiceLibrary(profiles.length > 0))
+      .catch((error) => console.warn('Failed to load the voice library:', error));
+  }, [meetingId]);
+
+  useEffect(() => {
+    setVoiceLinks([]);
+    reloadVoiceLinks();
+    const subscriptions = Promise.all([
+      listen<{ meetingId?: string }>('voice-suggestions-updated', ({ payload }) => {
+        if (!payload?.meetingId || payload.meetingId === meetingId) reloadVoiceLinks();
+      }),
+      listen('voice-library-updated', () => reloadVoiceLinks()),
+    ]);
+    return () => {
+      void subscriptions.then((listeners) => listeners.forEach((unlisten) => unlisten()));
+    };
+  }, [meetingId, reloadVoiceLinks]);
 
   useEffect(() => {
     let active = true;
@@ -120,18 +157,50 @@ export function MeetingSpeakersProvider({
     return next?.speaker;
   }, [turns]);
 
+  const applyRename = useCallback((from: string, to: string) => {
+    if (from === to) return;
+    setTurns((current) => current.map((turn) => (turn.speaker === from ? { ...turn, speaker: to } : turn)));
+    onSpeakerRenamed?.(from, to);
+  }, [onSpeakerRenamed]);
+
   const commitRename = useCallback(async (from: string, to: string) => {
     try {
       const merged = await invoke<boolean>('rename_meeting_speaker', { meetingId, oldName: from, newName: to });
-      setTurns((current) => current.map((turn) => (turn.speaker === from ? { ...turn, speaker: to } : turn)));
-      onSpeakerRenamed?.(from, to);
+      applyRename(from, to);
+      reloadVoiceLinks();
       if (merged) toast.success(t('Merged “{from}” into “{to}”', { from: displayName(from), to: displayName(to) }));
       return true;
     } catch (error) {
       toast.error(t('Could not rename speaker'), { description: String(error) });
       return false;
     }
-  }, [meetingId, onSpeakerRenamed, t, displayName]);
+  }, [meetingId, applyRename, reloadVoiceLinks, t, displayName]);
+
+  const voiceLinkFor = useCallback(
+    (speaker: string) => voiceLinks.find((link) => link.speaker === speaker),
+    [voiceLinks],
+  );
+
+  const confirmVoice = useCallback(async (speaker: string) => {
+    try {
+      const name = await voiceprints.confirm(meetingId, speaker);
+      applyRename(speaker, name);
+    } catch (error) {
+      toast.error(t('Could not confirm the suggestion'), { description: t(String(error)) });
+    } finally {
+      reloadVoiceLinks();
+    }
+  }, [meetingId, applyRename, reloadVoiceLinks, t]);
+
+  const rejectVoice = useCallback(async (speaker: string) => {
+    try {
+      await voiceprints.reject(meetingId, speaker);
+    } catch (error) {
+      toast.error(t('Could not reject the suggestion'), { description: t(String(error)) });
+    } finally {
+      reloadVoiceLinks();
+    }
+  }, [meetingId, reloadVoiceLinks, t]);
 
   const requestRename = useCallback(async (from: string, typed: string): Promise<SpeakerRenameResult> => {
     const name = typed.trim();
@@ -148,8 +217,12 @@ export function MeetingSpeakersProvider({
   }, [speakers, displayName, commitRename, t]);
 
   const value = useMemo<MeetingSpeakersValue>(
-    () => ({ turns, inProgress, speakers, colorFor, displayName, speakerAt, requestRename, commitRename }),
-    [turns, inProgress, speakers, colorFor, displayName, speakerAt, requestRename, commitRename],
+    () => ({
+      turns, inProgress, speakers, colorFor, displayName, speakerAt, requestRename, commitRename, applyRename,
+      voiceLinks, voiceLinkFor, hasVoiceLibrary, confirmVoice, rejectVoice, reloadVoiceLinks, meetingId,
+    }),
+    [turns, inProgress, speakers, colorFor, displayName, speakerAt, requestRename, commitRename, applyRename,
+      voiceLinks, voiceLinkFor, hasVoiceLibrary, confirmVoice, rejectVoice, reloadVoiceLinks, meetingId],
   );
 
   return <MeetingSpeakersContext.Provider value={value}>{children}</MeetingSpeakersContext.Provider>;

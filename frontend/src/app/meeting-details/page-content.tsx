@@ -89,13 +89,8 @@ export default function PageContent({
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const isRecording = false;
   const [activeTab, setActiveTab] = useState<MeetingDetailsTab>('transcript');
-  // Kept on the transcript when the meeting was opened from a transcript search.
-  const openedFromSearch = initialSearchQuery.trim().length > 0;
   const [transcriptJump, setTranscriptJump] = useState<TranscriptScrollTarget | null>(null);
 
-  // Ref to store the modal open function from SummaryGeneratorButtonGroup
-  const autoSwitchedSummaryMeetingIdsRef = useRef(new Set<string>());
-  const manuallySelectedTabMeetingIdsRef = useRef(new Set<string>());
   const autoGenerationStartedMeetingIdRef = useRef<string | null>(null);
 
   // Sidebar context
@@ -153,7 +148,6 @@ export default function PageContent({
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault();
-        manuallySelectedTabMeetingIdsRef.current.add(meeting.id);
         setActiveTab('transcript');
         // The transcript panel may only now become visible.
         window.setTimeout(() => {
@@ -284,7 +278,6 @@ export default function PageContent({
 
   // From the menu: read it now, preparing it first when needed.
   const listenToSummary = useCallback(() => {
-    manuallySelectedTabMeetingIdsRef.current.add(meeting.id);
     setActiveTab('summary');
     if (summaryPlayback?.isAvailable) summaryPlayback.play();
     else if (summaryAudioStatus?.state === 'preparing') playWhenReadyRef.current = true;
@@ -301,18 +294,6 @@ export default function PageContent({
       throw error;
     }
   };
-
-  useEffect(() => {
-    if (
-      (meetingData.aiSummary || summaryGeneration.summaryStatus === 'completed')
-      && !autoSwitchedSummaryMeetingIdsRef.current.has(meeting.id)
-      && !manuallySelectedTabMeetingIdsRef.current.has(meeting.id)
-      && !openedFromSearch
-    ) {
-      autoSwitchedSummaryMeetingIdsRef.current.add(meeting.id);
-      setActiveTab('summary');
-    }
-  }, [meeting.id, meetingData.aiSummary, summaryGeneration.summaryStatus, openedFromSearch]);
 
   // Auto-generate only after the model configuration has settled.
   useEffect(() => {
@@ -399,10 +380,7 @@ export default function PageContent({
         <section className="flex min-w-0 flex-1 flex-col">
           <MeetingTabs
             activeTab={activeTab}
-            onTabChange={(tab) => {
-              manuallySelectedTabMeetingIdsRef.current.add(meeting.id);
-              setActiveTab(tab);
-            }}
+            onTabChange={setActiveTab}
             transcriptCount={totalCount}
             tools={activeTab === 'transcript' ? (
               <TranscriptSearchBar
