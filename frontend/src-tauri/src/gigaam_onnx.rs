@@ -120,6 +120,35 @@ mod word_timing_tests {
         assert!((yes.start - 0.39).abs() < 1e-9);
         assert!((yes.end - 0.43).abs() < 1e-9);
     }
+
+    #[test]
+    fn first_token_at_frame_zero_moves_to_its_word_continuation() {
+        // Real emissions for "Вот." after 0.3 s of leading silence.
+        let vocab = ["▁В", "о", "т", ".", "▁Да"].map(str::to_owned);
+        let emission = |id, frame| CtcEmission {
+            id,
+            first_frame: frame,
+            end_frame: frame + 1,
+        };
+        let result = sentencepiece_result(
+            &[
+                emission(0, 0),
+                emission(1, 10),
+                emission(2, 14),
+                emission(3, 26),
+            ],
+            &vocab,
+            0.04,
+            0.01,
+            1.08,
+        );
+        assert_eq!(result.text, "Вот.");
+        assert!((result.words[0].start - 0.35).abs() < 1e-9);
+        // A single-token first word has no continuation to go by.
+        let result =
+            sentencepiece_result(&[emission(4, 0), emission(0, 10)], &vocab, 0.04, 0.01, 1.0);
+        assert_eq!(result.words[0].start, 0.0);
+    }
 }
 
 /// Which execution provider(s) ONNX Runtime assigned the loaded graph to.
@@ -498,7 +527,7 @@ fn load_vocab(path: &Path) -> Result<(Vec<String>, Option<i32>)> {
 
 // ---- CTC greedy decode (ported from transcribe-rs `decode/ctc.rs`) -------
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct CtcEmission {
     id: i64,
     first_frame: usize,
@@ -557,6 +586,20 @@ fn sentencepiece_result(
     first_center: f64,
     duration: f64,
 ) -> TranscriptionResult {
+    let mut emissions = emissions.to_vec();
+    // The model emits a clip's first token at encoder frame 0 even after
+    // leading silence ("В" at 0, "о" at 10 for a word spoken at ~0.4 s), which
+    // stretched the first word back to the clip start. When the same word
+    // continues later, place that token just before its continuation.
+    if let [first, next, ..] = emissions.as_mut_slice() {
+        let continues = vocab.get(next.id as usize).is_some_and(|token| {
+            !token.starts_with('\u{2581}') && token.chars().any(char::is_alphanumeric)
+        });
+        if first.first_frame == 0 && first.end_frame == 1 && next.first_frame > 1 && continues {
+            first.first_frame = next.first_frame - 1;
+            first.end_frame = next.first_frame;
+        }
+    }
     let pieces: Vec<_> = emissions
         .iter()
         .filter_map(|emission| {
