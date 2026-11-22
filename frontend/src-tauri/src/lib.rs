@@ -718,6 +718,8 @@ pub fn run() {
             gigaam_engine::gigaam_validate_model_ready,
             gigaam_engine::gigaam_transcribe_audio,
             gigaam_engine::gigaam_download_model,
+            audio::saved_transcription::term_correction_model_available,
+            audio::saved_transcription::install_term_correction_model,
             gigaam_engine::gigaam_delete_model,
             gigaam_engine::gigaam_get_models_directory,
             // Parallel processing commands

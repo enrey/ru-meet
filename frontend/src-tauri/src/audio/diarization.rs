@@ -611,8 +611,8 @@ pub(crate) fn start_for_folder<R: Runtime>(
     meeting_id: String,
     folder: &std::path::Path,
 ) -> Result<(), String> {
-    let audio_path = super::retranscription::find_audio_file(folder)
-        .map_err(|error| error.to_string())?;
+    let audio_path =
+        super::retranscription::find_audio_file(folder).map_err(|error| error.to_string())?;
     start_meeting_diarization(app, pool, meeting_id, audio_path)
 }
 
@@ -698,7 +698,16 @@ pub(crate) fn start_meeting_diarization<R: Runtime>(
         set_meeting_job_status(&meeting_id, true, "Identifying speakers…");
         let _ = app.emit("diarization-progress", serde_json::json!({"stage":"processing", "message":"Identifying speakers…", "meetingId": meeting_id}));
         let heartbeat = spawn_progress_heartbeat(app.clone(), Some(meeting_id.clone()), engine.clone(), 0.0);
-        let result = crate::background_worker::speakers(&app, audio_path, engine, collapse,
+        let system_track = match sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM transcripts WHERE meeting_id = ? AND recording_source IN ('microphone', 'system'))"
+        ).bind(&meeting_id).fetch_one(&pool).await {
+            Ok(value) => value,
+            Err(error) => {
+                emit_rerun_error(&app, &meeting_id, error.to_string());
+                return;
+            }
+        };
+        let result = crate::background_worker::speakers(&app, audio_path, engine, collapse, system_track,
             || !CANCELLED_RERUNS.lock().unwrap_or_else(|e| e.into_inner()).contains(&meeting_id),
             |progress| {
                 set_meeting_job_status(&meeting_id, true, &progress.message);
@@ -1092,6 +1101,7 @@ pub async fn run_diarization_task<R: Runtime>(
         path,
         engine,
         collapse,
+        false,
         || true,
         |progress| {
             let _ = app.emit(
@@ -1319,7 +1329,18 @@ pub(crate) fn compute_in_worker(
     path: &std::path::Path,
     engine: &str,
     collapse: bool,
+    system_track: bool,
 ) -> Result<Vec<SpeakerTurn>> {
-    let samples = decode_for_diarization(path)?;
+    use super::decoder::{decode_recording_stream, RecordingStream};
+    let samples = if system_track {
+        decode_recording_stream(path, RecordingStream::System)?
+            .ok_or_else(|| anyhow::anyhow!("Recording is missing its system audio track"))?
+            .to_whisper_format()
+    } else {
+        decode_for_diarization(path)?
+    };
+    if samples.iter().all(|&value| value.abs() < 1e-5) {
+        return Ok(Vec::new());
+    }
     diarize_with_engine(engine, &samples, collapse)
 }

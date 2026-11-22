@@ -31,6 +31,7 @@ pub mod post_processor;
 pub mod recording_commands;
 pub mod recording_manager;
 pub mod recording_preferences;
+pub(crate) mod saved_transcription;
 pub mod recording_saver;
 pub mod recording_session;
 pub mod recording_state;

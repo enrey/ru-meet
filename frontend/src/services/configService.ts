@@ -44,6 +44,7 @@ export interface RecordingPreferences {
   save_folder: string;
   auto_save: boolean;
   realtime_transcription?: boolean;
+  post_recording_transcription?: boolean;
   file_format: string;
   preferred_mic_device: string | null;
   preferred_system_device: string | null;

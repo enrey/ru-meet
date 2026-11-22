@@ -364,6 +364,10 @@ pub struct TranscriptSegment {
     pub speaker: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub words: Vec<crate::audio::word_timing::WordTiming>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_source: Option<crate::audio::saved_transcription::RecordingSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub term_corrections: Vec<crate::audio::saved_transcription::TermCorrection>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

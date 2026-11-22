@@ -493,7 +493,7 @@ async fn run_import<R: Runtime>(
     let dest_path = meeting_folder.join(&dest_filename);
 
     let compute_started = Instant::now();
-    let (duration_seconds, all_transcripts, speech_segments) =
+    let (duration_seconds, all_transcripts, speech_segments, _) =
         crate::background_worker::transcribe(
             &app,
             source,
@@ -502,6 +502,7 @@ async fn run_import<R: Runtime>(
             model.as_deref(),
             language.clone(),
             true,
+            None,
             || !IMPORT_CANCELLED.load(Ordering::SeqCst),
             |progress| {
                 emit_progress(
@@ -1088,6 +1089,8 @@ mod tests {
                 duration: Some(1.5),
                 speaker: None,
                 words: Vec::new(),
+                recording_source: None,
+                term_corrections: Vec::new(),
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
@@ -1098,6 +1101,8 @@ mod tests {
                 duration: Some(1.5),
                 speaker: None,
                 words: Vec::new(),
+                recording_source: None,
+                term_corrections: Vec::new(),
             },
         ];
 

@@ -265,6 +265,48 @@ async fn run_retranscription<R: Runtime>(
 ) -> Result<RetranscriptionResult> {
     let folder_path = PathBuf::from(&meeting_folder_path);
     let audio_path = find_audio_file(&folder_path)?;
+    let app_state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| anyhow!("App state not available"))?;
+    let pool = app_state.db_manager.pool();
+    let (selected_provider, selected_model) =
+        super::transcription::worker_config(&app, provider.as_deref(), model.as_deref())
+            .await
+            .map_err(|error| anyhow!(error))?;
+    let post_recording = if selected_provider == super::transcription::ProviderId::GigaAm
+        && super::recording_preferences::load_recording_preferences(&app)
+            .await?
+            .post_recording_transcription
+    {
+        let metadata = std::fs::read(folder_path.join("metadata.json"))
+            .ok()
+            .and_then(|data| serde_json::from_slice::<serde_json::Value>(&data).ok());
+        let source_tracks = audio_path
+            .file_name()
+            .is_some_and(|name| name == "audio.mp4")
+            && metadata
+                .as_ref()
+                .is_some_and(|m| m.get("devices").is_some_and(|d| d.is_object()));
+        let speaker_boundaries = TranscriptsRepository::get_speaker_turns(pool, &meeting_id)
+            .await?
+            .into_iter()
+            .flat_map(|turn| [turn.start, turn.end])
+            .collect();
+        Some(super::saved_transcription::PostRecording {
+            source_tracks,
+            speaker_boundaries,
+        })
+    } else {
+        None
+    };
+    let playback_snapshot =
+        if post_recording.is_some() {
+            Some(sqlx::query_as::<_, (String, String, Option<String>)>(
+            "SELECT id, transcript, speaker FROM transcripts WHERE meeting_id = ? ORDER BY id")
+            .bind(&meeting_id).fetch_all(pool).await?)
+        } else {
+            None
+        };
 
     info!(
         "Starting retranscription for meeting {} with language {:?}, model {:?}, provider {:?}",
@@ -279,14 +321,15 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    let (duration_seconds, all_transcripts, _) = crate::background_worker::transcribe(
+    let (duration_seconds, all_transcripts, _, provenance) = crate::background_worker::transcribe(
         &app,
         audio_path.clone(),
         None,
         provider.as_deref(),
-        model.as_deref(),
+        Some(&selected_model),
         language.clone(),
         false,
+        post_recording,
         || !RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst),
         |progress| {
             emit_progress(
@@ -304,15 +347,13 @@ async fn run_retranscription<R: Runtime>(
     emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
 
     // Create transcript segments with proper timestamps from VAD
-    let segments = create_transcript_segments(&all_transcripts);
-
-    // Save to database
-    let app_state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| anyhow!("App state not available"))?;
+    let mut segments = create_transcript_segments(&all_transcripts);
+    for (segment, original) in segments.iter_mut().zip(provenance) {
+        segment.recording_source = original.source;
+        segment.term_corrections = original.corrections;
+    }
 
     // Wrap delete+insert+update in a transaction to prevent data loss
-    let pool = app_state.db_manager.pool();
     let mut conn = pool
         .acquire()
         .await
@@ -321,8 +362,49 @@ async fn run_retranscription<R: Runtime>(
         .await
         .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
 
-    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
+    let edited = if let Some(before) = playback_snapshot {
+        let after = sqlx::query_as::<_, (String, String, Option<String>)>(
+            "SELECT id, transcript, speaker FROM transcripts WHERE meeting_id = ? ORDER BY id",
+        )
         .bind(&meeting_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        if before != after {
+            return Err(anyhow!(
+                "The transcript changed while it was being processed"
+            ));
+        }
+        TranscriptsRepository::edited_rows(&mut tx, &meeting_id).await?
+    } else {
+        Vec::new()
+    };
+    if edited
+        .iter()
+        .any(|(_, start, end, _)| start.is_none() || end.is_none())
+    {
+        return Err(anyhow!(
+            "Retranscription cannot align an untimed, manually edited row"
+        ));
+    }
+
+    segments.retain(|segment| {
+        let Some((start, end)) = segment.audio_start_time.zip(segment.audio_end_time) else {
+            return true;
+        };
+        let source = segment.recording_source.map(|source| source.as_str());
+        !edited.iter().any(|(_, a, b, old_source)| {
+            let old_source = old_source.as_deref();
+            let same_track = source == old_source
+                || [source, old_source]
+                    .iter()
+                    .any(|stream| stream.is_none() || *stream == Some("mix"));
+            same_track && a.zip(*b).is_some_and(|(a, b)| start < b && a < end)
+        })
+    });
+    let retained = serde_json::to_string(&edited.iter().map(|(id, ..)| id).collect::<Vec<_>>())?;
+    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ? AND id NOT IN (SELECT value FROM json_each(?))")
+        .bind(&meeting_id)
+        .bind(retained)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
@@ -335,7 +417,8 @@ async fn run_retranscription<R: Runtime>(
 
     let reused_turns =
         TranscriptsRepository::apply_stored_speaker_turns(&mut tx, &meeting_id).await?;
-    let segments_count = if reused_turns {
+    let read_back = reused_turns || !edited.is_empty();
+    let segments_count = if read_back {
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM transcripts WHERE meeting_id = ?")
             .bind(&meeting_id)
             .fetch_one(&mut *tx)
@@ -349,8 +432,7 @@ async fn run_retranscription<R: Runtime>(
 
     info!(
         "Updated {} transcripts for meeting {} in transaction",
-        segments_count,
-        meeting_id
+        segments_count, meeting_id
     );
 
     // Write updated transcripts.json and metadata.json to the meeting folder
@@ -362,7 +444,7 @@ async fn run_retranscription<R: Runtime>(
         "Writing transcript files...",
     );
 
-    let export_result = if reused_turns {
+    let export_result = if read_back {
         super::transcript_export::export_diarized_transcripts(pool, &meeting_id).await
     } else {
         write_transcripts_json(&folder_path, &segments)

@@ -345,6 +345,8 @@ impl RecordingSession {
                 duration: Some(segment.duration),
                 speaker: segment.speaker.clone(),
                 words: segment.words.clone(),
+                recording_source: None,
+                term_corrections: Vec::new(),
             })
             .collect();
         let app_state = app
@@ -359,7 +361,17 @@ impl RecordingSession {
             )
             .await
             .map_err(|error| format!("Failed to persist finalized recording: {error}"))?;
-        let diarization_status = if resources.realtime_transcription {
+        let config = crate::api::api::api_get_transcript_config(app.clone(), app.state(), None)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(crate::api::api::TranscriptConfig::local_default);
+        let post_recording_enabled = config.provider == "gigaam"
+            && audio_path.is_some()
+            && super::recording_preferences::load_recording_preferences(&app)
+                .await
+                .is_ok_and(|p| p.post_recording_transcription);
+        let diarization_status = if resources.realtime_transcription && !post_recording_enabled {
             let diarization_status = super::diarization::start_recording_diarization(
                 app.clone(),
                 app_state.db_manager.pool().clone(),
@@ -383,15 +395,6 @@ impl RecordingSession {
                 .clone()
                 .ok_or_else(|| "Saved recording folder is unavailable".to_string())?;
             tauri::async_runtime::spawn(async move {
-                let config = crate::api::api::api_get_transcript_config(
-                    app_for_job.clone(),
-                    app_for_job.state(),
-                    None,
-                )
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_else(crate::api::api::TranscriptConfig::local_default);
                 if let Err(error) = crate::audio::retranscription::start_with_followup(
                     app_for_job,
                     id.clone(),

@@ -57,6 +57,10 @@ pub struct Transcript {
     pub audio_end_time: Option<f64>,
     pub duration: Option<f64>,
     pub speaker: Option<String>,
+    #[sqlx(default)]
+    pub recording_source: Option<String>,
+    #[sqlx(default)]
+    pub term_corrections: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

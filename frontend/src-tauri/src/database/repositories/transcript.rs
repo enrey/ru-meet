@@ -37,6 +37,8 @@ struct DiarizationRow {
     diarization_source: Option<String>,
     diarization_parent: Option<String>,
     speaker_edited: bool,
+    recording_source: Option<String>,
+    term_corrections: Option<String>,
 }
 
 fn overlap(start: f64, end: f64, turn: &SpeakerTurn) -> f64 {
@@ -312,9 +314,13 @@ impl TranscriptsRepository {
             }
             _ => None,
         };
+        let corrections = (!segment.term_corrections.is_empty())
+            .then(|| serde_json::to_string(&segment.term_corrections))
+            .transpose()
+            .map_err(|error| SqlxError::Encode(error.into()))?;
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, diarization_source)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, diarization_source, recording_source, term_corrections)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(id)
         .bind(meeting_id)
@@ -325,6 +331,8 @@ impl TranscriptsRepository {
         .bind(segment.duration)
         .bind(&segment.speaker)
         .bind(source)
+        .bind(segment.recording_source.map(|source| source.as_str()))
+        .bind(corrections)
         .execute(&mut **transaction)
         .await?;
         Ok(())
@@ -408,7 +416,7 @@ impl TranscriptsRepository {
     ) -> Result<(), SqlxError> {
         let rows = sqlx::query_as::<_, DiarizationRow>(
             "SELECT id, transcript, timestamp, audio_start_time, audio_end_time, diarization_source,
-                    diarization_parent, speaker_edited FROM transcripts WHERE meeting_id = ? ORDER BY id",
+                    diarization_parent, speaker_edited, recording_source, term_corrections FROM transcripts WHERE meeting_id = ? ORDER BY id",
         )
         .bind(meeting_id)
         .fetch_all(&mut **transaction)
@@ -420,10 +428,11 @@ impl TranscriptsRepository {
             }
         }
 
-        for row in rows
-            .iter()
-            .filter(|row| row.diarization_parent.is_none() && !row.speaker_edited)
-        {
+        for row in rows.iter().filter(|row| {
+            row.diarization_parent.is_none()
+                && !row.speaker_edited
+                && row.recording_source.as_deref() != Some("microphone")
+        }) {
             let Some(source) = row
                 .diarization_source
                 .as_deref()
@@ -478,12 +487,13 @@ impl TranscriptsRepository {
                         .await?;
                 } else {
                     sqlx::query(
-                        "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, diarization_parent)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, diarization_parent, recording_source, term_corrections)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     )
                     .bind(format!("{}-part-{index:08}", row.id))
                     .bind(meeting_id).bind(text).bind(&row.timestamp)
                     .bind(start).bind(end).bind(end - start).bind(speaker).bind(&row.id)
+                    .bind(&row.recording_source).bind(&row.term_corrections)
                     .execute(&mut **transaction)
                     .await?;
                 }
@@ -491,6 +501,30 @@ impl TranscriptsRepository {
         }
 
         Ok(())
+    }
+
+    pub(crate) async fn edited_rows(
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        meeting_id: &str,
+    ) -> Result<Vec<(String, Option<f64>, Option<f64>, Option<String>)>, SqlxError> {
+        sqlx::query_as(
+            "WITH edited_group AS (
+                SELECT COALESCE(parent.diarization_parent, parent.id) AS root
+                FROM transcripts AS parent WHERE parent.meeting_id = ?1
+                AND (parent.speaker_edited = 1 OR (
+                    parent.diarization_parent IS NULL
+                    AND json_valid(parent.diarization_source)
+                    AND json_extract(parent.diarization_source, '$.text') != (parent.transcript || COALESCE((
+                        SELECT group_concat(child_text, '') FROM (
+                            SELECT transcript AS child_text FROM transcripts
+                            WHERE meeting_id = parent.meeting_id AND diarization_parent = parent.id ORDER BY id
+                        )
+                    ), ''))
+                ))
+            )
+            SELECT id, audio_start_time, audio_end_time, recording_source FROM transcripts
+            WHERE meeting_id = ?1 AND COALESCE(diarization_parent, id) IN (SELECT root FROM edited_group)"
+        ).bind(meeting_id).fetch_all(&mut **tx).await
     }
 
     /// Phrases in transcript order, as the markdown exports need them.
@@ -667,9 +701,14 @@ impl TranscriptsRepository {
             .execute(&mut *transaction)
             .await
             .map_err(|error| error.to_string())?;
-        VoiceprintRepository::follow_speaker_rename(&mut transaction, meeting_id, old_name, new_name)
-            .await
-            .map_err(|error| error.to_string())?;
+        VoiceprintRepository::follow_speaker_rename(
+            &mut transaction,
+            meeting_id,
+            old_name,
+            new_name,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         transaction
             .commit()
             .await
@@ -844,6 +883,8 @@ mod word_timing_tests {
             duration: Some(end - start),
             speaker: None,
             words,
+            recording_source: None,
+            term_corrections: Vec::new(),
         };
         let meeting = TranscriptsRepository::save_transcript(
             &pool,
@@ -902,6 +943,13 @@ mod word_timing_tests {
                 .unwrap();
             assert_eq!(read().await, first);
         }
+        {
+            let mut tx = pool.begin().await.unwrap();
+            assert!(TranscriptsRepository::edited_rows(&mut tx, &meeting)
+                .await
+                .unwrap()
+                .is_empty());
+        }
         crate::audio::transcript_export::export_diarized_transcripts(&pool, &meeting)
             .await
             .unwrap();
@@ -933,6 +981,14 @@ mod word_timing_tests {
         let edited = read().await;
         assert_eq!(edited[0].1, "Исправленный вопрос? ");
         assert_eq!(edited[1].2, "Борис");
+        {
+            let mut tx = pool.begin().await.unwrap();
+            let protected = TranscriptsRepository::edited_rows(&mut tx, &meeting)
+                .await
+                .unwrap();
+            assert_eq!(protected.len(), 3);
+            assert!(protected.iter().any(|entry| entry.0 == edited[0].0));
+        }
         assert_eq!(
             TranscriptsRepository::get_speaker_turns(&pool, &meeting)
                 .await
@@ -953,7 +1009,10 @@ mod search_tests {
         let context = TranscriptsRepository::get_match_context(&text, "привет").unwrap();
         assert!(context.starts_with("...") && context.ends_with("..."));
         assert!(context.contains("Привет, мир"));
-        assert_eq!(TranscriptsRepository::get_match_context("Hello", "bye"), None);
+        assert_eq!(
+            TranscriptsRepository::get_match_context("Hello", "bye"),
+            None
+        );
     }
 
     #[tokio::test]
@@ -961,11 +1020,17 @@ mod search_tests {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::query("CREATE TABLE transcripts (id TEXT, meeting_id TEXT, transcript TEXT, audio_start_time REAL)")
             .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO transcripts VALUES
+        sqlx::query(
+            "INSERT INTO transcripts VALUES
             ('c', 'm', 'Третий: ПРИВЕТ', 30.0), ('a', 'm', 'первый', 10.0),
-            ('b', 'm', 'Второй привет', 20.0), ('x', 'other', 'привет', 5.0)")
-            .execute(&pool).await.unwrap();
-        let found = TranscriptsRepository::search_meeting_transcript(&pool, "m", "Привет").await.unwrap();
+            ('b', 'm', 'Второй привет', 20.0), ('x', 'other', 'привет', 5.0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let found = TranscriptsRepository::search_meeting_transcript(&pool, "m", "Привет")
+            .await
+            .unwrap();
         assert_eq!(found, vec![("b".to_string(), 1), ("c".to_string(), 2)]);
     }
 }

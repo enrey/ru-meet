@@ -8,6 +8,13 @@ const plural = (param: string, one: string, few: string, many: string): Translat
 
 /** Russian UI strings keyed by their English source text. */
 export const ru: Record<string, Translation> = {
+  "Separate transcription and term correction after recording": "Раздельная транскрибация и исправление терминов после записи",
+  "Checking GigaAM Multilingual 220M…": "Проверяем доступность GigaAM Multilingual 220M…",
+  "GigaAM Multilingual 220M is installed": "GigaAM Multilingual 220M установлена",
+  "GigaAM Multilingual 220M is available to install (225 MB)": "Для повторного распознавания можно установить GigaAM Multilingual 220M (225 МБ)",
+  "Could not install GigaAM Multilingual 220M": "Не удалось установить GigaAM Multilingual 220M",
+  "Install model": "Установить модель",
+  "Installing…": "Установка…",
   "Transcribe text in real time (higher load)": "Распознавать текст в реальном времени (выше нагрузка)",
   "Recording mode can be changed before the next recording.": "Режим можно изменить перед следующей записью.",
   "When off, audio is saved during recording and text is generated afterwards.": "Когда выключено, во время записи сохраняется аудио, а текст распознаётся после её окончания.",

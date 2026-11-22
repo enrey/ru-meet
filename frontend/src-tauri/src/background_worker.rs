@@ -3,6 +3,7 @@
 use crate::{
     audio::{
         diarization::SpeakerTurn,
+        saved_transcription::{Corrector, PostRecording, Provenance, RecordingSource},
         transcription::{ProviderId, TranscriptionEngine},
     },
     background_process::Process,
@@ -30,11 +31,13 @@ pub(crate) enum Request {
         model: String,
         language: Option<String>,
         allow_empty: bool,
+        post_recording: Option<PostRecording>,
     },
     Speakers {
         path: PathBuf,
         engine: String,
         collapse: bool,
+        system_track: bool,
     },
     /// Voiceprint embeddings of recording intervals, in seconds.
     Voiceprints {
@@ -65,6 +68,7 @@ pub(crate) enum Output {
         duration_seconds: f64,
         transcripts: Vec<crate::audio::common::TimedUtterance>,
         speech_segments: usize,
+        provenance: Vec<Provenance>,
     },
     Speakers(Vec<SpeakerTurn>),
     Voiceprints(Vec<Option<Vec<f32>>>),
@@ -116,9 +120,15 @@ pub(crate) async fn transcribe<R: Runtime>(
     model: Option<&str>,
     language: Option<String>,
     allow_empty: bool,
+    post_recording: Option<PostRecording>,
     keep_running: impl Fn() -> bool,
     on_progress: impl Fn(Progress),
-) -> Result<(f64, Vec<crate::audio::common::TimedUtterance>, usize)> {
+) -> Result<(
+    f64,
+    Vec<crate::audio::common::TimedUtterance>,
+    usize,
+    Vec<Provenance>,
+)> {
     let (provider, model) = crate::audio::transcription::worker_config(app, provider, model)
         .await
         .map_err(|e| anyhow!(e))?;
@@ -131,6 +141,7 @@ pub(crate) async fn transcribe<R: Runtime>(
             model,
             language,
             allow_empty,
+            post_recording: post_recording.filter(|_| provider == ProviderId::GigaAm),
         },
         keep_running,
         on_progress,
@@ -141,7 +152,8 @@ pub(crate) async fn transcribe<R: Runtime>(
             duration_seconds,
             transcripts,
             speech_segments,
-        } => Ok((duration_seconds, transcripts, speech_segments)),
+            provenance,
+        } => Ok((duration_seconds, transcripts, speech_segments, provenance)),
         _ => bail!("Unexpected worker result"),
     }
 }
@@ -150,6 +162,7 @@ pub(crate) async fn speakers<R: Runtime>(
     path: PathBuf,
     engine: String,
     collapse: bool,
+    system_track: bool,
     keep_running: impl Fn() -> bool,
     on_progress: impl Fn(Progress),
 ) -> Result<Vec<SpeakerTurn>> {
@@ -159,6 +172,7 @@ pub(crate) async fn speakers<R: Runtime>(
             path,
             engine,
             collapse,
+            system_track,
         },
         keep_running,
         on_progress,
@@ -433,9 +447,15 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
             path,
             engine,
             collapse,
+            system_track,
         } => {
             progress("decoding", 5, "Decoding audio for speaker diarization");
-            let turns = crate::audio::diarization::compute_in_worker(&path, &engine, collapse)?;
+            let turns = crate::audio::diarization::compute_in_worker(
+                &path,
+                &engine,
+                collapse,
+                system_track,
+            )?;
             Ok(Output::Speakers(turns))
         }
         Request::Voiceprints { path, clips } => {
@@ -453,6 +473,7 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
             model,
             language,
             allow_empty,
+            post_recording,
         } => {
             let path = if let Some(destination) = copy_to {
                 progress("copying", 10, "Copying audio file");
@@ -465,82 +486,158 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
             } else {
                 path
             };
-            let decoded = crate::audio::decoder::decode_audio_file_with_progress(
-                &path,
-                Some(Box::new(|p, m| progress("decoding", 15 + p / 20, m))),
-            )?;
-            let duration_seconds = decoded.duration_seconds;
-            let samples = decoded.to_whisper_format_with_progress(Some(Box::new(|p, m| {
-                progress("resampling", 20 + p / 20, m)
-            })));
-            drop(decoded);
-            progress("vad", 25, "Detecting speech");
-            let segments = crate::audio::vad::get_speech_chunks_with_progress(
-                &samples,
-                VAD_REDEMPTION_TIME_MS,
-                |p, count| {
-                    progress(
-                        "vad",
-                        25 + p / 20,
-                        format!("Detecting speech: {p}% ({count} segments)"),
-                    );
-                    true
-                },
-            )?;
-            drop(samples);
-            let speech_segments = segments.len();
+            use crate::audio::decoder::{decode_recording_stream, RecordingStream};
+            let tracks = if post_recording
+                .as_ref()
+                .is_some_and(|post| post.source_tracks)
+            {
+                decode_recording_stream(&path, RecordingStream::System)?
+                    .map(|system| {
+                        let microphone =
+                            decode_recording_stream(&path, RecordingStream::Microphone)?
+                                .context("Recording is missing its microphone track")?;
+                        Ok::<_, anyhow::Error>((microphone, system))
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            let (duration_seconds, inputs) = if let Some((microphone, system)) = tracks {
+                let duration = microphone.duration_seconds.max(system.duration_seconds);
+                let mut mic = microphone.to_whisper_format_with_progress(None);
+                let sys = system.to_whisper_format_with_progress(None);
+                crate::audio::saved_transcription::suppress_echo(&mut mic, &sys);
+                (
+                    duration,
+                    vec![
+                        (Some(RecordingSource::Microphone), mic),
+                        (Some(RecordingSource::System), sys),
+                    ],
+                )
+            } else {
+                let decoded = crate::audio::decoder::decode_audio_file_with_progress(
+                    &path,
+                    Some(Box::new(|p, m| progress("decoding", 15 + p / 20, m))),
+                )?;
+                let samples = decoded.to_whisper_format_with_progress(Some(Box::new(|p, m| {
+                    progress("resampling", 20 + p / 20, m)
+                })));
+                (
+                    decoded.duration_seconds,
+                    vec![(
+                        post_recording.as_ref().map(|_| RecordingSource::Mix),
+                        samples,
+                    )],
+                )
+            };
+            let mut output = Vec::new();
+            let mut engine = None;
+            let mut speech_segments = 0;
+            let mut corrector = post_recording.as_ref().map(|_| Corrector::new(&models));
+            let track_count = inputs.len();
+            for (track, (recording_source, samples)) in inputs.into_iter().enumerate() {
+                let track_progress =
+                    |percent: u32| 25 + (track as u32 * 55 + percent) / track_count as u32;
+                progress("vad", track_progress(0), "Detecting speech");
+                let segments = crate::audio::vad::get_speech_chunks_with_progress(
+                    &samples,
+                    VAD_REDEMPTION_TIME_MS,
+                    |p, count| {
+                        progress(
+                            "vad",
+                            track_progress(p / 20),
+                            format!("Detecting speech: {p}% ({count} segments)"),
+                        );
+                        true
+                    },
+                )?;
+                speech_segments += segments.len();
+                let mut pieces = Vec::new();
+                for (index, segment) in segments.into_iter().enumerate() {
+                    if segment.samples.len() > 25 * 16000 {
+                        pieces.extend(
+                            crate::audio::common::split_segment_at_silence(&segment, 25 * 16000)
+                                .into_iter()
+                                .map(|piece| (index, piece)),
+                        );
+                    } else {
+                        pieces.push((index, segment));
+                    }
+                }
+                let mut transcripts = Vec::new();
+                if !pieces.is_empty() {
+                    if engine.is_none() {
+                        progress(
+                            "transcribing",
+                            track_progress(5),
+                            "Loading transcription engine",
+                        );
+                        engine = Some(
+                            TranscriptionEngine::for_worker(models.clone(), provider, &model)
+                                .await
+                                .map_err(|e| anyhow!(e))?,
+                        );
+                    }
+                    let engine = engine.as_ref().unwrap();
+                    let count = pieces.len();
+                    for (i, (source, piece)) in pieces.into_iter().enumerate() {
+                        progress(
+                            "transcribing",
+                            track_progress(5 + (i * 50 / count) as u32),
+                            format!("Transcribing segment {} of {count}", i + 1),
+                        );
+                        if piece.samples.len() < 1600 {
+                            continue;
+                        }
+                        let result = engine
+                            .transcribe(piece.samples, language.clone())
+                            .await
+                            .map_err(|e| anyhow!(e))?;
+                        if !result.text.trim().is_empty() {
+                            transcripts.push((
+                                source,
+                                (
+                                    result.text,
+                                    piece.start_timestamp_ms,
+                                    piece.end_timestamp_ms,
+                                    result.words,
+                                ),
+                            ));
+                        }
+                    }
+                }
+                for mut utterance in crate::audio::common::rejoin_split_utterances(transcripts) {
+                    let corrections = if let (Some(corrector), Some(post)) =
+                        (&mut corrector, &post_recording)
+                    {
+                        let boundaries = if recording_source == Some(RecordingSource::Microphone) {
+                            &[]
+                        } else {
+                            post.speaker_boundaries.as_slice()
+                        };
+                        corrector.correct(&mut utterance, &samples, boundaries)
+                    } else {
+                        Vec::new()
+                    };
+                    output.push((
+                        utterance,
+                        Provenance {
+                            source: recording_source,
+                            corrections,
+                        },
+                    ));
+                }
+            }
             if speech_segments == 0 && !allow_empty {
                 bail!("No speech detected in audio file");
             }
-            let mut pieces = Vec::new();
-            for (index, segment) in segments.into_iter().enumerate() {
-                if segment.samples.len() > 25 * 16000 {
-                    pieces.extend(
-                        crate::audio::common::split_segment_at_silence(&segment, 25 * 16000)
-                            .into_iter()
-                            .map(|piece| (index, piece)),
-                    );
-                } else {
-                    pieces.push((index, segment));
-                }
-            }
-            let mut transcripts = Vec::new();
-            if !pieces.is_empty() {
-                progress("transcribing", 30, "Loading transcription engine");
-                let engine = TranscriptionEngine::for_worker(models, provider, &model)
-                    .await
-                    .map_err(|e| anyhow!(e))?;
-                let count = pieces.len();
-                for (i, (source, piece)) in pieces.into_iter().enumerate() {
-                    progress(
-                        "transcribing",
-                        30 + (i * 50 / count) as u32,
-                        format!("Transcribing segment {} of {count}", i + 1),
-                    );
-                    if piece.samples.len() < 1600 {
-                        continue;
-                    }
-                    let result = engine
-                        .transcribe(piece.samples, language.clone())
-                        .await
-                        .map_err(|e| anyhow!(e))?;
-                    if !result.text.trim().is_empty() {
-                        transcripts.push((
-                            source,
-                            (
-                                result.text,
-                                piece.start_timestamp_ms,
-                                piece.end_timestamp_ms,
-                                result.words,
-                            ),
-                        ));
-                    }
-                }
-            }
+            output.sort_by(|a, b| a.0 .1.total_cmp(&b.0 .1));
+            let (transcripts, provenance) = output.into_iter().unzip();
             Ok(Output::Transcript {
                 duration_seconds,
-                transcripts: crate::audio::common::rejoin_split_utterances(transcripts),
+                transcripts,
                 speech_segments,
+                provenance,
             })
         }
         #[cfg(test)]
@@ -704,6 +801,7 @@ mod tests {
             model: crate::gigaam_engine::MODEL_NAME.into(),
             language: None,
             allow_empty: false,
+            post_recording: None,
         };
         input.models = models;
         input.runtime = Some(resources.join("onnxruntime/onnxruntime.dll"));
@@ -821,6 +919,7 @@ mod tests {
                 model: "no-model-needed-for-silence".into(),
                 language: None,
                 allow_empty,
+                post_recording: None,
             };
             input.runtime = Some(resources.join("onnxruntime/onnxruntime.dll"));
             input.silero = Some(resources.join("silero/silero_vad.onnx"));
@@ -836,6 +935,7 @@ mod tests {
                         duration_seconds,
                         transcripts,
                         speech_segments,
+                        ..
                     } => {
                         assert!((duration_seconds - 2.0).abs() < 0.01);
                         assert!(transcripts.is_empty());
@@ -992,6 +1092,70 @@ mod tests {
             .unwrap(),
             Output::Probe
         ));
+    }
+
+    #[tokio::test]
+    #[ignore = "uses local AAC and ONNX fixtures"]
+    async fn recording_tracks_and_mix_use_expected_sources() {
+        let fixture =
+            PathBuf::from(std::env::var_os("RU_MEET_SAVED_TRANSCRIPTION_FIXTURE").unwrap());
+        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+        let dir = tempfile::tempdir().unwrap();
+        let scheduler = Arc::new(crate::background_work::Scheduler::default());
+        for (filename, post_recording, source_tracks, expected) in [
+            (
+                "separate.mp4",
+                true,
+                true,
+                vec![
+                    Some(RecordingSource::Microphone),
+                    Some(RecordingSource::System),
+                ],
+            ),
+            ("mix.mp4", true, true, vec![Some(RecordingSource::Mix)]),
+            (
+                "separate.mp4",
+                true,
+                false,
+                vec![Some(RecordingSource::Mix)],
+            ),
+            ("separate.mp4", false, true, vec![None]),
+        ] {
+            let mut input = envelope(dir.path(), false);
+            input.request = Request::Transcribe {
+                path: fixture.join(filename),
+                copy_to: None,
+                provider: ProviderId::GigaAm,
+                model: crate::gigaam_engine::MODEL_NAME.into(),
+                language: None,
+                allow_empty: false,
+                post_recording: post_recording.then_some(PostRecording {
+                    source_tracks,
+                    speaker_boundaries: Vec::new(),
+                }),
+            };
+            input.models = fixture.join("models");
+            input.runtime = Some(resources.join("onnxruntime/onnxruntime.dll"));
+            input.silero = Some(resources.join("silero/silero_vad.onnx"));
+            let Output::Transcript {
+                transcripts,
+                provenance,
+                ..
+            } = execute(input, fixture_command, &scheduler, || true, |_| {})
+                .await
+                .unwrap()
+            else {
+                panic!("expected a transcript");
+            };
+            assert_eq!(provenance.len(), transcripts.len());
+            for source in expected {
+                assert!(
+                    provenance.iter().any(|entry| entry.source == source),
+                    "{filename}: missing {source:?}"
+                );
+            }
+            assert!(transcripts.windows(2).all(|pair| pair[0].1 <= pair[1].1));
+        }
     }
 }
 

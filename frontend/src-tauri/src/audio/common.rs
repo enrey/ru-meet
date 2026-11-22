@@ -26,6 +26,8 @@ pub(crate) fn create_transcript_segments(transcripts: &[TimedUtterance]) -> Vec<
                 duration: Some(duration),
                 speaker: None,
                 words: words.clone(),
+                recording_source: None,
+                term_corrections: Vec::new(),
             }
         })
         .collect()
@@ -50,6 +52,8 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "duration": s.duration,
                 "speaker": s.speaker,
                 "words": s.words,
+                "recording_source": s.recording_source,
+                "term_corrections": s.term_corrections,
                 "sequence_id": i
             })
         }).collect::<Vec<_>>()

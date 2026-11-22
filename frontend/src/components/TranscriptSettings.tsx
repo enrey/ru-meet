@@ -8,6 +8,7 @@ import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
 import { GigaAMModelManager } from './GigaAMModelManager';
+import { PostRecordingTranscription } from './PostRecordingTranscription';
 import { useI18n } from '@/lib/i18n';
 
 
@@ -189,6 +190,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                 onModelSelect={handleGigaAMModelSelect}
                                 autoSave={true}
                             />
+                            <PostRecordingTranscription />
                         </div>
                     )}
 

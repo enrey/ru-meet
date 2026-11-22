@@ -18,6 +18,8 @@ pub struct RecordingPreferences {
     /// Saving audio is always live; recognition can run after capture.
     #[serde(default)]
     pub realtime_transcription: bool,
+    #[serde(default = "default_post_recording_transcription")]
+    pub post_recording_transcription: bool,
     pub file_format: String,
     #[serde(default)]
     pub preferred_mic_device: Option<String>,
@@ -38,6 +40,7 @@ impl Default for RecordingPreferences {
             save_folder: get_default_recordings_folder(),
             auto_save: true,
             realtime_transcription: false,
+            post_recording_transcription: default_post_recording_transcription(),
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
@@ -49,6 +52,10 @@ impl Default for RecordingPreferences {
 }
 
 fn default_trim_silent_edges() -> bool {
+    true
+}
+
+fn default_post_recording_transcription() -> bool {
     true
 }
 
@@ -431,14 +438,14 @@ mod realtime_preference_tests {
         let value = serde_json::json!({"save_folder":"custom-recordings","auto_save":false,"file_format":"mp4", "preferred_mic_device":"mic"});
         let prefs: RecordingPreferences = serde_json::from_value(value).unwrap();
         assert!(!prefs.realtime_transcription);
+        assert!(prefs.post_recording_transcription);
         assert!(!prefs.auto_save);
         assert_eq!(prefs.preferred_mic_device.as_deref(), Some("mic"));
         let mut value = serde_json::to_value(prefs).unwrap();
         value["realtime_transcription"] = serde_json::json!(true);
-        assert!(
-            serde_json::from_value::<RecordingPreferences>(value)
-                .unwrap()
-                .realtime_transcription
-        );
+        value["post_recording_transcription"] = serde_json::json!(false);
+        let prefs = serde_json::from_value::<RecordingPreferences>(value).unwrap();
+        assert!(prefs.realtime_transcription);
+        assert!(!prefs.post_recording_transcription);
     }
 }

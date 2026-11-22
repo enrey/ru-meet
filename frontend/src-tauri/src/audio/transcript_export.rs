@@ -191,6 +191,15 @@ pub(crate) async fn export_diarized_transcripts(pool: &SqlitePool, meeting_id: &
             duration: row.duration,
             speaker: row.speaker,
             words: Vec::new(),
+            recording_source: row
+                .recording_source
+                .as_deref()
+                .and_then(super::saved_transcription::RecordingSource::from_str),
+            term_corrections: row
+                .term_corrections
+                .as_deref()
+                .and_then(|s| serde_json::from_str(s).ok())
+                .unwrap_or_default(),
         })
         .collect();
     super::common::write_transcripts_json(&folder, &segments)
