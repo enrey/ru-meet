@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
-import { AudioLines, FileText, Loader2, Mic, Pencil, ScanSearch, Search, Sparkles, Trash2, Upload, UserRound, UsersRound, Volume2, WandSparkles, X, type LucideIcon } from 'lucide-react';
+import { AudioLines, FileText, Loader2, Mic, Pencil, ScanSearch, Search, Sparkles, Star, Trash2, Upload, UserRound, UsersRound, Volume2, WandSparkles, X, type LucideIcon } from 'lucide-react';
 import { useSidebar, type MeetingListItem, type MeetingStages, type StageState } from '@/components/Sidebar/SidebarProvider';
 import { ConfirmationModal } from '@/components/ConfirmationModel/confirmation-modal';
 import { Dialog, DialogContent, DialogFooter, DialogTitle } from '@/components/ui/dialog';
@@ -18,17 +18,18 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { voiceprints } from '@/services/voiceprintService';
 import { getIntlLocale, useI18n, type TranslateFn } from '@/lib/i18n';
 
-type SummaryFilter = 'all' | 'with' | 'without';
+type SummaryFilter = 'all' | 'with' | 'without' | 'favorites';
 
 const FILTERS: { value: SummaryFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'with', label: 'With summary' },
   { value: 'without', label: 'Without summary' },
+  { value: 'favorites', label: 'Favorites' },
 ];
 
 const SEARCH_DEBOUNCE_MS = 250;
 const RUNNING_REFRESH_MS = 3000;
-const ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_130px_110px_170px_120px_108px] items-center gap-4 px-5';
+const ROW_GRID = 'grid grid-cols-[minmax(0,1fr)_130px_110px_170px_120px_144px] items-center gap-4 px-5';
 /** Lines the speakers cell fits in a row. */
 const SPEAKER_LINES = 3;
 
@@ -586,6 +587,7 @@ export default function MeetingsLibraryPage() {
     return meetings.filter((meeting) => {
       if (filter === 'with' && !meeting.hasSummary) return false;
       if (filter === 'without' && meeting.hasSummary) return false;
+      if (filter === 'favorites' && !meeting.isFavorite) return false;
       const names = allSpeakerNames(meeting);
       if (!pinnedSpeakers.every((pin) => names.some((name) => sameName(name, pin)))) return false;
       if (speakerNeedle && !names.some((name) => name.toLowerCase().includes(speakerNeedle))) return false;
@@ -596,6 +598,19 @@ export default function MeetingsLibraryPage() {
   const groups = useMemo(() => groupByDate(visibleMeetings, t), [visibleMeetings, t]);
   const timeFormat = useMemo(() => new Intl.DateTimeFormat(getIntlLocale(), { hour: '2-digit', minute: '2-digit' }), []);
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(getIntlLocale(), { day: 'numeric', month: 'short', weekday: 'short' }), []);
+
+  const toggleFavorite = useCallback(async (meeting: MeetingListItem) => {
+    const favorite = !meeting.isFavorite;
+    const apply = (value: boolean) => setMeetings((current) =>
+      current.map((item) => (item.id === meeting.id ? { ...item, isFavorite: value } : item)));
+    apply(favorite);
+    try {
+      await invoke('api_set_meeting_favorite', { meetingId: meeting.id, favorite });
+    } catch (error) {
+      apply(!favorite);
+      toast.error(t('Could not update favorites'), { description: String(error) });
+    }
+  }, [setMeetings, t]);
 
   const openMeeting = useCallback((meeting: MeetingListItem) => {
     setCurrentMeeting({ id: meeting.id, title: meeting.title });
@@ -832,6 +847,7 @@ export default function MeetingsLibraryPage() {
                       <div>
                         <StageIcons meeting={meeting} t={t} />
                       </div>
+                      <div className="flex items-center justify-end gap-1">
                       <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                         {meeting.stages?.transcript?.state === 'done' && (
                           <button
@@ -871,6 +887,25 @@ export default function MeetingsLibraryPage() {
                           className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-red-200 hover:text-red-600"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                        <button
+                          type="button"
+                          aria-pressed={meeting.isFavorite}
+                          aria-label={meeting.isFavorite ? t('Remove from favorites') : t('Add to favorites')}
+                          title={meeting.isFavorite ? t('Remove from favorites') : t('Add to favorites')}
+                          // A mouse click must not leave focus in the row: the
+                          // row's hover actions also show on focus-within.
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void toggleFavorite(meeting);
+                          }}
+                          className={`grid h-8 w-8 shrink-0 place-items-center rounded-md transition-colors hover:bg-amber-50 ${
+                            meeting.isFavorite ? 'text-amber-500' : 'text-slate-300 hover:text-amber-500'
+                          }`}
+                        >
+                          <Star className={`h-4 w-4 ${meeting.isFavorite ? 'fill-amber-400' : ''}`} />
                         </button>
                       </div>
                     </div>

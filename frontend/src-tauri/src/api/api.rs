@@ -50,6 +50,7 @@ pub struct MeetingListItem {
     pub stages: MeetingStages,
     /// The step the background processing (`crate::processing`) is on.
     pub processing: Option<crate::processing::Step>,
+    pub is_favorite: bool,
 }
 
 /// Names the meeting list query joins with U+001F.
@@ -536,6 +537,7 @@ pub async fn api_get_meetings<R: Runtime>(
                         preview,
                         stages,
                         processing,
+                        is_favorite: row.is_favorite,
                     }
                 })
                 .collect();
@@ -1177,6 +1179,19 @@ pub async fn api_save_meeting_title<R: Runtime>(
             log_error!("Failed to update meeting {}", e);
             Err(format!("Failed to update meeting: {}", e))
         }
+    }
+}
+
+#[tauri::command]
+pub async fn api_set_meeting_favorite(
+    state: tauri::State<'_, AppState>,
+    meeting_id: String,
+    favorite: bool,
+) -> Result<(), String> {
+    match MeetingsRepository::set_favorite(state.db_manager.pool(), &meeting_id, favorite).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("No meeting found with id {meeting_id}")),
+        Err(error) => Err(format!("Failed to update favorite: {error}")),
     }
 }
 

@@ -72,6 +72,7 @@ impl MeetingsRepository {
                 m.title,
                 m.created_at,
                 m.folder_path,
+                m.is_favorite,
                 durations.duration_seconds,
                 COALESCE(durations.transcript_count, 0) AS transcript_count,
                 COALESCE(speakers.speaker_count, 0) AS speaker_count,
@@ -277,6 +278,20 @@ impl MeetingsRepository {
         .await?;
 
         Ok((transcripts, total.0))
+    }
+
+    /// Mark or unmark a meeting as a favorite. `false` when no such meeting.
+    pub async fn set_favorite(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        favorite: bool,
+    ) -> Result<bool, SqlxError> {
+        let result = sqlx::query("UPDATE meetings SET is_favorite = ? WHERE id = ?")
+            .bind(favorite)
+            .bind(meeting_id)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn update_meeting_title(
@@ -510,7 +525,7 @@ mod tests {
     async fn meeting_list_aggregates_child_tables() {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         for ddl in [
-            "CREATE TABLE meetings (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT, folder_path TEXT)",
+            "CREATE TABLE meetings (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT, folder_path TEXT, is_favorite INTEGER NOT NULL DEFAULT 0)",
             "CREATE TABLE transcripts (id TEXT, meeting_id TEXT, transcript TEXT, audio_start_time REAL, audio_end_time REAL)",
             "CREATE TABLE diarization_turns (meeting_id TEXT, start_time REAL, end_time REAL, speaker TEXT, original_speaker TEXT)",
             "CREATE TABLE summary_processes (meeting_id TEXT PRIMARY KEY, status TEXT, result TEXT, error TEXT)",
@@ -518,8 +533,8 @@ mod tests {
             "CREATE TABLE meeting_speaker_profiles (meeting_id TEXT, speaker TEXT, profile_id TEXT, status TEXT)",
             "INSERT INTO voice_profiles VALUES ('p1', 'Вера'), ('p2', 'Глеб')",
             "INSERT INTO meeting_speaker_profiles VALUES ('b', 'Speaker 1', 'p1', 'suggested'), ('b', 'Speaker 3', 'p2', 'rejected')",
-            "INSERT INTO meetings VALUES ('a', 'Old', '2026-10-01T10:00:00Z', '2026-10-01T10:00:00Z', NULL)",
-            "INSERT INTO meetings VALUES ('b', 'New', '2026-10-02T10:00:00Z', '2026-10-02T10:00:00Z', NULL)",
+            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path) VALUES ('a', 'Old', '2026-10-01T10:00:00Z', '2026-10-01T10:00:00Z', NULL)",
+            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path) VALUES ('b', 'New', '2026-10-02T10:00:00Z', '2026-10-02T10:00:00Z', NULL)",
             "INSERT INTO transcripts VALUES ('1', 'b', 'second', 5.0, 61.5), ('2', 'b', 'first', 0.0, 4.0)",
             "INSERT INTO diarization_turns VALUES ('b', 0, 1, 'Speaker 1', NULL), ('b', 1, 2, 'Анна', 'Speaker 2'), ('b', 2, 3, 'Speaker 1', NULL), ('b', 3, 3.5, 'Others', NULL), ('b', 4, 9, 'Борис', NULL)",
             "INSERT INTO summary_processes VALUES ('b', 'COMPLETED', '{\"markdown\":\"Итог\"}', NULL), ('a', 'FAILED', NULL, 'boom')",
@@ -543,6 +558,15 @@ mod tests {
         assert_eq!(old.named_speakers, None);
         assert_eq!(new.suggested_speakers.as_deref(), Some("Вера"));
         assert_eq!(old.suggested_speakers, None);
+        assert!(!old.is_favorite && !new.is_favorite);
+
+        assert!(MeetingsRepository::set_favorite(&pool, "a", true).await.unwrap());
+        assert!(!MeetingsRepository::set_favorite(&pool, "missing", true).await.unwrap());
+        let rows = MeetingsRepository::get_meeting_list(&pool).await.unwrap();
+        assert_eq!(rows.iter().map(|r| (r.id.as_str(), r.is_favorite)).collect::<Vec<_>>(), [("b", false), ("a", true)]);
+        MeetingsRepository::set_favorite(&pool, "a", false).await.unwrap();
+        let rows = MeetingsRepository::get_meeting_list(&pool).await.unwrap();
+        assert!(!rows[1].is_favorite);
         assert_eq!(old.summary_status.as_deref(), Some("failed"));
         assert_eq!(old.summary_error.as_deref(), Some("boom"));
         assert_eq!(old.summary_markdown, None);

@@ -798,6 +798,7 @@ pub fn run() {
             api::api_get_meeting_transcripts,
             api::api_find_transcript_at_time,
             api::api_save_meeting_title,
+            api::api_set_meeting_favorite,
             api::api_save_transcript,
             api::api_update_transcript_speakers,
             api::open_meeting_folder,

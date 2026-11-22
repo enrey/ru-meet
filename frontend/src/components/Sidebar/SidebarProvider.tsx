@@ -33,6 +33,7 @@ export interface MeetingListItem extends CurrentMeeting {
   stages: MeetingStages;
   /** The step the background processing is on, while it runs. */
   processing?: 'speakers' | 'summary' | 'speech' | null;
+  isFavorite: boolean;
 }
 
 export type StageState = 'none' | 'running' | 'done' | 'failed';

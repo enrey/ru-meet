@@ -30,6 +30,7 @@ pub struct MeetingListRow {
     pub first_transcript: Option<String>,
     pub transcript_count: i64,
     pub folder_path: Option<String>,
+    pub is_favorite: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
