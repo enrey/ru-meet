@@ -414,7 +414,7 @@ impl SummaryService {
         ) = if provider == LLMProvider::CustomOpenAI {
             match SettingsRepository::get_custom_openai_config(&pool).await {
                 Ok(Some(config)) => {
-                    info!("✓ Using custom OpenAI endpoint: {}", config.endpoint);
+                    info!("Using configured custom OpenAI endpoint");
                     (
                         Some(config.endpoint),
                         config.api_key,
@@ -717,10 +717,7 @@ impl SummaryService {
         error_msg: &str,
     ) {
         crate::tasks::fail_current(error_msg);
-        error!(
-            "Processing failed for meeting_id {}: {}",
-            meeting_id, error_msg
-        );
+        error!("Summary processing failed for meeting_id {}", meeting_id);
         match SummaryProcessesRepository::update_process_failed(
             pool, meeting_id, started_at, error_msg,
         )

@@ -505,6 +505,12 @@ async fn generate_summary_once(
             .unwrap_or_else(|error| format!("Failed to read LLM error response body: {error}"));
         if provider != &LLMProvider::Ollama || !ollama_rejects_reasoning_effort(status, &error_body)
         {
+            warn!(
+                "LLM API request failed; provider={}, status={}, response_bytes={}",
+                provider_name(provider),
+                status,
+                error_body.len()
+            );
             return Err(format!(
                 "LLM API request failed with status {}: {}",
                 status, error_body
@@ -542,6 +548,12 @@ async fn generate_summary_once(
         let error_body = await_or_cancel(response.text(), cancellation_token)
             .await?
             .unwrap_or_else(|error| format!("Failed to read LLM error response body: {error}"));
+        warn!(
+            "LLM compatibility retry failed; provider={}, status={}, response_bytes={}",
+            provider_name(provider),
+            status,
+            error_body.len()
+        );
         return Err(format!(
             "LLM API request failed with status {}: {}",
             status, error_body
