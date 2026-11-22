@@ -221,6 +221,81 @@ pub(crate) fn resolve_mic_or_default<R: Runtime>(
     }
 }
 
+/// System audio for a new recording: the requested endpoint, else the one saved
+/// in recording preferences, else the default output. On Windows a name that
+/// no longer exists is skipped here, so the endpoint that actually opens is the
+/// one recorded in metadata; device names change when Windows renumbers an
+/// endpoint ("2- SteelSeries..." becoming "5- SteelSeries...").
+pub(crate) fn resolve_system_for_start(
+    requested: Option<&str>,
+    saved: Option<&str>,
+) -> Option<Arc<super::AudioDevice>> {
+    #[cfg(target_os = "windows")]
+    {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        let outputs: Vec<String> = cpal::host_from_id(cpal::HostId::Wasapi)
+            .ok()
+            .and_then(|host| host.output_devices().ok())
+            .map(|devices| devices.filter_map(|device| device.name().ok()).collect())
+            .unwrap_or_default();
+        let candidates = [requested, saved].into_iter().flatten();
+        match select_system_candidate(candidates, &outputs) {
+            Some(name) => {
+                if Some(name) != requested {
+                    if let Some(requested) = requested {
+                        warn!("Requested system audio '{requested}' is not available; using saved '{name}'");
+                    }
+                }
+                resolve_system_or_default(Some(name))
+            }
+            None => {
+                if let Some(name) = requested.or(saved) {
+                    warn!("System audio '{name}' is not available; using the default output");
+                }
+                resolve_system_or_default(None)
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        resolve_system_or_default(requested.or(saved))
+    }
+}
+
+/// First candidate ("Name (output)") matching an existing endpoint the way
+/// `get_windows_device` matches it.
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+fn select_system_candidate<'a>(
+    candidates: impl IntoIterator<Item = &'a str>,
+    outputs: &[String],
+) -> Option<&'a str> {
+    candidates.into_iter().find(|candidate| {
+        parse_audio_device(candidate).is_ok_and(|device| {
+            outputs
+                .iter()
+                .any(|output| *output == device.name || output.contains(&device.name))
+        })
+    })
+}
+
+#[cfg(test)]
+mod system_candidate_tests {
+    use super::select_system_candidate;
+
+    #[test]
+    fn stale_requested_endpoint_falls_back_to_saved_one() {
+        let outputs = [
+            "Наушники (5- SteelSeries Arctis Nova 5)".to_string(),
+            "Realtek Digital Output (2- Realtek(R) Audio)".to_string(),
+        ];
+        let stale = "Наушники (2- SteelSeries Arctis Nova 5) (output)";
+        let saved = "Realtek Digital Output (2- Realtek(R) Audio) (output)";
+        assert_eq!(select_system_candidate([stale, saved], &outputs), Some(saved));
+        assert_eq!(select_system_candidate([saved, stale], &outputs), Some(saved));
+        assert_eq!(select_system_candidate([stale], &outputs), None);
+    }
+}
+
 /// System-audio analog of `resolve_mic_or_default`: `Some(name)` -> parse it,
 /// falling back to the default output if unparseable; `None` ("Default System
 /// Audio" in the UI) -> default output. Returns `None` only when no output

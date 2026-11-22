@@ -161,15 +161,14 @@ impl RecordingSession {
                 .as_ref()
                 .and_then(|preferences| preferences.preferred_mic_device.as_deref())
         });
-        let preferred_system = system_audio.as_deref().or_else(|| {
-            preferences
-                .as_ref()
-                .and_then(|preferences| preferences.preferred_system_device.as_deref())
-        });
+        let saved_system = preferences
+            .as_ref()
+            .and_then(|preferences| preferences.preferred_system_device.as_deref());
 
         #[cfg(not(target_os = "macos"))]
         let mic_device = recording_commands::resolve_mic_or_default(&app, preferred_mic);
-        let system_device = recording_commands::resolve_system_or_default(preferred_system);
+        let system_device =
+            recording_commands::resolve_system_for_start(system_audio.as_deref(), saved_system);
         #[cfg(target_os = "macos")]
         recording_commands::prepare_audio_for_recording(system_device.as_deref()).await?;
         #[cfg(target_os = "macos")]

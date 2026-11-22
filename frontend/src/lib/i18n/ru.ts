@@ -524,6 +524,8 @@ export const ru: Record<string, Translation> = {
   "Default device": "Устройство по умолчанию",
   "Switching…": "Переключение…",
   "{provider}: {count} operations": "{provider}: операций — {count}",
+  "No sound on {device}": "Нет звука на «{device}»",
+  "If you hear the call elsewhere, choose that output device": "Если звонок слышен через другое устройство, выберите его",
   "Live capture signal": "Сигнал захвата",
   "Detecting the active GigaAM execution mode…": "Определение режима выполнения GigaAM…",
   "ONNX Runtime split the graph between {provider} and CPU": "ONNX Runtime распределил граф между {provider} и CPU",

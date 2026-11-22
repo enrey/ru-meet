@@ -3,7 +3,9 @@
 use crate::{
     audio::{
         diarization::SpeakerTurn,
-        saved_transcription::{Corrector, PostRecording, Provenance, RecordingSource},
+        saved_transcription::{
+            has_mixed_word, Corrector, PostRecording, Provenance, RecordingSource, Track,
+        },
         transcription::{ProviderId, TranscriptionEngine},
     },
     background_process::Process,
@@ -486,35 +488,10 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
             } else {
                 path
             };
-            use crate::audio::decoder::{decode_recording_stream, RecordingStream};
-            let tracks = if post_recording
-                .as_ref()
-                .is_some_and(|post| post.source_tracks)
-            {
-                decode_recording_stream(&path, RecordingStream::System)?
-                    .map(|system| {
-                        let microphone =
-                            decode_recording_stream(&path, RecordingStream::Microphone)?
-                                .context("Recording is missing its microphone track")?;
-                        Ok::<_, anyhow::Error>((microphone, system))
-                    })
-                    .transpose()?
-            } else {
-                None
-            };
-            let (duration_seconds, inputs) = if let Some((microphone, system)) = tracks {
-                let duration = microphone.duration_seconds.max(system.duration_seconds);
-                let mut mic = microphone.to_whisper_format_with_progress(None);
-                let sys = system.to_whisper_format_with_progress(None);
-                crate::audio::saved_transcription::suppress_echo(&mut mic, &sys);
-                (
-                    duration,
-                    vec![
-                        (Some(RecordingSource::Microphone), mic),
-                        (Some(RecordingSource::System), sys),
-                    ],
-                )
-            } else {
+            // The transcript is always built from the mix: one ordered
+            // timeline that diarization splits by speaker. Source tracks are
+            // only consulted to refine doubtful words, never to add rows.
+            let (duration_seconds, inputs) = {
                 let decoded = crate::audio::decoder::decode_audio_file_with_progress(
                     &path,
                     Some(Box::new(|p, m| progress("decoding", 15 + p / 20, m))),
@@ -606,19 +583,31 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
                         }
                     }
                 }
-                for mut utterance in crate::audio::common::rejoin_split_utterances(transcripts) {
-                    let corrections = if let (Some(corrector), Some(post)) =
-                        (&mut corrector, &post_recording)
+                let utterances = crate::audio::common::rejoin_split_utterances(transcripts);
+                // Source tracks only refine doubtful words; decode them only
+                // when the transcript actually has one.
+                let tracks = match &post_recording {
+                    Some(post)
+                        if post.source_tracks
+                            && corrector.is_some()
+                            && utterances.iter().any(|u| has_mixed_word(&u.0)) =>
                     {
-                        let boundaries = if recording_source == Some(RecordingSource::Microphone) {
-                            &[]
+                        source_tracks(&path)
+                    }
+                    _ => Vec::new(),
+                };
+                for mut utterance in utterances {
+                    let corrections =
+                        if let (Some(corrector), Some(post)) = (&mut corrector, &post_recording) {
+                            corrector.correct(
+                                &mut utterance,
+                                &samples,
+                                &tracks,
+                                &post.speaker_boundaries,
+                            )
                         } else {
-                            post.speaker_boundaries.as_slice()
+                            Vec::new()
                         };
-                        corrector.correct(&mut utterance, &samples, boundaries)
-                    } else {
-                        Vec::new()
-                    };
                     output.push((
                         utterance,
                         Provenance {
@@ -643,6 +632,23 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
         #[cfg(test)]
         Request::Probe { .. } => unreachable!(),
     }
+}
+
+/// Microphone and system tracks of a ru-meet recording (ADR 0005), for
+/// refining doubtful words. Empty when the file has no source tracks or they
+/// cannot be decoded; the mix is then the only source.
+fn source_tracks(path: &std::path::Path) -> Vec<Track> {
+    use crate::audio::decoder::{decode_recording_stream, RecordingStream};
+    [RecordingStream::Microphone, RecordingStream::System]
+        .into_iter()
+        .filter_map(|stream| match decode_recording_stream(path, stream) {
+            Ok(decoded) => decoded.map(|audio| Track::new(audio.to_whisper_format())),
+            Err(error) => {
+                log::warn!("Could not decode {stream:?} track for term correction: {error:#}");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Built-in LLM goes through the same killable tree, including llama-helper.
@@ -1094,24 +1100,68 @@ mod tests {
         ));
     }
 
+    /// Post-recording pass of one real recording, printed row by row.
+    /// `RU_MEET_RECORDING` is an `audio.mp4`, `RU_MEET_MODELS` the app models.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "uses a local recording and installed models"]
+    async fn saved_recording_rows() {
+        let models = PathBuf::from(std::env::var("RU_MEET_MODELS").unwrap());
+        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+        crate::init_worker_onnx(Some(&resources.join("onnxruntime/onnxruntime.dll"))).unwrap();
+        crate::audio::vad::configure_worker(
+            models.clone(),
+            Some(resources.join("silero/silero_vad.onnx")),
+        );
+        let Output::Transcript {
+            transcripts,
+            provenance,
+            ..
+        } = compute(
+            Request::Transcribe {
+                path: PathBuf::from(std::env::var("RU_MEET_RECORDING").unwrap()),
+                copy_to: None,
+                provider: ProviderId::GigaAm,
+                model: crate::gigaam_engine::MODEL_NAME.into(),
+                language: None,
+                allow_empty: true,
+                post_recording: Some(PostRecording {
+                    source_tracks: true,
+                    speaker_boundaries: Vec::new(),
+                }),
+            },
+            models,
+        )
+        .await
+        .unwrap()
+        else {
+            panic!("expected a transcript")
+        };
+        for ((text, start, end, _), provenance) in transcripts.iter().zip(&provenance) {
+            println!(
+                "ROW {:.2}-{:.2} {:?} {text} | {:?}",
+                start / 1000.0,
+                end / 1000.0,
+                provenance.source,
+                provenance
+                    .corrections
+                    .iter()
+                    .map(|c| format!("{} -> {}", c.original, c.replacement))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
     #[tokio::test]
     #[ignore = "uses local AAC and ONNX fixtures"]
-    async fn recording_tracks_and_mix_use_expected_sources() {
+    async fn recording_transcript_always_comes_from_the_mix() {
         let fixture =
             PathBuf::from(std::env::var_os("RU_MEET_SAVED_TRANSCRIPTION_FIXTURE").unwrap());
         let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
         let dir = tempfile::tempdir().unwrap();
         let scheduler = Arc::new(crate::background_work::Scheduler::default());
         for (filename, post_recording, source_tracks, expected) in [
-            (
-                "separate.mp4",
-                true,
-                true,
-                vec![
-                    Some(RecordingSource::Microphone),
-                    Some(RecordingSource::System),
-                ],
-            ),
+            // Three-stream recordings: one timeline from stream 0, the mix.
+            ("separate.mp4", true, true, vec![Some(RecordingSource::Mix)]),
             ("mix.mp4", true, true, vec![Some(RecordingSource::Mix)]),
             (
                 "separate.mp4",
@@ -1148,11 +1198,8 @@ mod tests {
                 panic!("expected a transcript");
             };
             assert_eq!(provenance.len(), transcripts.len());
-            for source in expected {
-                assert!(
-                    provenance.iter().any(|entry| entry.source == source),
-                    "{filename}: missing {source:?}"
-                );
+            for entry in &provenance {
+                assert_eq!(entry.source, expected[0], "{filename}");
             }
             assert!(transcripts.windows(2).all(|pair| pair[0].1 <= pair[1].1));
         }

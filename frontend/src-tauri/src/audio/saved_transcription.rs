@@ -191,16 +191,67 @@ impl Corrector {
             .ok()
     }
 
+    /// `mix` is the audio the transcript was built from; `tracks` are the
+    /// recording's source tracks (microphone, system) on the same timeline,
+    /// empty for older or imported recordings.
     pub(crate) fn correct(
         &mut self,
         utterance: &mut TimedUtterance,
-        samples: &[f32],
+        mix: &[f32],
+        tracks: &[Track],
         boundaries: &[f64],
     ) -> Vec<TermCorrection> {
-        correct(utterance, samples, boundaries, |audio| {
+        correct(utterance, mix, tracks, boundaries, |audio| {
             self.recognize(audio)
         })
     }
+}
+
+/// A source track and its typical speech level, so tracks recorded at very
+/// different levels (loopback after the output volume) compare fairly.
+pub(crate) struct Track {
+    pub samples: Vec<f32>,
+    level: f32,
+}
+
+impl Track {
+    pub(crate) fn new(samples: Vec<f32>) -> Self {
+        let level = speech_level(&samples);
+        Self { samples, level }
+    }
+
+    /// Window loudness relative to this track's own speech.
+    fn prominence(&self, range: Range<usize>) -> f32 {
+        let window =
+            &self.samples[range.start.min(self.samples.len())..range.end.min(self.samples.len())];
+        if window.is_empty() || self.level <= 0.0 {
+            return 0.0;
+        }
+        rms(window) / self.level
+    }
+}
+
+fn rms(samples: &[f32]) -> f32 {
+    (samples.iter().map(|x| x * x).sum::<f32>() / samples.len().max(1) as f32).sqrt()
+}
+
+/// 90th percentile of 100 ms RMS over the audible part of a track.
+fn speech_level(samples: &[f32]) -> f32 {
+    let mut levels: Vec<f32> = samples
+        .chunks(1600)
+        .map(rms)
+        .filter(|level| *level > 1e-4)
+        .collect();
+    if levels.is_empty() {
+        return 0.0;
+    }
+    levels.sort_by(f32::total_cmp);
+    levels[levels.len() * 9 / 10]
+}
+
+/// Whether any word needs the second model (cheap check before decoding tracks).
+pub(crate) fn has_mixed_word(text: &str) -> bool {
+    LETTERS.find_iter(text).any(|m| is_mixed(m.as_str()))
 }
 
 fn is_mixed(word: &str) -> bool {
@@ -263,7 +314,8 @@ fn patch(
 
 fn correct(
     utterance: &mut TimedUtterance,
-    samples: &[f32],
+    mix: &[f32],
+    tracks: &[Track],
     boundaries: &[f64],
     mut recognize: impl FnMut(&[f32]) -> Option<String>,
 ) -> Vec<TermCorrection> {
@@ -290,23 +342,40 @@ fn correct(
             continue;
         };
         let a = ((start - 2.0).max(utterance.1 / 1000.0) * 16000.0) as usize;
-        let b = (((end + 2.0).min(utterance.2 / 1000.0) * 16000.0) as usize).min(samples.len());
-        let Some(audio) = samples
-            .get(a..b)
-            .filter(|x| (1600..=128000).contains(&x.len()))
-        else {
-            continue;
-        };
-        let Some(candidate) = recognize(audio) else {
-            continue;
-        };
-        if let Some((range, replacement)) = aligned_replacement(&utterance.0, &candidate, chunk) {
-            if range.end <= protected
-                && time_for(&utterance.3, &range)
-                    .is_some_and(|(start, end)| !boundaries.iter().any(|t| start < *t && *t < end))
+        let b = ((end + 2.0).min(utterance.2 / 1000.0) * 16000.0) as usize;
+        // The track carrying this voice first, then the other one, then the
+        // mix; the first reading that fits the surrounding words wins.
+        let word_range = (start * 16000.0) as usize..(end * 16000.0) as usize;
+        let mut sources: Vec<&[f32]> = Vec::with_capacity(tracks.len() + 1);
+        let mut ordered: Vec<&Track> = tracks.iter().collect();
+        ordered.sort_by(|x, y| {
+            y.prominence(word_range.clone())
+                .total_cmp(&x.prominence(word_range.clone()))
+        });
+        sources.extend(ordered.into_iter().map(|track| track.samples.as_slice()));
+        sources.push(mix);
+        for source in sources {
+            let Some(audio) = source
+                .get(a..b.min(source.len()))
+                .filter(|x| (1600..=128000).contains(&x.len()))
+            else {
+                continue;
+            };
+            let Some(candidate) = recognize(audio) else {
+                continue;
+            };
+            if let Some((range, replacement)) =
+                aligned_replacement(&utterance.0, &candidate, chunk.clone())
             {
-                protected = range.start;
-                edits.push(patch(utterance, range, replacement, "multilingual_220m"));
+                if range.end <= protected
+                    && time_for(&utterance.3, &range).is_some_and(|(start, end)| {
+                        !boundaries.iter().any(|t| start < *t && *t < end)
+                    })
+                {
+                    protected = range.start;
+                    edits.push(patch(utterance, range, replacement, "multilingual_220m"));
+                    break;
+                }
             }
         }
     }
@@ -374,50 +443,6 @@ fn aligned_replacement<'a>(
     None
 }
 
-/// Subtract a strong delayed copy of the synchronized system signal. Keep the
-/// residual so overlapping near-end speech is still passed to the VAD.
-pub(crate) fn suppress_echo(microphone: &mut [f32], system: &[f32]) {
-    const WINDOW: usize = 16000;
-    const MAX_DELAY: usize = 4000;
-    for start in (0..microphone.len()).step_by(WINDOW) {
-        let end = (start + WINDOW).min(microphone.len()).min(system.len());
-        let from = start.max(MAX_DELAY);
-        if end.saturating_sub(from) < 3200 {
-            continue;
-        }
-        let estimate = |lag: usize| {
-            let (mut dot, mut mic, mut reference) = (0.0f64, 0.0, 0.0);
-            for i in (from..end).step_by(16) {
-                let a = microphone[i] as f64;
-                let b = system[i - lag] as f64;
-                dot += a * b;
-                mic += a * a;
-                reference += b * b;
-            }
-            let strength = dot.abs() / (mic * reference).sqrt().max(1e-8);
-            (strength, dot / reference.max(1e-8))
-        };
-        let best = |lags: &mut dyn Iterator<Item = usize>| {
-            lags.map(|lag| (lag, estimate(lag)))
-                .max_by(|a, b| a.1 .0.total_cmp(&b.1 .0))
-        };
-        let Some((coarse, _)) = best(&mut (0..=MAX_DELAY).step_by(8)) else {
-            continue;
-        };
-        let Some((lag, (correlation, gain))) =
-            best(&mut (coarse.saturating_sub(7)..=(coarse + 7).min(MAX_DELAY)))
-        else {
-            continue;
-        };
-        if correlation >= 0.65 && gain.abs() <= 2.0 {
-            for i in start.max(lag)..end {
-                let fade = ((i - start).min(end - i - 1) as f32 / 160.0).min(1.0);
-                microphone[i] -= fade * gain as f32 * system[i - lag];
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,7 +450,9 @@ mod tests {
     #[test]
     fn local_correction_does_not_call_second_model() {
         let mut part = ("Сказал «сoрри», потом Docker.".into(), 0.0, 2000.0, vec![]);
-        let changes = correct(&mut part, &[], &[], |_| panic!("unexpected model call"));
+        let changes = correct(&mut part, &[], &[], &[], |_| {
+            panic!("unexpected model call")
+        });
         assert_eq!(part.0, "Сказал «сорри», потом Docker.");
         assert_eq!(changes.len(), 1);
     }
@@ -444,12 +471,12 @@ mod tests {
             .collect();
         let audio = vec![0.0; 48000];
         let before = part.clone();
-        assert!(correct(&mut part, &audio, &[1.0], |_| Some(
+        assert!(correct(&mut part, &audio, &[], &[1.0], |_| Some(
             "про конфлюенс завтра".into()
         ))
         .is_empty());
         assert_eq!(part.0, before.0);
-        let changes = correct(&mut part, &audio, &[], |_| {
+        let changes = correct(&mut part, &audio, &[], &[], |_| {
             Some("про конфлюенс завтра".into())
         });
         assert_eq!(part.0, "про конфлюенс завтра");
@@ -457,6 +484,54 @@ mod tests {
         assert_eq!(part.3.len(), 3);
         assert_eq!(&part.0[part.3[2].byte_start..], "завтра");
         assert_eq!(part.3[2].start, 2.0);
+    }
+
+    /// "про коnflinc завтра" with word timings 0.5 s apart.
+    fn suspicious_row() -> TimedUtterance {
+        let mut part: TimedUtterance = ("про коnflinc завтра".into(), 0.0, 3000.0, vec![]);
+        part.3 = WORDS
+            .find_iter(&part.0)
+            .enumerate()
+            .map(|(i, m)| WordTiming {
+                byte_start: m.start(),
+                start: i as f64 * 0.5,
+                end: i as f64 * 0.5 + 0.4,
+            })
+            .collect();
+        part
+    }
+
+    #[test]
+    fn track_carrying_the_voice_is_tried_first_then_the_rest() {
+        // Microphone is quiet overall but loud at the word: relative level
+        // wins even though the system track is louder in absolute terms.
+        let mut microphone = vec![0.01; 48000];
+        microphone[8000..11200].fill(0.05);
+        let microphone = Track::new(microphone);
+        let system = Track::new(vec![0.2; 48000]);
+        let mix = vec![0.3; 48000];
+        let mut calls = Vec::new();
+        let mut part = suspicious_row();
+        let changes = correct(&mut part, &mix, &[system, microphone], &[], |audio| {
+            calls.push(audio[0]);
+            // Only the second source gives a reading that fits the row.
+            (calls.len() == 2).then(|| "про конфлюенс завтра".into())
+        });
+        assert_eq!(calls, vec![0.01, 0.2]);
+        assert_eq!(part.0, "про конфлюенс завтра");
+        assert_eq!(changes.len(), 1);
+    }
+
+    #[test]
+    fn without_tracks_the_mix_alone_is_used() {
+        let mut calls = 0;
+        let mut part = suspicious_row();
+        correct(&mut part, &vec![0.1; 48000], &[], &[], |_| {
+            calls += 1;
+            None
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(part.0, "про коnflinc завтра");
     }
 
     #[test]
@@ -468,33 +543,6 @@ mod tests {
             .unwrap()
             .range();
         assert!(aligned_replacement(source, "про митинг завтра", range).is_none());
-    }
-
-    #[test]
-    fn subtracts_aligned_echo_and_retains_independent_speech() {
-        let mut random = 185u32;
-        let system: Vec<_> = (0..32000)
-            .map(|_| {
-                random = random.wrapping_mul(1664525).wrapping_add(1013904223);
-                ((random >> 16) as f32 / 65535.0 - 0.5) * 0.3
-            })
-            .collect();
-        let near: Vec<_> = (0..32000)
-            .map(|i| (i as f32 * 0.031).sin() * 0.02)
-            .collect();
-        let mut mic: Vec<_> = near
-            .iter()
-            .enumerate()
-            .map(|(i, &own)| own + i.checked_sub(160).map_or(0.0, |idx| system[idx] * 0.6))
-            .collect();
-        suppress_echo(&mut mic, &system);
-        let mean_error = mic[8000..12000]
-            .iter()
-            .zip(&near[8000..12000])
-            .map(|(a, b)| (a - b).abs())
-            .sum::<f32>()
-            / 4000.0;
-        assert!(mean_error < 0.004, "{mean_error}");
     }
 
     #[test]

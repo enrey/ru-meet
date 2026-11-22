@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type HTMLAttributes } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { ChevronDown, ChevronUp, Cpu, GripHorizontal, Headphones, Loader2, Mic, Zap } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Cpu, GripHorizontal, Headphones, Loader2, Mic, Zap } from 'lucide-react';
 import { AudioLevelMeter } from './AudioLevelMeter';
 import type { AudioDevice, AudioLevelData, AudioLevelUpdate } from './DeviceSelection';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -21,6 +21,11 @@ type ActiveProviderStatus = {
   provider_assignments: Array<{ provider: string; node_count: number }>;
   is_live: boolean;
 };
+
+/** Peak above which the system endpoint counts as carrying sound at all. */
+const SYSTEM_SIGNAL_PEAK = 1e-4;
+/** Recording time without any system sound before warning about the endpoint. */
+const SYSTEM_SILENCE_WARNING_MS = 10_000;
 
 /** Shows capture health, not browser volume: both values come from active WASAPI/CPAL inputs. */
 export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVisible = false, disabled = false }: {
@@ -43,8 +48,30 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
   const [togglingSource, setTogglingSource] = useState<'microphone' | 'system' | null>(null);
   const [providerStatus, setProviderStatus] = useState<ActiveProviderStatus | null>(null);
   const monitoringQueue = useRef<Promise<void>>(Promise.resolve());
+  const lastSystemSignalAt = useRef(Date.now());
+  const [systemSilent, setSystemSilent] = useState(false);
   const mic = activeDevices?.microphone || stripAudioDeviceSuffix(devices?.micDevice);
   const system = activeDevices?.system || stripAudioDeviceSuffix(devices?.systemDevice);
+
+  // A loopback endpoint that nothing plays through delivers zeros or no
+  // packets at all, so "no sound" is measured from the last audible peak.
+  useEffect(() => {
+    const level = system ? levels.get(system) : undefined;
+    if (level && level.peak_level > SYSTEM_SIGNAL_PEAK) {
+      lastSystemSignalAt.current = Date.now();
+      setSystemSilent(false);
+    }
+  }, [levels, system]);
+
+  useEffect(() => {
+    lastSystemSignalAt.current = Date.now();
+    setSystemSilent(false);
+    if (!recording || disabled || sourceMutes.system || !system) return;
+    const timer = window.setInterval(() => {
+      setSystemSilent(Date.now() - lastSystemSignalAt.current >= SYSTEM_SILENCE_WARNING_MS);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [recording, disabled, sourceMutes.system, system]);
 
   useEffect(() => {
     setLevels(new Map());
@@ -247,6 +274,16 @@ export function LiveAudioStatus({ recording, devices, dragHandleProps, alwaysVis
         deviceName={name || label}
         size="small"
       />
+      {kind === 'system' && systemSilent && !isExpanded && <button
+        type="button"
+        onClick={() => setExpandedDevice('system')}
+        className="flex w-full flex-col items-center gap-1 rounded-md py-2 text-center text-xs text-red-700 hover:bg-red-50"
+        role="alert"
+      >
+        <AlertTriangle className="h-14 w-14 animate-pulse fill-red-500/20 text-red-600/70" aria-hidden="true" />
+        <span className="font-medium">{t('No sound on {device}', { device: name || t('Default device') })}</span>
+        <span className="text-red-600/80">{t('If you hear the call elsewhere, choose that output device')}</span>
+      </button>}
     </div>;
   };
   const inputs = availableDevices.filter((device) => device.device_type === 'Input');
