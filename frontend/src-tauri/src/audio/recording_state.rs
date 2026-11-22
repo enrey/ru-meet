@@ -24,6 +24,16 @@ pub struct AudioChunk {
     pub device_type: DeviceType,
 }
 
+/// One mixing window for the recording file: the mix and the two mixer
+/// inputs it was made from, cut from the same aligned window, so all three
+/// have the same length and share one timeline. See ADR 0005.
+#[derive(Debug, Clone)]
+pub struct RecordingFrame {
+    pub mix: Vec<f32>,
+    pub microphone: Vec<f32>,
+    pub system: Vec<f32>,
+}
+
 /// Processed audio chunk (post-VAD) for recording
 #[derive(Debug, Clone)]
 pub struct ProcessedAudioChunk {

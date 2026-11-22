@@ -15,12 +15,129 @@ pub struct AudioInput {
     pub device: Arc<AudioDevice>,
 }
 
+/// Bitrate of the mix stream; also used for single-stream files.
+const MIX_BITRATE: &str = "192k";
+/// Bitrate of each source stream in a recording. Speech recognition runs at
+/// 16 kHz, so this keeps everything it needs at a third of the mix's size.
+const SOURCE_BITRATE: &str = "64k";
+
 pub fn encode_single_audio(
     data: &[u8],
     sample_rate: u32,
     channels: u16,
     output_path: &PathBuf,
 ) -> anyhow::Result<()> {
+    let sample_rate = sample_rate.to_string();
+    let channels = channels.to_string();
+    let output = output_path.to_string_lossy();
+    run_ffmpeg_on_stdin(
+        data,
+        &[
+            "-f",
+            "f32le",
+            "-ar",
+            &sample_rate,
+            "-ac",
+            &channels,
+            "-i",
+            "pipe:0",
+            "-c:a",
+            "aac",
+            "-b:a",
+            MIX_BITRATE,
+            "-profile:a",
+            "aac_low", // Use AAC-LC profile for better compatibility
+            "-movflags",
+            "+faststart", // Optimize for web streaming
+            "-f",
+            "mp4",
+            &output,
+        ],
+    )
+}
+
+/// Encode one recording segment as an MP4 with three mono AAC streams in a
+/// fixed order: 0 = mix (default, what players and decoders pick), 1 =
+/// microphone, 2 = system audio. The order is the contract (ADR 0005);
+/// `handler_name` only labels the streams for people and `ffprobe`.
+///
+/// All three inputs must have the same length: they are interleaved into one
+/// three-channel pipe and split by ffmpeg, which keeps them sample-aligned.
+pub fn encode_recording_streams(
+    mix: &[f32],
+    microphone: &[f32],
+    system: &[f32],
+    sample_rate: u32,
+    output_path: &PathBuf,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        mix.len() == microphone.len() && mix.len() == system.len(),
+        "Recording streams differ in length: mix={} microphone={} system={}",
+        mix.len(),
+        microphone.len(),
+        system.len()
+    );
+    let interleaved: Vec<f32> = mix
+        .iter()
+        .zip(microphone)
+        .zip(system)
+        .flat_map(|((&mix, &microphone), &system)| [mix, microphone, system])
+        .collect();
+    let sample_rate = sample_rate.to_string();
+    let output = output_path.to_string_lossy();
+    run_ffmpeg_on_stdin(
+        bytemuck::cast_slice(&interleaved),
+        &[
+            "-f",
+            "f32le",
+            "-ar",
+            &sample_rate,
+            "-ac",
+            "3",
+            "-i",
+            "pipe:0",
+            // Select channels by index, independent of any channel layout.
+            "-filter_complex",
+            "[0:a]asplit=3[a][b][c];[a]pan=mono|c0=c0[mix];[b]pan=mono|c0=c1[microphone];[c]pan=mono|c0=c2[system]",
+            "-map",
+            "[mix]",
+            "-map",
+            "[microphone]",
+            "-map",
+            "[system]",
+            "-c:a",
+            "aac",
+            "-profile:a",
+            "aac_low",
+            "-b:a:0",
+            MIX_BITRATE,
+            "-b:a:1",
+            SOURCE_BITRATE,
+            "-b:a:2",
+            SOURCE_BITRATE,
+            "-metadata:s:a:0",
+            "handler_name=mix",
+            "-metadata:s:a:1",
+            "handler_name=microphone",
+            "-metadata:s:a:2",
+            "handler_name=system",
+            "-disposition:a:0",
+            "default",
+            "-disposition:a:1",
+            "0",
+            "-disposition:a:2",
+            "0",
+            "-movflags",
+            "+faststart",
+            "-f",
+            "mp4",
+            "-y",
+            &output,
+        ],
+    )
+}
+
+fn run_ffmpeg_on_stdin(data: &[u8], args: &[&str]) -> anyhow::Result<()> {
     debug!(
         "Starting FFmpeg process for {} bytes of audio data",
         data.len()
@@ -38,27 +155,8 @@ pub fn encode_single_audio(
 
     let mut command = Command::new(ffmpeg_path);
     command
-        .args([
-            "-f",
-            "f32le",
-            "-ar",
-            &sample_rate.to_string(),
-            "-ac",
-            &channels.to_string(),
-            "-i",
-            "pipe:0",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k", // Increased from 64k for better audio quality (especially for speech)
-            "-profile:a",
-            "aac_low", // Use AAC-LC profile for better compatibility
-            "-movflags",
-            "+faststart", // Optimize for web streaming
-            "-f",
-            "mp4",
-            output_path.to_str().unwrap(),
-        ])
+        .args(["-hide_banner", "-loglevel", "error"])
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -73,23 +171,22 @@ pub fn encode_single_audio(
 
     debug!("FFmpeg command: {:?}", command);
 
-    #[allow(clippy::zombie_processes)]
-    let mut ffmpeg = command.spawn().expect("Failed to spawn FFmpeg process");
+    let mut ffmpeg = command.spawn()?;
     debug!("FFmpeg process spawned");
-    let mut stdin = ffmpeg.stdin.take().expect("Failed to open stdin");
+    let mut stdin = ffmpeg
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to open FFmpeg stdin"))?;
 
-    stdin.write_all(data)?;
-
-    debug!("Dropping stdin");
+    // stderr is piped and read only after exit; at `-loglevel error` ffmpeg
+    // writes too little to fill the pipe while we feed stdin.
+    let written = stdin.write_all(data);
     drop(stdin);
-    debug!("Waiting for FFmpeg process to exit");
-    let output = ffmpeg.wait_with_output().unwrap();
+    let output = ffmpeg.wait_with_output()?;
     let status = output.status;
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     debug!("FFmpeg process exited with status: {}", status);
-    debug!("FFmpeg stdout: {}", stdout);
     debug!("FFmpeg stderr: {}", stderr);
 
     if !status.success() {
@@ -100,6 +197,7 @@ pub fn encode_single_audio(
             status
         ));
     }
+    written?;
 
     Ok(())
 }

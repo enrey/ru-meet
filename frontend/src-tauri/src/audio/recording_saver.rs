@@ -9,7 +9,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use super::audio_processing::create_meeting_folder;
 use super::incremental_saver::IncrementalAudioSaver;
-use super::recording_state::AudioChunk;
+use super::recording_state::RecordingFrame;
 
 /// Structured transcript segment for JSON export
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,7 +261,7 @@ impl RecordingSaver {
     pub fn start_accumulation(
         &mut self,
         auto_save: bool,
-        mut receiver: mpsc::UnboundedReceiver<AudioChunk>,
+        mut receiver: mpsc::UnboundedReceiver<RecordingFrame>,
     ) {
         if auto_save {
             info!("Initializing incremental audio saver for recording (auto-save ENABLED)");
@@ -306,7 +306,7 @@ impl RecordingSaver {
                 save_audio
             );
 
-            while let Some(chunk) = receiver.recv().await {
+            while let Some(frame) = receiver.recv().await {
                 // Check if we should continue
                 let should_continue = if let Ok(is_saving) = is_saving_clone.lock() {
                     *is_saving
@@ -323,7 +323,7 @@ impl RecordingSaver {
                     // Add chunk to incremental saver
                     if let Some(saver_arc) = &incremental_saver_arc {
                         let mut saver_guard = saver_arc.lock().await;
-                        if let Err(e) = saver_guard.add_chunk(chunk) {
+                        if let Err(e) = saver_guard.add_frame(frame) {
                             error!("Failed to add chunk to incremental saver: {}", e);
                         }
                     } else {

@@ -408,6 +408,16 @@ fn align_to_timestamp(samples: &mut Vec<f32>, position: usize) {
     }
 }
 
+/// Audio streams of a recording file, by their fixed position (ADR 0005).
+/// Files written before the source streams existed, and imported files,
+/// carry only the first one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingStream {
+    Mix = 0,
+    Microphone = 1,
+    System = 2,
+}
+
 /// Decode an audio file (MP4, M4A, WAV, etc.) to raw samples
 pub fn decode_audio_file(path: &Path) -> Result<DecodedAudio> {
     decode_audio_file_with_progress(path, None)
@@ -418,7 +428,56 @@ pub fn decode_audio_file_with_progress(
     path: &Path,
     progress_callback: Option<ProgressCallback>,
 ) -> Result<DecodedAudio> {
-    info!("Decoding audio file: {}", path.display());
+    decode_audio_track(path, 0, progress_callback)
+}
+
+/// Decode one stream of a recording, or `None` when the file has no such
+/// stream: a recording made before the source streams were saved, or an
+/// imported file. Callers fall back to the mix in that case.
+pub fn decode_recording_stream(
+    path: &Path,
+    stream: RecordingStream,
+) -> Result<Option<DecodedAudio>> {
+    if stream != RecordingStream::Mix
+        && (needs_ffmpeg_conversion(path) || audio_track_count(path)? <= stream as usize)
+    {
+        return Ok(None);
+    }
+    decode_audio_track(path, stream as usize, None).map(Some)
+}
+
+/// Number of audio tracks in a file Symphonia can open.
+fn audio_track_count(path: &Path) -> Result<usize> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| anyhow!("Failed to open audio file '{}': {}", path.display(), e))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| anyhow!("Failed to probe audio format: {}", e))?;
+    Ok(probed
+        .format
+        .tracks()
+        .iter()
+        .filter(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .count())
+}
+
+/// Decode the `index`-th audio track (0 = the first one).
+fn decode_audio_track(
+    path: &Path,
+    index: usize,
+    progress_callback: Option<ProgressCallback>,
+) -> Result<DecodedAudio> {
+    info!("Decoding audio file: {} (audio track {})", path.display(), index);
 
     // FFmpeg pre-conversion for unsupported formats (MKV, WebM, WMA).
     // If the file is in a format Symphonia can't decode, use ffmpeg to convert
@@ -469,12 +528,13 @@ pub fn decode_audio_file_with_progress(
 
     let mut format = probed.format;
 
-    // Find the first audio track
+    // Find the requested audio track
     let track = format
         .tracks()
         .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .ok_or_else(|| anyhow!("No audio track found in file"))?;
+        .filter(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .nth(index)
+        .ok_or_else(|| anyhow!("Audio track {} not found in file", index))?;
 
     let track_id = track.id;
 

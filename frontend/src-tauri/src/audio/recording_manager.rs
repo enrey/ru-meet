@@ -12,7 +12,7 @@ use super::devices::AudioDevice;
 use super::device_monitor::{AudioDeviceMonitor, DeviceEvent};
 use super::pipeline::AudioPipelineManager;
 use super::recording_saver::RecordingSaver;
-use super::recording_state::{AudioChunk, RecordingState};
+use super::recording_state::{AudioChunk, RecordingFrame, RecordingState};
 use super::stream::AudioStreamManager;
 
 /// Stream manager type enumeration
@@ -262,7 +262,7 @@ impl RecordingManager {
         // Set up transcription channel
         let (transcription_sender, transcription_receiver) =
             mpsc::unbounded_channel::<AudioChunk>();
-        let (recording_sender, recording_receiver) = mpsc::unbounded_channel::<AudioChunk>();
+        let (recording_sender, recording_receiver) = mpsc::unbounded_channel::<RecordingFrame>();
 
         // Start recording state first
         self.state.start_recording()?;

@@ -64,8 +64,11 @@ pub(crate) fn trim_audio_file(path: &Path, start: f64, end: f64) -> Result<()> {
     if end.is_finite() {
         command.arg("-t").arg(format!("{:.3}", end - start));
     }
+    // `-map 0` keeps the microphone and system streams (ADR 0005); ffmpeg
+    // otherwise keeps only one audio stream. `-dn` drops data tracks such as
+    // a camera timecode, which MP4 cannot take as a copied stream.
     command
-        .args(["-c", "copy", "-movflags", "+faststart", "-y"])
+        .args(["-map", "0", "-dn", "-c", "copy", "-movflags", "+faststart", "-y"])
         .arg(&trimmed);
     #[cfg(target_os = "windows")]
     {
@@ -137,10 +140,11 @@ pub(crate) fn ensure_faststart(path: &Path) -> Result<()> {
     let ffmpeg = super::ffmpeg::find_ffmpeg_path().ok_or_else(|| anyhow!("FFmpeg not found"))?;
     let remuxed = path.with_file_name(".audio.faststart.mp4");
     let mut command = std::process::Command::new(ffmpeg);
+    // Same stream selection as `trim_audio_file`.
     command
         .args(["-hide_banner", "-loglevel", "error", "-i"])
         .arg(path)
-        .args(["-c", "copy", "-movflags", "+faststart", "-y"])
+        .args(["-map", "0", "-dn", "-c", "copy", "-movflags", "+faststart", "-y"])
         .arg(&remuxed);
     #[cfg(target_os = "windows")]
     {

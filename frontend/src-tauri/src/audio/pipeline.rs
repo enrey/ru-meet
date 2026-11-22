@@ -14,7 +14,7 @@ use super::audio_processing::{
     audio_to_mono, HighPassFilter, LoudnessNormalizer, NoiseSuppressionProcessor,
 };
 use super::devices::AudioDevice;
-use super::recording_state::{AudioChunk, AudioError, DeviceType, RecordingState};
+use super::recording_state::{AudioChunk, AudioError, DeviceType, RecordingFrame, RecordingState};
 use super::vad::ContinuousVadProcessor;
 
 /// How long a silence must last before the VAD closes a speech segment, and
@@ -760,8 +760,8 @@ pub struct AudioPipeline {
     // PROFESSIONAL AUDIO MIXING: Ring buffer + RMS-based mixer
     ring_buffer: AudioMixerRingBuffer,
     mixer: ProfessionalAudioMixer,
-    // Recording sender for pre-mixed audio
-    recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    // Recording sender: the mix plus the aligned mixer inputs (ADR 0005)
+    recording_sender_for_mixed: Option<mpsc::UnboundedSender<RecordingFrame>>,
 }
 
 impl AudioPipeline {
@@ -938,16 +938,15 @@ impl AudioPipeline {
                             // Previous 2x gain was causing excessive limiting/distortion
                             let mixed_with_gain = mixed_clean;
 
-                            // STEP 4: Send mixed audio for recording (WAV file)
+                            // STEP 4: Send the mix and its aligned sources for recording.
+                            // The sources are taken here, after the ring buffer aligned
+                            // them, so the three file streams share one timeline.
                             if let Some(ref sender) = self.recording_sender_for_mixed {
-                                let recording_chunk = AudioChunk {
-                                    data: mixed_with_gain.clone(),
-                                    sample_rate: self.sample_rate,
-                                    timestamp: chunk.timestamp,
-                                    chunk_id: self.chunk_id_counter,
-                                    device_type: DeviceType::Microphone, // Mixed audio
-                                };
-                                let _ = sender.send(recording_chunk);
+                                let _ = sender.send(RecordingFrame {
+                                    mix: mixed_with_gain.clone(),
+                                    microphone: mic_window,
+                                    system: sys_window,
+                                });
                             }
                             if !self.realtime_transcription {
                                 // Keep silence detection without retaining speech audio or loading ASR.
@@ -1110,7 +1109,7 @@ impl AudioPipelineManager {
         transcription_sender: mpsc::UnboundedSender<AudioChunk>,
         target_chunk_duration_ms: u32,
         sample_rate: u32,
-        recording_sender: Option<mpsc::UnboundedSender<AudioChunk>>,
+        recording_sender: Option<mpsc::UnboundedSender<RecordingFrame>>,
         mic_device_name: String,
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
@@ -1287,8 +1286,10 @@ mod tests {
                 drop(sender);
                 pipeline.run().await.unwrap();
                 let mut samples = Vec::new();
-                while let Ok(chunk) = recordings_rx.try_recv() {
-                    samples.extend(chunk.data);
+                while let Ok(frame) = recordings_rx.try_recv() {
+                    assert_eq!(frame.microphone.len(), frame.mix.len());
+                    assert_eq!(frame.system.len(), frame.mix.len());
+                    samples.extend(frame.mix);
                 }
                 assert!(
                     samples.len() > 48000 * 5,

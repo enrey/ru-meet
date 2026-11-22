@@ -53,6 +53,7 @@
 - Keep Silero VAD pinned and hash/size verified in both `frontend/src-tauri/src/audio/vad.rs` and `frontend/src-tauri/build/silero_vad.rs`; validate a candidate model with real speech before upgrading it.
 - Never call `reqwest::blocking` directly on a Tokio worker; use `tokio::task::block_in_place` as in `frontend/src-tauri/src/audio/vad.rs`.
 - SQL migrations are immutable exact-byte inputs. New `frontend/src-tauri/migrations/*.sql` files must use LF as enforced by `.gitattributes`; never rewrite an applied migration.
+- Recording `audio.mp4` holds three AAC streams in fixed order: mix, microphone, system (ADR 0005). Every ffmpeg remux of it must pass `-map 0`, or the source streams are silently dropped; single-stream files (older or imported) fall back to the mix.
 - Use `perf_debug!`/`perf_trace!` for hot-path Rust logging and keep the `microphone`/`system` audio-device terminology.
 
 ## Release Notes

@@ -1,5 +1,5 @@
-use super::encode::encode_single_audio;
-use super::recording_state::AudioChunk;
+use super::encode::encode_recording_streams;
+use super::recording_state::RecordingFrame;
 use anyhow::{anyhow, Result};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -7,17 +7,14 @@ use std::path::PathBuf;
 
 use super::ffmpeg::find_ffmpeg_path;
 
-/// Audio data without device type (we only store mixed audio)
-#[derive(Clone)]
-struct AudioData {
-    data: Vec<f32>,
-    // sample_rate: u32,
-}
-
 /// Incremental audio saver that writes checkpoints every 30 seconds
 /// to minimize memory usage and enable crash recovery
 pub struct IncrementalAudioSaver {
-    checkpoint_buffer: Vec<AudioData>,
+    /// Mix, microphone and system samples of the current checkpoint, kept
+    /// the same length so the file streams stay aligned (ADR 0005).
+    mix: Vec<f32>,
+    microphone: Vec<f32>,
+    system: Vec<f32>,
     checkpoint_interval_samples: usize, // 30s at 48kHz = 1,440,000 samples
     checkpoint_count: u32,
     checkpoints_dir: PathBuf,
@@ -43,7 +40,9 @@ impl IncrementalAudioSaver {
         }
 
         Ok(Self {
-            checkpoint_buffer: Vec::new(),
+            mix: Vec::new(),
+            microphone: Vec::new(),
+            system: Vec::new(),
             checkpoint_interval_samples: sample_rate as usize * 30, // 30 seconds
             checkpoint_count: 0,
             checkpoints_dir,
@@ -52,37 +51,39 @@ impl IncrementalAudioSaver {
         })
     }
 
-    /// Add an audio chunk to the buffer
+    /// Add one mixing window to the buffer.
     /// Automatically saves a checkpoint when buffer reaches 30 seconds
-    pub fn add_chunk(&mut self, chunk: AudioChunk) -> Result<()> {
-        let audio_data = AudioData {
-            data: chunk.data,
-            // sample_rate: chunk.sample_rate,
-        };
-
-        self.checkpoint_buffer.push(audio_data);
-
-        // Calculate total samples in buffer
-        let total_samples: usize = self.checkpoint_buffer.iter().map(|c| c.data.len()).sum();
+    pub fn add_frame(&mut self, frame: RecordingFrame) -> Result<()> {
+        // The pipeline cuts all three from one window; pad defensively so a
+        // mismatch can never shift one stream against the others.
+        let len = frame
+            .mix
+            .len()
+            .max(frame.microphone.len())
+            .max(frame.system.len());
+        for (buffer, samples) in [
+            (&mut self.mix, frame.mix),
+            (&mut self.microphone, frame.microphone),
+            (&mut self.system, frame.system),
+        ] {
+            let end = buffer.len() + len;
+            buffer.extend(samples);
+            buffer.resize(end, 0.0);
+        }
 
         // Save checkpoint when buffer reaches threshold (30 seconds)
-        if total_samples >= self.checkpoint_interval_samples {
+        if self.mix.len() >= self.checkpoint_interval_samples {
             self.save_checkpoint()?;
-            self.checkpoint_buffer.clear();
         }
 
         Ok(())
     }
 
-    /// Save current buffer as a checkpoint file
+    /// Save the current buffer as a checkpoint file and clear it
     fn save_checkpoint(&mut self) -> Result<()> {
-        // Concatenate all chunks in buffer
-        let audio_data: Vec<f32> = self
-            .checkpoint_buffer
-            .iter()
-            .flat_map(|c| &c.data)
-            .cloned()
-            .collect();
+        let audio_data = std::mem::take(&mut self.mix);
+        let microphone = std::mem::take(&mut self.microphone);
+        let system = std::mem::take(&mut self.system);
 
         if audio_data.is_empty() {
             warn!("Attempted to save empty checkpoint, skipping");
@@ -95,10 +96,11 @@ impl IncrementalAudioSaver {
             .join(format!("audio_chunk_{:03}.mp4", self.checkpoint_count));
 
         // Encode and save checkpoint
-        encode_single_audio(
-            bytemuck::cast_slice(&audio_data),
+        encode_recording_streams(
+            &audio_data,
+            &microphone,
+            &system,
             self.sample_rate,
-            1, // mono
             &checkpoint_path,
         )?;
 
@@ -122,13 +124,12 @@ impl IncrementalAudioSaver {
         info!("Finalizing incremental recording...");
 
         // Save final buffer if not empty
-        if !self.checkpoint_buffer.is_empty() {
+        if !self.mix.is_empty() {
             info!(
-                "Saving final checkpoint with remaining {} chunks",
-                self.checkpoint_buffer.len()
+                "Saving final checkpoint with remaining {} samples",
+                self.mix.len()
             );
             self.save_checkpoint()?;
-            self.checkpoint_buffer.clear();
         }
 
         if self.checkpoint_count == 0 {
@@ -202,6 +203,10 @@ impl IncrementalAudioSaver {
             "0", // Allow absolute paths
             "-i",
             list_file.to_str().unwrap(),
+            // Keep every stream: ffmpeg otherwise picks one audio stream and
+            // silently drops the microphone and system tracks (ADR 0005).
+            "-map",
+            "0",
             "-c",
             "copy", // Copy codec - no re-encoding!
             // Index up front: WebKit on macOS cannot play an MP4 whose
@@ -360,6 +365,9 @@ pub async fn recover_audio_from_checkpoints(
         "0",
         "-i",
         concat_file_path.to_str().unwrap(),
+        // Keep the microphone and system streams (ADR 0005).
+        "-map",
+        "0",
         "-c",
         "copy",
         "-movflags",
@@ -460,7 +468,6 @@ pub async fn has_audio_checkpoints(meeting_folder: String) -> Result<bool, Strin
 
 #[cfg(test)]
 mod tests {
-    use super::super::recording_state::DeviceType;
     use super::*;
     use tempfile::tempdir;
 
@@ -475,16 +482,15 @@ mod tests {
         let mut saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000).unwrap();
 
         // Add 60 seconds worth of audio (should create 2 checkpoints)
-        for i in 0..120 {
-            // 120 chunks of 0.5s each
-            let chunk = AudioChunk {
-                data: vec![0.5f32; 24000], // 0.5s at 48kHz
-                sample_rate: 48000,
-                timestamp: i as f64 * 0.5, // timestamp in seconds
-                chunk_id: i as u64,
-                device_type: DeviceType::Microphone,
-            };
-            saver.add_chunk(chunk).unwrap();
+        for _ in 0..120 {
+            // 120 frames of 0.5s each at 48kHz
+            saver
+                .add_frame(RecordingFrame {
+                    mix: vec![0.5f32; 24000],
+                    microphone: vec![0.25f32; 24000],
+                    system: vec![0.25f32; 24000],
+                })
+                .unwrap();
         }
 
         // Verify 2 checkpoints created
@@ -496,6 +502,126 @@ mod tests {
 
         // Verify checkpoints directory deleted
         assert!(!meeting_folder.join(".checkpoints").exists());
+    }
+
+    /// The file keeps three aligned streams through checkpoint merging and
+    /// edge trimming, and each decodes on its own (ADR 0005).
+    #[tokio::test]
+    async fn recording_keeps_aligned_source_streams() {
+        use crate::audio::decoder::{decode_recording_stream, RecordingStream};
+
+        let temp_dir = tempdir().unwrap();
+        let meeting_folder = temp_dir.path().join("Sources");
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+        let mut saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000).unwrap();
+
+        // 70 s: a microphone tone, a quieter system tone, and one click in
+        // both sources at 31 s, just past the first checkpoint joint.
+        let rate = 48000usize;
+        let click = 31 * rate;
+        let window = rate * 6 / 10;
+        for start in (0..70 * rate).step_by(window) {
+            let mut frame = RecordingFrame {
+                mix: Vec::with_capacity(window),
+                microphone: Vec::with_capacity(window),
+                system: Vec::with_capacity(window),
+            };
+            for i in start..start + window {
+                let t = i as f32 / rate as f32;
+                let near_click = i.abs_diff(click) < 48;
+                let microphone = if near_click {
+                    0.9
+                } else {
+                    0.3 * (t * 440.0 * std::f32::consts::TAU).sin()
+                };
+                let system = if near_click {
+                    0.9
+                } else {
+                    0.05 * (t * 220.0 * std::f32::consts::TAU).sin()
+                };
+                frame.microphone.push(microphone);
+                frame.system.push(system);
+                frame.mix.push((microphone + system) / 2.0);
+            }
+            saver.add_frame(frame).unwrap();
+        }
+        let path = saver.finalize().await.unwrap();
+        super::super::edge_trim::trim_audio_file(&path, 1.0, 66.0).unwrap();
+
+        let decode = |stream| {
+            decode_recording_stream(&path, stream)
+                .unwrap()
+                .expect("stream present")
+                .samples
+        };
+        let (mix, microphone, system) = (
+            decode(RecordingStream::Mix),
+            decode(RecordingStream::Microphone),
+            decode(RecordingStream::System),
+        );
+        let rms = |s: &[f32]| (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt();
+        assert!(
+            (rms(&microphone) - 0.21).abs() < 0.03,
+            "microphone rms {}",
+            rms(&microphone)
+        );
+        assert!(
+            (rms(&system) - 0.035).abs() < 0.01,
+            "system rms {}",
+            rms(&system)
+        );
+        assert!(rms(&mix) > rms(&system) && rms(&mix) < rms(&microphone));
+        for stream in [&mix, &system] {
+            assert!(
+                stream.len().abs_diff(microphone.len()) <= 2048,
+                "streams must cover the same time"
+            );
+        }
+
+        // The click sits at 30 s of the trimmed file in every stream.
+        let peak = |s: &[f32]| {
+            s.iter()
+                .enumerate()
+                .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+                .unwrap()
+                .0 as i64
+        };
+        // Absolute position is only as exact as AAC allows: the decoder keeps
+        // one frame of encoder priming (~21 ms) and a stream-copy trim starts
+        // on a packet boundary, so allow two frames plus slack.
+        let expected = 30 * rate as i64;
+        for (name, stream) in [
+            ("microphone", &microphone),
+            ("system", &system),
+            ("mix", &mix),
+        ] {
+            let offset = peak(stream) - expected;
+            assert!(offset.abs() < 2400, "{name} click off by {offset} samples");
+        }
+        // Relative to each other the streams must not move; the click is 96
+        // samples wide and lossy coding may shift its peak within it.
+        for (name, stream) in [("system", &system), ("mix", &mix)] {
+            let offset = peak(stream) - peak(&microphone);
+            assert!(
+                offset.abs() < 128,
+                "{name} off the microphone by {offset} samples"
+            );
+        }
+    }
+
+    #[test]
+    fn single_stream_files_fall_back_to_the_mix() {
+        use crate::audio::decoder::{decode_recording_stream, RecordingStream};
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jfk.wav");
+        assert!(decode_recording_stream(&path, RecordingStream::Microphone)
+            .unwrap()
+            .is_none());
+        assert!(decode_recording_stream(&path, RecordingStream::System)
+            .unwrap()
+            .is_none());
+        assert!(decode_recording_stream(&path, RecordingStream::Mix)
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
