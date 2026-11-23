@@ -208,6 +208,7 @@ impl MeetingsRepository {
                     audio_end_time: t.audio_end_time,
                     duration: t.duration,
                     speaker: t.speaker,
+                    word_starts: None,
                 })
                 .collect::<Vec<_>>();
 

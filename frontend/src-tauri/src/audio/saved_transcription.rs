@@ -339,6 +339,7 @@ fn correct(
             continue;
         }
         let Some((start, end)) = time_for(&utterance.3, &chunk) else {
+            log::info!("Term correction skipped a word: it has no timing");
             continue;
         };
         let a = ((start - 2.0).max(utterance.1 / 1000.0) * 16000.0) as usize;
@@ -354,6 +355,9 @@ fn correct(
         });
         sources.extend(ordered.into_iter().map(|track| track.samples.as_slice()));
         sources.push(mix);
+        let mut read = 0;
+        let mut fitted = false;
+        let mut corrected = false;
         for source in sources {
             let Some(audio) = source
                 .get(a..b.min(source.len()))
@@ -364,9 +368,11 @@ fn correct(
             let Some(candidate) = recognize(audio) else {
                 continue;
             };
+            read += 1;
             if let Some((range, replacement)) =
                 aligned_replacement(&utterance.0, &candidate, chunk.clone())
             {
+                fitted = true;
                 if range.end <= protected
                     && time_for(&utterance.3, &range).is_some_and(|(start, end)| {
                         !boundaries.iter().any(|t| start < *t && *t < end)
@@ -374,9 +380,21 @@ fn correct(
                 {
                     protected = range.start;
                     edits.push(patch(utterance, range, replacement, "multilingual_220m"));
+                    corrected = true;
                     break;
                 }
             }
+        }
+        if !corrected {
+            let at = format!("{}:{:02}", start as u64 / 60, start as u64 % 60);
+            let reason = if read == 0 {
+                "the second model gave no reading"
+            } else if fitted {
+                "the replacement would cross a speaker change or an earlier correction"
+            } else {
+                "no reading matched the neighbouring words"
+            };
+            log::info!("Term correction left the word at {at} ({start:.1} s) as recognized: {reason} ({read} readings)");
         }
     }
     edits.reverse();
@@ -393,19 +411,30 @@ fn aligned_replacement<'a>(
     let hit = base
         .iter()
         .position(|m| m.start() <= trigger.start && m.end() >= trigger.end)?;
-    let left = *base.get(hit.checked_sub(1)?)?;
+    // A hyphenated compound ("IT-tкоде") is one unit: anchors are taken
+    // outside it and it is replaced whole, never by halves.
+    let joined = |a: usize, b: usize| &text[base[a].end()..base[b].start()] == "-";
+    let mut first = hit;
+    while first > 0 && joined(first - 1, first) {
+        first -= 1;
+    }
+    let mut last = hit;
+    while last + 1 < base.len() && joined(last, last + 1) {
+        last += 1;
+    }
+    let left = *base.get(first.checked_sub(1)?)?;
     if is_mixed(left.as_str()) {
         return None;
     }
     let folded_left = left.as_str().to_lowercase();
-    for stop in hit + 1..=(hit + 3).min(base.len().saturating_sub(1)) {
+    for stop in last + 1..=(last + 3).min(base.len().saturating_sub(1)) {
         let right = base[stop];
         if is_mixed(right.as_str()) {
             continue;
         }
         // A missing right anchor is not permission to eat readable Cyrillic
         // words. Expansion is reserved for split foreign-name fragments.
-        if base[hit + 1..stop]
+        if base[last + 1..stop]
             .iter()
             .any(|m| !LATIN.is_match(m.as_str()) || CYRILLIC.is_match(m.as_str()))
         {
@@ -422,7 +451,7 @@ fn aligned_replacement<'a>(
         let [(i, j)] = matches.as_slice() else {
             continue;
         };
-        let range = base[hit].start()..base[stop - 1].end();
+        let range = base[first].start()..base[stop - 1].end();
         if [
             &text[left.end()..range.start],
             &text[range.end..right.start()],
@@ -484,6 +513,16 @@ mod tests {
         assert_eq!(part.3.len(), 3);
         assert_eq!(&part.0[part.3[2].byte_start..], "завтра");
         assert_eq!(part.3[2].start, 2.0);
+    }
+
+    #[test]
+    fn hyphenated_compound_is_replaced_whole() {
+        let text = "всё в облачном IT-tкоде. Угу.";
+        let range = text.find("tкоде").unwrap()..text.find("tкоде").unwrap() + "tкоде".len();
+        let (replaced, replacement) =
+            aligned_replacement(text, "всё в облачном ITTooCode угу", range).unwrap();
+        assert_eq!(&text[replaced], "IT-tкоде");
+        assert_eq!(replacement, "ITTooCode");
     }
 
     /// "про коnflinc завтра" with word timings 0.5 s apart.

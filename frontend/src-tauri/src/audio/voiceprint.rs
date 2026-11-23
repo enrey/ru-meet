@@ -1166,11 +1166,21 @@ mod tests {
         TranscriptsRepository::apply_speaker_turns(&pool, &meeting, &turns).await.unwrap();
         let links = VoiceprintRepository::meeting_links(&pool, &meeting).await.unwrap();
         assert_eq!(links.iter().map(|l| l.speaker.as_str()).collect::<Vec<_>>(), ["Анна"]);
-        // Different intervals (another engine): the confirmed label is gone.
+        // Different intervals (another engine): names follow the speech they
+        // overlap, so the confirmed name and its link stay.
         TranscriptsRepository::apply_speaker_turns(&pool, &meeting, &[turn(0.0, 9.0, "Speaker 1"), turn(9.0, 30.0, "Speaker 2")])
             .await
             .unwrap();
-        assert!(VoiceprintRepository::meeting_links(&pool, &meeting).await.unwrap().is_empty());
+        let links = VoiceprintRepository::meeting_links(&pool, &meeting).await.unwrap();
+        assert_eq!(links.iter().map(|l| l.speaker.as_str()).collect::<Vec<_>>(), ["Анна"]);
+        let speakers: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT speaker FROM diarization_turns WHERE meeting_id = ? ORDER BY speaker",
+        )
+        .bind(&meeting)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(speakers, ["Анна", "Игорь"]);
 
         // Forgetting a voice removes its samples and links only.
         VoiceprintRepository::delete_profile(&pool, &anna).await.unwrap();

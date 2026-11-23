@@ -67,12 +67,42 @@ function segmentAt(segments: TranscriptSegmentData[], time: number, hasMore: boo
 const LINE_TAIL_SECONDS = 0.4;
 
 /**
+ * When each shown word is said: the recognizer's word timings when they match
+ * the shown words, gaps filled in between known neighbours; otherwise the
+ * line's time shared between its words by length, with pauses after
+ * punctuation.
+ */
+function wordTimes(words: TextWord[], segment: TranscriptSegmentData, start: number, end: number): number[] {
+  const timed = segment.wordStarts;
+  if (timed && timed.length === words.length && timed.some((value) => value !== null)) {
+    const times = [...timed];
+    for (let i = 0; i < times.length; i++) {
+      if (times[i] !== null) continue;
+      let j = i;
+      while (j < times.length && times[j] === null) j++;
+      const from = i > 0 ? (times[i - 1] as number) : start;
+      const to = j < times.length ? (times[j] as number) : end;
+      for (let k = i; k < j; k++) times[k] = from + ((to - from) * (k - i + 1)) / (j - i + 1);
+      i = j;
+    }
+    return times as number[];
+  }
+  const shares: number[] = [];
+  let total = 0;
+  for (const word of words) {
+    shares.push(total);
+    const { weight, pause } = wordWeight(word.text);
+    total += weight + pause;
+  }
+  return shares.map((share) => start + ((end - start) * share) / (total || 1));
+}
+
+/**
  * Karaoke over the transcript: the word being said gets a pale yellow
- * background. Lines carry no word timings, so a line's time is shared between
- * its words by length, with pauses after punctuation.
+ * background, timed by `wordTimes`.
  */
 function useTranscriptKaraoke(playback: PlaybackControls | null, segments: TranscriptSegmentData[]) {
-  const lineRef = useRef<{ id: string; text: string; words: TextWord[]; starts: number[] } | null>(null);
+  const lineRef = useRef<{ id: string; text: string; words: TextWord[]; times: number[] } | null>(null);
   const shownRef = useRef('');
 
   const clear = () => {
@@ -96,20 +126,12 @@ function useTranscriptKaraoke(playback: PlaybackControls | null, segments: Trans
     const text = element.textContent ?? '';
     if (!line || line.id !== segment.id || line.text !== text) {
       const words = wordsIn(element);
-      const starts: number[] = [];
-      let total = 0;
-      for (const word of words) {
-        starts.push(total);
-        const { weight, pause } = wordWeight(word.text);
-        total += weight + pause;
-      }
-      line = { id: segment.id, text, words, starts: starts.map((value) => value / (total || 1)) };
+      line = { id: segment.id, text, words, times: wordTimes(words, segment, start, end) };
       lineRef.current = line;
     }
     if (!line.words.length) return clear();
 
-    const progress = Math.min(1, (time - start) / (end - start));
-    const index = Math.max(0, lastStartingBy(line.starts, progress, (value) => value));
+    const index = Math.max(0, lastStartingBy(line.times, time, (value) => value));
     const key = `${segment.id}:${index}:${text.length}`;
     if (key === shownRef.current) return;
     shownRef.current = key;

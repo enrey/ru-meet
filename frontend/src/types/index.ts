@@ -24,6 +24,8 @@ export interface Transcript {
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
   speaker?: string;
   words?: WordTiming[];
+  /** Backend: when each word of `text` is said, for playback highlighting. */
+  word_starts?: (number | null)[];
 }
 
 export interface TranscriptUpdate {
@@ -151,4 +153,6 @@ export interface TranscriptSegmentData {
   text: string;
   confidence?: number;
   speaker?: string;
+  /** When each word is said (null: unknown), from the recognizer's word timings. */
+  wordStarts?: (number | null)[];
 }

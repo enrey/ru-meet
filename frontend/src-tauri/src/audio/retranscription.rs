@@ -401,6 +401,7 @@ async fn run_retranscription<R: Runtime>(
             same_track && a.zip(*b).is_some_and(|(a, b)| start < b && a < end)
         })
     });
+    TranscriptsRepository::keep_speaker_names(&mut tx, &meeting_id).await?;
     let retained = serde_json::to_string(&edited.iter().map(|(id, ..)| id).collect::<Vec<_>>())?;
     sqlx::query("DELETE FROM transcripts WHERE meeting_id = ? AND id NOT IN (SELECT value FROM json_each(?))")
         .bind(&meeting_id)

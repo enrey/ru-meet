@@ -310,6 +310,10 @@ pub struct MeetingTranscript {
     pub duration: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    /// When each word (whitespace-separated token with a letter or digit) is
+    /// said, for highlighting during playback; `null` for a word without timing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_starts: Option<Vec<Option<f64>>>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -1080,10 +1084,19 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                 .await;
             }
 
+            let ids: Vec<String> = transcripts.iter().map(|t| t.id.clone()).collect();
+            let mut word_starts = TranscriptsRepository::word_starts(pool, &meeting_id, &ids)
+                .await
+                .unwrap_or_else(|e| {
+                    log_warn!("Word timings unavailable for meeting {}: {}", meeting_id, e);
+                    Default::default()
+                });
+
             // Convert Transcript to MeetingTranscript
             let meeting_transcripts = transcripts
                 .into_iter()
                 .map(|t| MeetingTranscript {
+                    word_starts: word_starts.remove(&t.id),
                     id: t.id,
                     text: t.transcript,
                     timestamp: t.timestamp,
