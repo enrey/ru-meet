@@ -580,15 +580,18 @@ pub async fn start_retranscription_command<R: Runtime>(
     // Clone values for the spawned task
     let meeting_id_clone = meeting_id.clone();
 
-    // Spawn the retranscription in a background task
+    // The manual run is the same post-processing as after a recording:
+    // transcript, then speakers (with short-reply recovery and same-voice
+    // merging) and the automatic summary when those are enabled.
     tauri::async_runtime::spawn(async move {
-        let result = start_retranscription(
+        let result = start_with_followup(
             app,
             meeting_id_clone,
             meeting_folder_path,
             language,
             model,
             provider,
+            true,
         )
         .await;
 

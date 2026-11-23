@@ -264,7 +264,7 @@ export function RetranscribeDialog({
             {isProcessing ? (
               <>
                 <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
-                {t('Retranscribing...')}
+                {t('Post-processing...')}
               </>
             ) : error ? (
               <>
@@ -274,7 +274,7 @@ export function RetranscribeDialog({
             ) : (
               <>
                 <RefreshCw className="h-5 w-5 text-indigo-600" />
-                {t('Retranscribe Meeting')}
+                {t('Run post-processing')}
               </>
             )}
           </DialogTitle>
@@ -283,7 +283,7 @@ export function RetranscribeDialog({
               ? t(progress?.message || 'Processing audio...')
               : error
                 ? t('An error occurred during retranscription')
-                : t('Re-process the audio with different language settings')}
+                : t('Transcribe the recording again, then identify speakers and create the summary, as after a recording')}
           </DialogDescription>
         </DialogHeader>
 
@@ -357,14 +357,10 @@ export function RetranscribeDialog({
                     style={{ width: `${Math.min(progress.progress_percentage, 100)}%` }}
                   />
                 </div>
-                <div className="flex justify-between text-xs text-slate-600 mt-1">
-                  <span>{t(progress.stage)}</span>
+                <div className="flex justify-end text-xs text-slate-600 mt-1">
                   <span>{Math.round(progress.progress_percentage)}%</span>
                 </div>
               </div>
-              <p className="text-sm text-muted-foreground text-center">
-                {t(progress.message)}
-              </p>
             </div>
           )}
 
@@ -387,7 +383,7 @@ export function RetranscribeDialog({
                 disabled={!meetingFolderPath}
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
-                {t('Start Retranscription')}
+                {t('Start post-processing')}
               </Button>
             </>
           )}

@@ -296,7 +296,7 @@ export function MeetingActionBar({
             {canRetranscribe && (
               <DropdownMenuItem onSelect={afterMenuCloses(() => setShowRetranscribeDialog(true))}>
                 <RefreshCw className="h-4 w-4" />
-                {t('Transcribe again')}
+                {t('Run post-processing')}
               </DropdownMenuItem>
             )}
             {hasFolder && !isDiarizing && (

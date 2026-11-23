@@ -691,6 +691,9 @@ export const ru: Record<string, Translation> = {
   "Stopping…": "Остановка…",
   "Retranscribe to enhance your recorded audio": "Повторная транскрипция для улучшения результата",
   "Transcribe again": "Транскрибировать заново",
+  "Run post-processing": "Запустить пост-обработку",
+  "Start post-processing": "Запустить",
+  "Transcribe the recording again, then identify speakers and create the summary, as after a recording": "Распознать запись заново, затем определить спикеров и создать саммари — как после записи",
 
   // Diarization progress & split view
   "Identifying speakers…": "Определяем спикеров…",
@@ -738,6 +741,8 @@ export const ru: Record<string, Translation> = {
   "Meeting folder path not available": "Путь к папке встречи недоступен",
   "Retranscription cancelled": "Повторная транскрипция отменена",
   "Retranscribing...": "Повторная транскрипция...",
+  "Post-processing...": "Пост-обработка...",
+  "Decoding audio for speaker diarization": "Декодирование аудио для определения спикеров",
   "Retranscription Failed": "Ошибка повторной транскрипции",
   "Retranscribe Meeting": "Повторная транскрипция встречи",
   "Processing audio...": "Обработка аудио...",
