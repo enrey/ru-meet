@@ -23,6 +23,7 @@ import { useConfig } from '@/contexts/ConfigContext';
 import { LANGUAGES } from '@/constants/languages';
 import { useTranscriptionModels, ModelOption } from '@/hooks/useTranscriptionModels';
 import { translate, useI18n } from '@/lib/i18n';
+import type { RecordingPreferences } from '@/services/configService';
 
 interface RetranscribeDialogProps {
   open: boolean;
@@ -95,6 +96,21 @@ export function RetranscribeDialog({
   }, [selectedModelKey, availableModels]);
   const isParakeetModel = selectedModelDetails?.provider === 'parakeet';
   const isGigaAMModel = selectedModelDetails?.provider === 'gigaam';
+
+  // With GigaAM, post-processing also re-recognizes mixed-script terms with
+  // GigaAM Multilingual 220M when that setting is on and the model installed.
+  const [termCorrection, setTermCorrection] = useState<{ enabled: boolean; installed: boolean } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    Promise.all([
+      invoke<RecordingPreferences>('get_recording_preferences'),
+      invoke<boolean>('term_correction_model_available'),
+    ]).then(([prefs, installed]) => {
+      if (active) setTermCorrection({ enabled: prefs.post_recording_transcription ?? true, installed });
+    }).catch((err) => console.warn('Could not read the term correction state:', err));
+    return () => { active = false; };
+  }, [open]);
   const hasFixedLanguage = isParakeetModel || isGigaAMModel;
 
   useEffect(() => {
@@ -345,6 +361,15 @@ export function RetranscribeDialog({
               <p className="text-xs text-muted-foreground">
                 {t('Choose a transcription model')}
               </p>
+              {isGigaAMModel && termCorrection && (
+                <p className="text-xs text-muted-foreground">
+                  {!termCorrection.enabled
+                    ? t('Term correction with GigaAM Multilingual 220M is off in the transcription settings.')
+                    : termCorrection.installed
+                      ? t('Terms mixing Cyrillic and Latin are then re-recognized with GigaAM Multilingual 220M.')
+                      : t('To re-recognize terms mixing Cyrillic and Latin, install GigaAM Multilingual 220M (225 MB) in the transcription settings.')}
+                </p>
+              )}
             </div>
           )}
 

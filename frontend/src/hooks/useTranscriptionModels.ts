@@ -20,7 +20,7 @@ interface TranscriptModelConfig {
 }
 
 /**
- * Custom hook for fetching and managing transcription models (Whisper and Parakeet).
+ * Custom hook for fetching and managing transcription models (GigaAM, Whisper, Parakeet).
  *
  * This hook centralizes the model fetching logic that was previously duplicated
  * in ImportAudioDialog and RetranscribeDialog components.
@@ -43,54 +43,28 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
 
   const fetchModels = useCallback(async () => {
     setLoadingModels(true);
-    const allModels: ModelOption[] = [];
-
-    // Fetch Whisper models
-    try {
-      const whisperModels = await invoke<RawModelInfo[]>('whisper_get_available_models');
-      const availableWhisper = whisperModels
-        .filter((m) => m.status === 'Available')
-        .map((m) => ({
-          provider: 'whisper' as const,
-          name: m.name,
-          displayName: `🏠 Whisper: ${m.name}`,
-          size_mb: m.size_mb,
-        }));
-      allModels.push(...availableWhisper);
-    } catch (err) {
-      console.error('Failed to fetch Whisper models:', err);
-    }
-
-    // Fetch Parakeet models
-    try {
-      const parakeetModels = await invoke<RawModelInfo[]>('parakeet_get_available_models');
-      const availableParakeet = parakeetModels
-        .filter((m) => m.status === 'Available')
-        .map((m) => ({
-          provider: 'parakeet' as const,
-          name: m.name,
-          displayName: `⚡ Parakeet: ${m.name}`,
-          size_mb: m.size_mb,
-        }));
-      allModels.push(...availableParakeet);
-    } catch (err) {
-      console.error('Failed to fetch Parakeet models:', err);
-    }
-
-    // Fetch GigaAM models last so it appears third after Parakeet and Whisper.
-    try {
-      const gigaamModels = await invoke<RawModelInfo[]>('gigaam_get_available_models');
-      allModels.push(...gigaamModels
-        .filter((m) => m.status === 'Available')
-        .map((m) => ({
-          provider: 'gigaam' as const,
-          name: m.name,
-          displayName: `🇷🇺 GigaAM v3: ${m.name}`,
-          size_mb: m.size_mb,
-        })));
-    } catch (err) {
-      console.error('Failed to fetch GigaAM models:', err);
-    }
+    const available = async (
+      command: string,
+      provider: ModelOption['provider'],
+      label: string,
+    ): Promise<ModelOption[]> => {
+      try {
+        const models = await invoke<RawModelInfo[]>(command);
+        return models
+          .filter((m) => m.status === 'Available')
+          .map((m) => ({ provider, name: m.name, displayName: `${label}: ${m.name}`, size_mb: m.size_mb }));
+      } catch (err) {
+        console.error(`Failed to fetch ${provider} models:`, err);
+        return [];
+      }
+    };
+    // GigaAM first (Russian speech), Parakeet last.
+    const [gigaam, whisper, parakeet] = await Promise.all([
+      available('gigaam_get_available_models', 'gigaam', '🇷🇺 GigaAM v3'),
+      available('whisper_get_available_models', 'whisper', '🏠 Whisper'),
+      available('parakeet_get_available_models', 'parakeet', '⚡ Parakeet'),
+    ]);
+    const allModels: ModelOption[] = [...gigaam, ...whisper, ...parakeet];
 
     setAvailableModels(allModels);
 
