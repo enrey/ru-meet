@@ -304,7 +304,6 @@ pub(crate) async fn generate_summary(
             max_tokens,
             temperature,
             top_p,
-            app_data_dir,
             Some(&attempt_token),
         )
         .await
@@ -324,7 +323,6 @@ async fn generate_summary_once(
     max_tokens: Option<u32>,
     temperature: Option<f32>,
     top_p: Option<f32>,
-    app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<LlmCompletion, String> {
     // Check if cancelled before starting
@@ -332,26 +330,6 @@ async fn generate_summary_once(
         if token.is_cancelled() {
             return Err("Summary generation was cancelled".to_string());
         }
-    }
-
-    // Handle BuiltInAI provider separately (uses local sidecar, no HTTP API)
-    if provider == &LLMProvider::BuiltInAI {
-        let app_data_dir = app_data_dir
-            .ok_or_else(|| "app_data_dir is required for BuiltInAI provider".to_string())?;
-
-        return crate::summary::summary_engine::generate_with_builtin(
-            app_data_dir,
-            model_name,
-            system_prompt,
-            user_prompt,
-            cancellation_token,
-        )
-        .await
-        .map(|content| LlmCompletion {
-            content,
-            reasoning_stripped: false,
-        })
-        .map_err(|e| e.to_string());
     }
 
     let (api_url, mut headers) = match provider {
