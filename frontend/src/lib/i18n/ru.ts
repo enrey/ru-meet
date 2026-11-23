@@ -1152,6 +1152,11 @@ export const ru: Record<string, Translation> = {
   "Bytes": "Б",
   "Version {version} is now available": "Доступна версия {version}",
   "View Details": "Подробнее",
+  "Version {version}": "Версия {version}",
+  "Installed": "Установлена",
+  "What changed since your version ({count} releases):": plural('count', "Что изменилось с вашей версии ({count} выпуск):", "Что изменилось с вашей версии ({count} выпуска):", "Что изменилось с вашей версии ({count} выпусков):"),
+  "No published releases found": "Опубликованные выпуски не найдены",
+  "Failed to load release notes: {error}": "Не удалось загрузить описание выпусков: {error}",
 
   // Download progress toast
   "Network error - Check your internet connection": "Ошибка сети — проверьте подключение к интернету",

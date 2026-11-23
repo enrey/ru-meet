@@ -1,0 +1,62 @@
+name: Release notes for updater
+
+# tauri-action writes latest.json while the release is still a draft, before its
+# description is final, so `notes` stays empty. This job copies the published
+# descriptions into the latest release's latest.json: `notes` holds the latest
+# release, `releases` the recent history so the update dialog can show every
+# version a user skipped. Draft releases do not trigger `edited`, so editing a
+# draft changes nothing; editing a published release refreshes the notes.
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+
+concurrency:
+  group: release-notes
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update-latest-json:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write release notes into latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Tag of the release the updater endpoint (releases/latest) serves.
+          TAG=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          echo "Latest release: $TAG"
+
+          if ! gh release download "$TAG" --pattern latest.json --dir . ; then
+            echo "::warning::$TAG has no latest.json yet; nothing to update."
+            exit 0
+          fi
+
+          gh api "repos/$GH_REPO/releases?per_page=30" --jq '
+            [ .[]
+              | select(.draft | not)
+              | select(.prerelease | not)
+              | { version: (.tag_name | ltrimstr("v")), pub_date: .published_at, notes: (.body // "") } ]
+            | .[:15]' > history.json
+
+          LATEST_NOTES=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq '.body // ""')
+
+          jq --arg notes "$LATEST_NOTES" --slurpfile history history.json \
+            '.notes = $notes | .releases = $history[0]' latest.json > latest.next.json
+
+          if cmp -s latest.json latest.next.json; then
+            echo "latest.json already up to date."
+            exit 0
+          fi
+
+          mv latest.next.json latest.json
+          gh release upload "$TAG" latest.json --clobber
+          echo "### latest.json notes updated for $TAG" >> "$GITHUB_STEP_SUMMARY"
+          jq '{version, notes_length: (.notes | length), releases: [.releases[].version]}' latest.json >> "$GITHUB_STEP_SUMMARY"

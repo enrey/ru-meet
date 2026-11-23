@@ -51,6 +51,7 @@ pub mod openrouter;
 pub mod parakeet_engine;
 pub mod portable;
 pub mod processing;
+pub mod release_notes;
 pub use background_worker::run_if_requested as run_background_worker;
 pub mod state;
 pub mod summary;
@@ -805,6 +806,9 @@ pub fn run() {
             api::test_backend_connection,
             api::debug_backend_connection,
             api::open_external_url,
+            release_notes::fetch_release_history,
+            release_notes::get_cached_release_history,
+            release_notes::save_release_history,
             // Custom OpenAI commands
             api::api_save_custom_openai_config,
             api::api_get_custom_openai_config,

@@ -9,8 +9,9 @@ import {
   DialogTitle,
 } from './ui/dialog';
 import { Button } from './ui/button';
-import { updateService, UpdateInfo, UpdateProgress } from '@/services/updateService';
+import { UpdateInfo, UpdateProgress, ReleaseNotesEntry } from '@/services/updateService';
 import { check, Update } from '@tauri-apps/plugin-updater';
+import { ReleaseNotesList } from './ReleaseNotes';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { toast } from 'sonner';
 import { getIntlLocale, translate, useI18n } from '@/lib/i18n';
@@ -19,9 +20,11 @@ interface UpdateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   updateInfo: UpdateInfo | null;
+  /** Show the dialog with sample data; installing is disabled. */
+  preview?: boolean;
 }
 
-export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogProps) {
+export function UpdateDialog({ open, onOpenChange, updateInfo, preview = false }: UpdateDialogProps) {
   const { t, locale } = useI18n();
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
@@ -34,6 +37,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
       setIsDownloading(false);
       setProgress(null);
       setError(null);
+      if (preview) return;
 
       // Get the update object when dialog opens
       check().then((updateResult) => {
@@ -53,7 +57,7 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
       setError(null);
       setUpdate(null);
     }
-  }, [open, updateInfo]);
+  }, [open, updateInfo, preview]);
 
   const handleDownloadAndInstall = async () => {
     // Get update object if not already available
@@ -180,10 +184,16 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
     return null;
   }
 
+  const releases: ReleaseNotesEntry[] = updateInfo.releases?.length
+    ? updateInfo.releases
+    : updateInfo.body
+      ? [{ version: updateInfo.version ?? '', pub_date: updateInfo.date, notes: updateInfo.body }]
+      : [];
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-[500px]"
+        className="sm:max-w-[640px]"
         onEscapeKeyDown={handleEscapeKeyDown}
         onInteractOutside={handleInteractOutside}
       >
@@ -203,6 +213,11 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
               <>
                 <Download className="h-5 w-5 text-indigo-600" />
                 {t('Update Available')}
+                {preview && (
+                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">
+                    {t('Preview')}
+                  </span>
+                )}
               </>
             )}
           </DialogTitle>
@@ -235,11 +250,14 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
                 )}
               </div>
 
-              {updateInfo.body && (
-                <div className="bg-slate-50 rounded-lg p-3 max-h-40 overflow-y-auto">
-                  <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                    {updateInfo.body}
-                  </p>
+              {releases.length > 0 && (
+                <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-5">
+                  {releases.length > 1 && (
+                    <p className="text-xs text-muted-foreground">
+                      {t('What changed since your version ({count} releases):', { count: releases.length })}
+                    </p>
+                  )}
+                  <ReleaseNotesList releases={releases} />
                 </div>
               )}
             </>
@@ -282,7 +300,11 @@ export function UpdateDialog({ open, onOpenChange, updateInfo }: UpdateDialogPro
               <Button variant="outline" onClick={() => handleOpenChange(false)}>
                 {t('Later')}
               </Button>
-              <Button onClick={handleDownloadAndInstall} className="bg-indigo-600 hover:bg-indigo-700">
+              <Button
+                onClick={handleDownloadAndInstall}
+                disabled={preview}
+                className="bg-indigo-600 hover:bg-indigo-700"
+              >
                 <Download className="h-4 w-4 mr-2" />
                 {t('Download & Install')}
               </Button>

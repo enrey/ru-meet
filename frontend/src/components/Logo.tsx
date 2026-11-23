@@ -5,6 +5,7 @@ import { VisuallyHidden } from "./ui/visually-hidden";
 import { About } from "./About";
 import { useI18n } from "@/lib/i18n";
 import { useAppVersion } from "@/hooks/useAppVersion";
+import { useUpdateCheckContext } from "./UpdateCheckProvider";
 
 interface LogoProps {
   isCollapsed: boolean;
@@ -14,6 +15,13 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
   ({ isCollapsed }, ref) => {
     const { t } = useI18n();
     const appVersion = useAppVersion();
+    const { showUpdatePreview } = useUpdateCheckContext();
+    // Shift+click previews the update dialog with real release notes instead of opening About.
+    const handleClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (!event.shiftKey) return;
+      event.preventDefault();
+      void showUpdatePreview();
+    };
     return (
       <Dialog aria-describedby={undefined}>
         {isCollapsed ? (
@@ -21,6 +29,7 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
             <button
               ref={ref}
               type="button"
+              onClick={handleClick}
               className="flex items-center justify-center mb-2 cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity"
               aria-label={t('About Ru-Meet')}
             >
@@ -39,6 +48,7 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
             <button
               ref={ref}
               type="button"
+              onClick={handleClick}
               className="mb-2 flex w-full items-center gap-3 rounded-xl px-1 py-1 text-left cursor-pointer transition-colors hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               aria-label={t('About Ru-Meet')}
             >
@@ -57,7 +67,7 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
             </button>
           </DialogTrigger>
         )}
-        <DialogContent>
+        <DialogContent aria-describedby={undefined}>
           <VisuallyHidden>
             <DialogTitle>{t('About Ru-Meet')}</DialogTitle>
           </VisuallyHidden>

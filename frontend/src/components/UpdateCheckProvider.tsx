@@ -2,7 +2,10 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { useUpdateCheck } from '@/hooks/useUpdateCheck';
-import { UpdateInfo } from '@/services/updateService';
+import { toast } from 'sonner';
+import { compareVersions, UpdateInfo } from '@/services/updateService';
+import { fetchReleaseHistory } from './ReleaseNotes';
+import { translate } from '@/lib/i18n';
 import { UpdateDialog } from './UpdateDialog';
 import { setUpdateDialogCallback, showUpdateNotification } from './UpdateNotification';
 
@@ -11,12 +14,15 @@ interface UpdateCheckContextType {
   isChecking: boolean;
   checkForUpdates: (force?: boolean) => Promise<void>;
   showUpdateDialog: () => void;
+  /** Opens the update dialog with real notes of recent releases, as if the user skipped some. */
+  showUpdatePreview: () => Promise<void>;
 }
 
 const UpdateCheckContext = createContext<UpdateCheckContextType | undefined>(undefined);
 
 export function UpdateCheckProvider({ children }: { children: React.ReactNode }) {
   const [showDialog, setShowDialog] = useState(false);
+  const [previewInfo, setPreviewInfo] = useState<UpdateInfo | null>(null);
 
   const handleShowDialog = useCallback(() => {
     setShowDialog(true);
@@ -30,6 +36,30 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
       showUpdateNotification(info, handleShowDialog);
     },
   });
+
+  const showUpdatePreview = useCallback(async () => {
+    try {
+      const history = await fetchReleaseHistory();
+      if (history.length === 0) {
+        toast.error(translate('No published releases found'));
+        return;
+      }
+      const sorted = [...history].sort((a, b) => compareVersions(b.version, a.version));
+      const latest = sorted[0];
+      // Pretend the user is two releases behind so the dialog shows accumulated notes.
+      const current = sorted[Math.min(2, sorted.length - 1)];
+      setPreviewInfo({
+        available: true,
+        currentVersion: current.version === latest.version ? '0.0.0' : current.version,
+        version: latest.version,
+        date: latest.pub_date ?? undefined,
+        body: latest.notes,
+        releases: sorted.filter((entry) => compareVersions(entry.version, current.version) > 0),
+      });
+    } catch (error) {
+      toast.error(translate('Failed to load release notes: {error}', { error: String(error) }));
+    }
+  }, []);
 
   useEffect(() => {
     // Register the callback so UpdateNotification can trigger the dialog
@@ -57,6 +87,7 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
         isChecking,
         checkForUpdates,
         showUpdateDialog: handleShowDialog,
+        showUpdatePreview,
       }}
     >
       {children}
@@ -64,6 +95,14 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
         open={showDialog}
         onOpenChange={setShowDialog}
         updateInfo={updateInfo}
+      />
+      <UpdateDialog
+        open={previewInfo !== null}
+        onOpenChange={(open) => {
+          if (!open) setPreviewInfo(null);
+        }}
+        updateInfo={previewInfo}
+        preview
       />
     </UpdateCheckContext.Provider>
   );
