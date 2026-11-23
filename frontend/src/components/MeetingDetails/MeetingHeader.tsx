@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, Loader2, Pencil } from 'lucide-react';
+import { ArrowLeft, Loader2, Pencil, Star } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { getIntlLocale, useI18n, type TranslateFn } from '@/lib/i18n';
 import { useMeetingSpeakers } from '@/contexts/MeetingSpeakersContext';
@@ -24,6 +24,8 @@ interface MeetingHeaderProps {
   summaryError?: string | null;
   /** Persist a new title; rejecting keeps the editor open. */
   onRename: (title: string) => Promise<void>;
+  isFavorite?: boolean;
+  onToggleFavorite?: () => void;
   /** Meeting actions, right-aligned next to the title. */
   children?: ReactNode;
 }
@@ -77,6 +79,8 @@ export function MeetingHeader({
   summaryState,
   summaryError,
   onRename,
+  isFavorite = false,
+  onToggleFavorite,
   children,
 }: MeetingHeaderProps) {
   const router = useRouter();
@@ -189,6 +193,20 @@ export function MeetingHeader({
           >
             <h1 className="truncate text-lg font-semibold tracking-tight text-slate-900" title={title}>{title}</h1>
             <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+          </button>
+        )}
+        {onToggleFavorite && (
+          <button
+            type="button"
+            onClick={onToggleFavorite}
+            aria-pressed={isFavorite}
+            aria-label={isFavorite ? t('Remove from favorites') : t('Add to favorites')}
+            title={isFavorite ? t('Remove from favorites') : t('Add to favorites')}
+            className={`shrink-0 rounded-md p-1 transition-colors hover:bg-slate-50 ${
+              isFavorite ? 'text-amber-500' : 'text-slate-300 hover:text-amber-500'
+            }`}
+          >
+            <Star className={`h-4 w-4 ${isFavorite ? 'fill-amber-400' : ''}`} />
           </button>
         )}
         <span className="shrink-0"><SummaryChip state={summaryState} error={summaryError} t={t} /></span>

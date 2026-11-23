@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { MeetingSummary, SummaryProcessResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
+import { useMeetingFavorite } from '@/hooks/useMeetingFavorite';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { translate } from '@/lib/i18n';
@@ -215,6 +216,7 @@ export default function PageContent({
   // Duration and speaker count come from the library listing.
   const { meetings: meetingList } = useSidebar();
   const listItem = meetingList.find((item) => item.id === meeting.id);
+  const setFavorite = useMeetingFavorite();
   const isSummaryGenerating = ['processing', 'summarizing', 'regenerating'].includes(summaryGeneration.summaryStatus);
   const summaryState: MeetingSummaryState = isSummaryGenerating ? 'processing'
     : hasVisibleSummaryContent(meetingData.aiSummary) ? 'ready'
@@ -340,6 +342,8 @@ export default function PageContent({
         summaryState={summaryState}
         summaryError={summaryGeneration.summaryError}
         onRename={handleRenameMeeting}
+        isFavorite={listItem?.isFavorite ?? false}
+        onToggleFavorite={listItem ? () => void setFavorite(meeting.id, !listItem.isFavorite) : undefined}
       >
         <MeetingActionBar
           meetingId={meeting.id}

@@ -16,6 +16,7 @@ import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { TASK_KIND_LABELS, useTasks, type BackgroundTask } from '@/contexts/TasksContext';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { voiceprints } from '@/services/voiceprintService';
+import { useMeetingFavorite } from '@/hooks/useMeetingFavorite';
 import { getIntlLocale, useI18n, type TranslateFn } from '@/lib/i18n';
 
 type SummaryFilter = 'all' | 'with' | 'without' | 'favorites';
@@ -599,18 +600,11 @@ export default function MeetingsLibraryPage() {
   const timeFormat = useMemo(() => new Intl.DateTimeFormat(getIntlLocale(), { hour: '2-digit', minute: '2-digit' }), []);
   const dateFormat = useMemo(() => new Intl.DateTimeFormat(getIntlLocale(), { day: 'numeric', month: 'short', weekday: 'short' }), []);
 
-  const toggleFavorite = useCallback(async (meeting: MeetingListItem) => {
-    const favorite = !meeting.isFavorite;
-    const apply = (value: boolean) => setMeetings((current) =>
-      current.map((item) => (item.id === meeting.id ? { ...item, isFavorite: value } : item)));
-    apply(favorite);
-    try {
-      await invoke('api_set_meeting_favorite', { meetingId: meeting.id, favorite });
-    } catch (error) {
-      apply(!favorite);
-      toast.error(t('Could not update favorites'), { description: String(error) });
-    }
-  }, [setMeetings, t]);
+  const setFavorite = useMeetingFavorite();
+  const toggleFavorite = useCallback(
+    (meeting: MeetingListItem) => setFavorite(meeting.id, !meeting.isFavorite),
+    [setFavorite],
+  );
 
   const openMeeting = useCallback((meeting: MeetingListItem) => {
     setCurrentMeeting({ id: meeting.id, title: meeting.title });
