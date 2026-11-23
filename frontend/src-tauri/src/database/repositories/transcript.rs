@@ -41,6 +41,10 @@ struct DiarizationRow {
     term_corrections: Option<String>,
 }
 
+/// A tied turn at most this share of the longest tied one counts as an
+/// interjection inside it and takes the word.
+const INTERJECTION_SHARE: f64 = 0.5;
+
 fn overlap(start: f64, end: f64, turn: &SpeakerTurn) -> f64 {
     (end.min(turn.end) - start.max(turn.start)).max(0.0)
 }
@@ -91,14 +95,23 @@ impl DiarizationSource {
             };
             let best = turns.iter().map(score).fold(0.0, f64::max);
             let next = if best > 0.0 {
-                // Keep the current speaker on near ties. For an initial tie
-                // use the midpoint, then a deterministic speaker order.
+                // On near ties a short interjection nested in a much longer
+                // turn wins ("да" over the overlapped monologue); otherwise
+                // keep the current speaker. For an initial tie use the
+                // midpoint, then a deterministic speaker order.
                 let midpoint = (word.start + word.end) / 2.0;
-                turns
+                let tied: Vec<&SpeakerTurn> = turns
                     .iter()
                     .filter(|turn| score(turn) > 0.0 && best - score(turn) <= 0.001)
+                    .collect();
+                let longest = tied
+                    .iter()
+                    .map(|turn| turn.end - turn.start)
+                    .fold(0.0, f64::max);
+                tied.into_iter()
                     .min_by_key(|turn| {
                         (
+                            turn.end - turn.start > INTERJECTION_SHARE * longest,
                             speaker != Some(turn.speaker.as_str()),
                             !(turn.start <= midpoint && midpoint < turn.end),
                             turn.speaker.as_str(),
@@ -846,6 +859,37 @@ mod word_timing_tests {
                 ("три", 1.5, 3.0, Some("Б"))
             ]
         );
+    }
+
+    #[test]
+    fn word_timing_ties_go_to_nested_interjection() {
+        let source = DiarizationSource {
+            text: "Значит да делаем".to_owned(),
+            start: 0.0,
+            end: 6.0,
+            words: [(0, 0.5, 1.0), (13, 3.0, 3.3), (18, 4.5, 5.0)]
+                .into_iter()
+                .map(|(byte_start, start, end)| WordTiming {
+                    byte_start,
+                    start,
+                    end,
+                })
+                .collect(),
+        };
+        let turns = [
+            SpeakerTurn {
+                start: 0.0,
+                end: 6.0,
+                speaker: "А".into(),
+            },
+            SpeakerTurn {
+                start: 2.9,
+                end: 3.5,
+                speaker: "Б".into(),
+            },
+        ];
+        let speakers: Vec<_> = source.split(&turns).into_iter().map(|part| part.3).collect();
+        assert_eq!(speakers, [Some("А"), Some("Б"), Some("А")]);
     }
 
     #[tokio::test]
