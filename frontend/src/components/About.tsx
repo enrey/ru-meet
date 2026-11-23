@@ -1,13 +1,22 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Image from 'next/image';
 import { UpdateDialog } from "./UpdateDialog";
-import { updateService, UpdateInfo } from '@/services/updateService';
+import { updateService, UpdateInfo, ReleaseNotesEntry } from '@/services/updateService';
 import { Button } from './ui/button';
-import { Loader2, CheckCircle2 } from 'lucide-react';
+import { Loader2, CheckCircle2, Check, RefreshCw } from 'lucide-react';
+import { fetchReleaseHistory, getCachedReleaseHistory, ReleaseNotesList } from './ReleaseNotes';
 import { toast } from 'sonner';
 import { useAppVersion } from '@/hooks/useAppVersion';
 import { useI18n } from '@/lib/i18n';
 
+const RECENT_RELEASES = 5;
+
+const ADVANTAGES = [
+    { title: 'Privacy-first', detail: 'Data and AI processing stay on your computer' },
+    { title: 'Use Any Model', detail: 'Local models or any external API' },
+    { title: 'Cost-Smart', detail: 'No per-minute billing' },
+    { title: 'Works everywhere', detail: 'Google Meet, Zoom, Teams-online or offline.' },
+];
 
 export function About() {
     const currentVersion = useAppVersion();
@@ -15,6 +24,37 @@ export function About() {
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
     const [isChecking, setIsChecking] = useState(false);
     const [showUpdateDialog, setShowUpdateDialog] = useState(false);
+    const [releases, setReleases] = useState<ReleaseNotesEntry[] | null>(null);
+    const [isFetchingReleases, setIsFetchingReleases] = useState(false);
+
+    // Only the local cache on open: the app goes online for release notes on request.
+    useEffect(() => {
+        let cancelled = false;
+        getCachedReleaseHistory()
+            .then((history) => {
+                if (!cancelled) setReleases(history.slice(0, RECENT_RELEASES));
+            })
+            .catch((error) => {
+                console.warn('Failed to read cached release notes:', error);
+                if (!cancelled) setReleases([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    const handleFetchReleases = async () => {
+        setIsFetchingReleases(true);
+        try {
+            const history = await fetchReleaseHistory();
+            setReleases(history.slice(0, RECENT_RELEASES));
+        } catch (error) {
+            console.warn('Failed to load release notes:', error);
+            toast.error(t('Failed to load release notes: {error}', { error: String(error) }));
+        } finally {
+            setIsFetchingReleases(false);
+        }
+    };
 
     const handleCheckForUpdates = async () => {
         setIsChecking(true);
@@ -84,27 +124,55 @@ export function About() {
                 </div>
             </div>
 
-            {/* Features Grid - Compact */}
-            <div className="space-y-3">
-                <h2 className="text-base font-semibold text-slate-800">{t('What makes Ru-Meet different')}</h2>
-                <div className="grid grid-cols-2 gap-2">
-                    <div className="bg-slate-50 rounded p-3 hover:bg-slate-100 transition-colors">
-                        <h3 className="font-bold text-sm text-slate-900 mb-1">{t('Privacy-first')}</h3>
-                        <p className="text-xs text-slate-600 leading-relaxed">{t('Your data & AI processing workflow can now stay within your premise. No cloud, no leaks.')}</p>
-                    </div>
-                    <div className="bg-slate-50 rounded p-3 hover:bg-slate-100 transition-colors">
-                        <h3 className="font-bold text-sm text-slate-900 mb-1">{t('Use Any Model')}</h3>
-                        <p className="text-xs text-slate-600 leading-relaxed">{t('Prefer local open-source model? Great. Want to plug in an external API? Also fine. No lock-in.')}</p>
-                    </div>
-                    <div className="bg-slate-50 rounded p-3 hover:bg-slate-100 transition-colors">
-                        <h3 className="font-bold text-sm text-slate-900 mb-1">{t('Cost-Smart')}</h3>
-                        <p className="text-xs text-slate-600 leading-relaxed">{t('Avoid pay-per-minute bills by running models locally (or pay only for the calls you choose).')}</p>
-                    </div>
-                    <div className="bg-slate-50 rounded p-3 hover:bg-slate-100 transition-colors">
-                        <h3 className="font-bold text-sm text-slate-900 mb-1">{t('Works everywhere')}</h3>
-                        <p className="text-xs text-slate-600 leading-relaxed">{t('Google Meet, Zoom, Teams-online or offline.')}</p>
-                    </div>
+            {/* Advantages */}
+            <div className="space-y-2">
+                <h2 className="text-sm font-semibold text-slate-800">{t('Ru-Meet advantages')}</h2>
+                <ul className="space-y-1.5">
+                    {ADVANTAGES.map(({ title, detail }) => (
+                        <li key={title} className="flex items-start gap-2 text-xs">
+                            <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+                                <Check className="h-3 w-3" strokeWidth={3} />
+                            </span>
+                            <span className="leading-snug">
+                                <span className="font-semibold text-slate-900">{t(title)}</span>
+                                <span className="block text-slate-500">{t(detail)}</span>
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            </div>
+
+            {/* Release notes */}
+            <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold text-slate-800">{t("What's new")}</h2>
+                    {releases && (
+                        <Button
+                            onClick={handleFetchReleases}
+                            disabled={isFetchingReleases}
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs text-slate-500"
+                        >
+                            {isFetchingReleases ? (
+                                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                            ) : (
+                                <RefreshCw className="h-3 w-3 mr-1.5" />
+                            )}
+                            {t('Load from GitHub')}
+                        </Button>
+                    )}
                 </div>
+                {releases && releases.length === 0 && (
+                    <p className="text-xs text-slate-500">
+                        {t('Release notes are saved when the app checks for updates. You can also load them from GitHub.')}
+                    </p>
+                )}
+                {releases && releases.length > 0 && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <ReleaseNotesList releases={releases} installedVersion={currentVersion} />
+                    </div>
+                )}
             </div>
 
             {/* Repository Link */}
