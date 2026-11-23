@@ -214,7 +214,10 @@ jobs:
             git push origin "${release_commit}:${GITHUB_REF}"
           fi
           if [[ -z "$tag_commit" ]]; then
+            # Pass tag_name too: patching a draft without it resets the tag to
+            # "untagged-...", and the release is then published without v${VERSION}.
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+              -f tag_name="v${VERSION}" \
               -f target_commitish="$release_commit" --silent
           fi
           echo "commit=$release_commit" >> "$GITHUB_OUTPUT"
