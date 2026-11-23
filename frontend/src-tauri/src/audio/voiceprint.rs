@@ -250,8 +250,13 @@ pub(crate) fn suggest(fragments: &[Vec<f32>], profiles: &[Vec<f32>]) -> Option<(
 /// Worker side: embed recording intervals with the fixed extractor. `None`
 /// marks an interval too short (or outside the recording) to embed.
 pub(crate) fn embed_in_worker(path: &std::path::Path, clips: &[(f64, f64)]) -> Result<Vec<Option<Vec<f32>>>> {
-    use polyvoice::Embedder;
     let samples = super::decoder::decode_audio_file(path)?.to_whisper_format();
+    embed_samples(&samples, clips)
+}
+
+/// Embed intervals of already decoded 16 kHz mono samples, L2-normalized.
+pub(crate) fn embed_samples(samples: &[f32], clips: &[(f64, f64)]) -> Result<Vec<Option<Vec<f32>>>> {
+    use polyvoice::Embedder;
     let registry = polyvoice::ModelRegistry::with_cache_dir(super::diarization::models_root()?)
         .map_err(|error| anyhow!("Could not open the voice model cache: {error}"))?;
     let model = registry

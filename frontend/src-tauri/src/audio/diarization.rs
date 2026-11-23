@@ -375,15 +375,114 @@ fn collapse_minor_speakers(turns: Vec<SpeakerTurn>) -> Vec<SpeakerTurn> {
     merged
 }
 
+/// Within one meeting the audio path is the same, so two clusters of one
+/// voice score well above this; ScribeAir measured no pair of different
+/// people above 0.72 in a session with the same WeSpeaker ResNet34.
+const SAME_VOICE_SIMILARITY: f32 = 0.75;
+const SAME_VOICE_MIN_CLIP_SECONDS: f64 = 1.0;
+const SAME_VOICE_MAX_CLIPS: usize = 6;
+
+fn speech_ranking(turns: &[SpeakerTurn]) -> Vec<String> {
+    let mut spoken: std::collections::HashMap<&str, f64> = std::collections::HashMap::new();
+    for turn in turns {
+        *spoken.entry(turn.speaker.as_str()).or_insert(0.0) += (turn.end - turn.start).max(0.0);
+    }
+    let mut ranked: Vec<(&str, f64)> = spoken.into_iter().collect();
+    ranked.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(right.0)));
+    ranked.into_iter().map(|(name, _)| name.to_owned()).collect()
+}
+
+/// Fold each speaker into a busier one whose voice centroid is at least
+/// `SAME_VOICE_SIMILARITY` alike: engines split one person by intonation or
+/// loudness, and the duration-only `Others` rule would then hide them.
+/// Speakers without a centroid are left alone.
+fn merge_same_voice(
+    turns: Vec<SpeakerTurn>,
+    centroids: &std::collections::HashMap<String, Vec<f32>>,
+) -> Vec<SpeakerTurn> {
+    let ranked = speech_ranking(&turns);
+    let mut target: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (index, speaker) in ranked.iter().enumerate().skip(1) {
+        let Some(own) = centroids.get(speaker) else { continue };
+        let best = ranked[..index]
+            .iter()
+            .filter(|bigger| !target.contains_key(*bigger))
+            .filter_map(|bigger| {
+                let other = centroids.get(bigger)?;
+                (own.len() == other.len())
+                    .then(|| (bigger, own.iter().zip(other).map(|(a, b)| a * b).sum::<f32>()))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((bigger, similarity)) = best.filter(|(_, similarity)| *similarity >= SAME_VOICE_SIMILARITY) {
+            log::info!("Diarization: same voice {speaker} -> {bigger} (similarity {similarity:.2})");
+            target.insert(speaker.clone(), bigger.clone());
+        }
+    }
+    if target.is_empty() {
+        return turns;
+    }
+    turns
+        .into_iter()
+        .map(|turn| match target.get(&turn.speaker) {
+            Some(bigger) => SpeakerTurn {
+                speaker: bigger.clone(),
+                ..turn
+            },
+            None => turn,
+        })
+        .collect()
+}
+
+/// Voice centroid per speaker from their clean intervals.
+fn speaker_centroids(
+    turns: &[SpeakerTurn],
+    samples: &[f32],
+) -> Result<std::collections::HashMap<String, Vec<f32>>> {
+    use super::voiceprint::{centroid, clean_intervals, embed_samples, pick_clips};
+    let wanted: Vec<(String, Vec<(f64, f64)>)> = speech_ranking(turns)
+        .into_iter()
+        .map(|speaker| {
+            let clips = pick_clips(
+                clean_intervals(turns, &speaker, SAME_VOICE_MIN_CLIP_SECONDS),
+                SAME_VOICE_MAX_CLIPS,
+            )
+            .into_iter()
+            .map(|clip| (clip.start, clip.end))
+            .collect();
+            (speaker, clips)
+        })
+        .filter(|(_, clips): &(String, Vec<(f64, f64)>)| !clips.is_empty())
+        .collect();
+    let flat: Vec<(f64, f64)> = wanted.iter().flat_map(|(_, clips)| clips.iter().copied()).collect();
+    if wanted.len() < 2 {
+        return Ok(Default::default());
+    }
+    let mut embeddings = embed_samples(samples, &flat)?.into_iter();
+    let mut centroids = std::collections::HashMap::new();
+    for (speaker, clips) in wanted {
+        let vectors: Vec<Vec<f32>> = embeddings.by_ref().take(clips.len()).flatten().collect();
+        if let Some(value) = centroid(&vectors) {
+            centroids.insert(speaker, value);
+        }
+    }
+    Ok(centroids)
+}
+
 /// Run one engine and apply the app-level speaker post-processing, so every
 /// caller gets turns shaped the same way.
 fn diarize_with_engine(engine: &str, samples: &[f32], collapse: bool) -> Result<Vec<SpeakerTurn>> {
     let turns = engine_for_id(engine)?.diarize(samples)?;
-    Ok(if collapse {
-        collapse_minor_speakers(turns)
-    } else {
-        turns
-    })
+    if !collapse {
+        return Ok(turns);
+    }
+    let turns = match tokio::task::block_in_place(|| speaker_centroids(&turns, samples)) {
+        Ok(centroids) => merge_same_voice(turns, &centroids),
+        Err(error) => {
+            log::warn!("Diarization: skipping same-voice merge: {error:#}");
+            turns
+        }
+    };
+    Ok(collapse_minor_speakers(turns))
 }
 
 fn engine_for_id(engine: &str) -> Result<Box<dyn DiarizationEngine>> {
@@ -644,6 +743,92 @@ pub fn start_recording_diarization<R: Runtime>(
     }
 }
 
+/// Short replies ("да", "угу") that diarization hears but VAD dropped: a turn
+/// this long with almost no transcript under it gets its own recognition.
+const INTERJECTION_MIN_SECONDS: f64 = 0.4;
+const INTERJECTION_MAX_SECONDS: f64 = 5.0;
+const INTERJECTION_MAX_COVERED: f64 = 0.2;
+const INTERJECTION_MAX_CLIPS: usize = 300;
+
+/// Speaker turns with no transcript under them, merged where they overlap.
+pub(crate) fn interjection_gaps(turns: &[SpeakerTurn], rows: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut gaps: Vec<(f64, f64)> = turns
+        .iter()
+        .filter(|turn| turn.start.is_finite() && turn.end.is_finite())
+        .map(|turn| (turn.start.max(0.0), turn.end))
+        .filter(|(start, end)| {
+            let length = end - start;
+            if !(INTERJECTION_MIN_SECONDS..=INTERJECTION_MAX_SECONDS).contains(&length) {
+                return false;
+            }
+            let covered: f64 = rows
+                .iter()
+                .map(|(row_start, row_end)| (end.min(*row_end) - start.max(*row_start)).max(0.0))
+                .sum();
+            covered <= INTERJECTION_MAX_COVERED * length
+        })
+        .collect();
+    gaps.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<(f64, f64)> = Vec::with_capacity(gaps.len());
+    for (start, end) in gaps {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged.truncate(INTERJECTION_MAX_CLIPS);
+    merged
+}
+
+/// What the speakers worker needs to recover short replies: the transcript
+/// rows and the engine. GigaAM only - Whisper invents text on short clips.
+/// Re-running is idempotent, since recovered rows cover their turns.
+async fn short_replies_request<R: Runtime>(
+    app: &AppHandle<R>,
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+) -> Result<Option<crate::background_worker::ShortReplies>> {
+    use crate::audio::transcription::ProviderId;
+    let config = crate::api::api::api_get_transcript_config(app.clone(), tauri::Manager::state(app), None)
+        .await
+        .map_err(|error| anyhow!(error))?;
+    let provider = config.map(|config| config.provider).unwrap_or_else(|| "gigaam".into());
+    if ProviderId::parse(Some(&provider), ProviderId::GigaAm).ok() != Some(ProviderId::GigaAm) {
+        return Ok(None);
+    }
+    let rows: Vec<(f64, f64)> = sqlx::query_as(
+        "SELECT audio_start_time, audio_end_time FROM transcripts
+         WHERE meeting_id = ? AND audio_start_time IS NOT NULL AND audio_end_time IS NOT NULL",
+    )
+    .bind(meeting_id)
+    .fetch_all(pool)
+    .await?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let (provider, model) = crate::audio::transcription::worker_config(app, Some(&provider), None)
+        .await
+        .map_err(|error| anyhow!(error))?;
+    Ok(Some(crate::background_worker::ShortReplies { rows, provider, model }))
+}
+
+async fn save_short_replies(
+    pool: &sqlx::SqlitePool,
+    meeting_id: &str,
+    replies: &[crate::audio::common::TimedUtterance],
+) -> Result<()> {
+    if replies.is_empty() {
+        return Ok(());
+    }
+    let segments = crate::audio::common::create_transcript_segments(replies);
+    let mut transaction = pool.begin().await?;
+    for segment in &segments {
+        TranscriptsRepository::insert_segment(&mut transaction, meeting_id, &segment.id, segment).await?;
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
 pub(crate) fn start_meeting_diarization<R: Runtime>(
     app: AppHandle<R>,
     pool: sqlx::SqlitePool,
@@ -707,7 +892,14 @@ pub(crate) fn start_meeting_diarization<R: Runtime>(
                 return;
             }
         };
-        let result = crate::background_worker::speakers(&app, audio_path, engine, collapse, system_track,
+        let replies = match short_replies_request(&app, &pool, &meeting_id).await {
+            Ok(replies) => replies,
+            Err(error) => {
+                log::warn!("Diarization: short replies will not be recovered: {error:#}");
+                None
+            }
+        };
+        let result = crate::background_worker::speakers(&app, audio_path, engine, collapse, system_track, replies,
             || !CANCELLED_RERUNS.lock().unwrap_or_else(|e| e.into_inner()).contains(&meeting_id),
             |progress| {
                 set_meeting_job_status(&meeting_id, true, &progress.message);
@@ -720,7 +912,10 @@ pub(crate) fn start_meeting_diarization<R: Runtime>(
             _ if take_rerun_cancellation(&meeting_id) => {
                 finish_cancelled_rerun(&app, &meeting_id);
             }
-            Ok(turns) => {
+            Ok((turns, replies)) => {
+                if let Err(error) = save_short_replies(&pool, &meeting_id, &replies).await {
+                    log::warn!("Diarization: short replies were not saved: {error:#}");
+                }
                 match TranscriptsRepository::apply_speaker_turns(&pool, &meeting_id, &turns).await {
                     Ok(()) => {
                         crate::audio::transcript_export::export_diarized_transcripts_logged(
@@ -1102,6 +1297,7 @@ pub async fn run_diarization_task<R: Runtime>(
         engine,
         collapse,
         false,
+        None,
         || true,
         |progress| {
             let _ = app.emit(
@@ -1113,7 +1309,7 @@ pub async fn run_diarization_task<R: Runtime>(
     .await;
     drop(heartbeat);
 
-    match result {
+    match result.map(|(turns, _)| turns) {
         Ok(turns) => {
             let labels: Vec<_> = target.apply_speaker_turns(&turns).into_iter().map(|(sequence_id, speaker)| serde_json::json!({"sequenceId": sequence_id, "speaker": speaker})).collect();
             let _ = app.emit(
@@ -1150,7 +1346,7 @@ pub async fn run_diarization_task<R: Runtime>(
 
 #[cfg(test)]
 mod collapse_tests {
-    use super::{collapse_minor_speakers, SpeakerTurn, OTHERS_SPEAKER};
+    use super::{collapse_minor_speakers, merge_same_voice, SpeakerTurn, OTHERS_SPEAKER};
 
     fn turn(start: f64, end: f64, speaker: &str) -> SpeakerTurn {
         SpeakerTurn {
@@ -1165,6 +1361,47 @@ mod collapse_tests {
         names.sort_unstable();
         names.dedup();
         names
+    }
+
+    #[test]
+    fn finds_short_turns_without_transcript() {
+        let turns = vec![
+            turn(0.0, 10.0, "А"),
+            // Inside a transcribed row: not a gap.
+            turn(3.0, 3.5, "Б"),
+            // In silence between rows: a gap, merged with its overlap.
+            turn(12.0, 12.6, "Б"),
+            turn(12.4, 13.0, "А"),
+            // Too short and too long.
+            turn(20.0, 20.2, "Б"),
+            turn(30.0, 40.0, "Б"),
+        ];
+        let rows = [(0.0, 10.0), (30.0, 40.0)];
+        assert_eq!(super::interjection_gaps(&turns, &rows), [(12.0, 13.0)]);
+    }
+
+    #[test]
+    fn folds_a_split_voice_into_the_busier_speaker_only() {
+        let turns = vec![
+            turn(0.0, 600.0, "Speaker 1"),
+            turn(600.0, 900.0, "Speaker 2"),
+            turn(900.0, 920.0, "Speaker 3"),
+            turn(920.0, 925.0, "Speaker 4"),
+        ];
+        let centroids = [
+            ("Speaker 1", vec![1.0, 0.0]),
+            ("Speaker 2", vec![0.0, 1.0]),
+            // Same voice as Speaker 1.
+            ("Speaker 3", vec![0.8, 0.6]),
+            // Nobody alike: stays for the duration rule.
+            ("Speaker 4", vec![0.6, -0.8]),
+        ]
+        .into_iter()
+        .map(|(name, vector)| (name.to_owned(), vector))
+        .collect();
+        let result = merge_same_voice(turns, &centroids);
+        let labels: Vec<&str> = result.iter().map(|t| t.speaker.as_str()).collect();
+        assert_eq!(labels, ["Speaker 1", "Speaker 2", "Speaker 1", "Speaker 4"]);
     }
 
     #[test]
@@ -1330,7 +1567,7 @@ pub(crate) fn compute_in_worker(
     engine: &str,
     collapse: bool,
     system_track: bool,
-) -> Result<Vec<SpeakerTurn>> {
+) -> Result<(Vec<SpeakerTurn>, Vec<f32>)> {
     use super::decoder::{decode_recording_stream, RecordingStream};
     let samples = if system_track {
         decode_recording_stream(path, RecordingStream::System)?
@@ -1340,7 +1577,8 @@ pub(crate) fn compute_in_worker(
         decode_for_diarization(path)?
     };
     if samples.iter().all(|&value| value.abs() < 1e-5) {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), samples));
     }
-    diarize_with_engine(engine, &samples, collapse)
+    let turns = diarize_with_engine(engine, &samples, collapse)?;
+    Ok((turns, samples))
 }

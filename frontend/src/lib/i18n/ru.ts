@@ -1356,6 +1356,8 @@ export const ruPatterns: TranslationPattern[] = [
     (percent, found) => `Поиск фрагментов речи... ${percent}% (найдено: ${found})`],
   [/^Detecting speech segments\.\.\. (\d+)% \((\d+) found\)$/,
     (percent, found) => `Поиск фрагментов речи... ${percent}% (найдено: ${found})`],
+  [/^Recognizing (\d+) short replies$/, (count) => `Распознавание коротких реплик: ${count}`],
+  [/^Short reply (\d+) of (\d+)$/, (index, total) => `Короткая реплика ${index} из ${total}`],
   [/^Transcribing segment (\d+) of (\d+)$/,
     (index, total) => `Транскрипция фрагмента ${index} из ${total}`],
   [/^Transcribing segment (\d+) of (\d+) \(([\d.]+)s\)(?:, ~(\d+)s left)?\.\.\.$/,

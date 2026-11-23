@@ -40,6 +40,8 @@ pub(crate) enum Request {
         engine: String,
         collapse: bool,
         system_track: bool,
+        /// Also recognize short turns VAD dropped, in the same process.
+        replies: Option<ShortReplies>,
     },
     /// Voiceprint embeddings of recording intervals, in seconds.
     Voiceprints {
@@ -64,6 +66,13 @@ pub(crate) enum Request {
         fail: bool,
     },
 }
+/// Transcript rows (seconds) and the engine for short-reply recovery.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct ShortReplies {
+    pub rows: Vec<(f64, f64)>,
+    pub provider: ProviderId,
+    pub model: String,
+}
 #[derive(Serialize, Deserialize)]
 pub(crate) enum Output {
     Transcript {
@@ -72,7 +81,10 @@ pub(crate) enum Output {
         speech_segments: usize,
         provenance: Vec<Provenance>,
     },
-    Speakers(Vec<SpeakerTurn>),
+    Speakers {
+        turns: Vec<SpeakerTurn>,
+        replies: Vec<crate::audio::common::TimedUtterance>,
+    },
     Voiceprints(Vec<Option<Vec<f32>>>),
     Summary(String),
     Audio {
@@ -165,9 +177,10 @@ pub(crate) async fn speakers<R: Runtime>(
     engine: String,
     collapse: bool,
     system_track: bool,
+    replies: Option<ShortReplies>,
     keep_running: impl Fn() -> bool,
     on_progress: impl Fn(Progress),
-) -> Result<Vec<SpeakerTurn>> {
+) -> Result<(Vec<SpeakerTurn>, Vec<crate::audio::common::TimedUtterance>)> {
     match run(
         app,
         Request::Speakers {
@@ -175,13 +188,14 @@ pub(crate) async fn speakers<R: Runtime>(
             engine,
             collapse,
             system_track,
+            replies,
         },
         keep_running,
         on_progress,
     )
     .await?
     {
-        Output::Speakers(turns) => Ok(turns),
+        Output::Speakers { turns, replies } => Ok((turns, replies)),
         _ => bail!("Unexpected worker result"),
     }
 }
@@ -450,15 +464,30 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
             engine,
             collapse,
             system_track,
+            replies,
         } => {
             progress("decoding", 5, "Decoding audio for speaker diarization");
-            let turns = crate::audio::diarization::compute_in_worker(
+            let (turns, samples) = crate::audio::diarization::compute_in_worker(
                 &path,
                 &engine,
                 collapse,
                 system_track,
             )?;
-            Ok(Output::Speakers(turns))
+            // Diarization of the system track (old recordings) has no mix here.
+            let replies = match replies.filter(|_| !system_track) {
+                Some(replies) => {
+                    let gaps = crate::audio::diarization::interjection_gaps(&turns, &replies.rows);
+                    match recognize_short_replies(&samples, &gaps, replies.provider, &replies.model, &models).await {
+                        Ok(found) => found,
+                        Err(error) => {
+                            log::warn!("Short replies were not recovered: {error:#}");
+                            Vec::new()
+                        }
+                    }
+                }
+                None => Vec::new(),
+            };
+            Ok(Output::Speakers { turns, replies })
         }
         Request::Voiceprints { path, clips } => {
             progress("decoding", 5, "Decoding audio for voiceprints");
@@ -632,6 +661,60 @@ async fn compute(request: Request, models: PathBuf) -> Result<Output> {
         #[cfg(test)]
         Request::Probe { .. } => unreachable!(),
     }
+}
+
+/// Silence around a short reply: the encoder warms up on it instead of on
+/// the first syllable, and no neighbouring, already transcribed words leak in.
+const INTERJECTION_PAD_SECONDS: f64 = 0.3;
+
+/// Recognize each gap on its own, without VAD. Empty when there are none.
+async fn recognize_short_replies(
+    samples: &[f32],
+    gaps: &[(f64, f64)],
+    provider: ProviderId,
+    model: &str,
+    models: &std::path::Path,
+) -> Result<Vec<crate::audio::common::TimedUtterance>> {
+    if gaps.is_empty() {
+        return Ok(Vec::new());
+    }
+    progress("transcribing", 80, format!("Recognizing {} short replies", gaps.len()));
+    let engine = TranscriptionEngine::for_worker(models.to_path_buf(), provider, model)
+        .await
+        .map_err(|e| anyhow!(e))?;
+    let mut transcripts = Vec::new();
+    for (index, &(start, end)) in gaps.iter().enumerate() {
+        if index % 10 == 0 {
+            progress(
+                "transcribing",
+                80 + (index * 19 / gaps.len()) as u32,
+                format!("Short reply {} of {}", index + 1, gaps.len()),
+            );
+        }
+        let Some(clip) = interjection_clip(samples, start, end) else {
+            continue;
+        };
+        let result = engine.transcribe(clip, None).await.map_err(|e| anyhow!(e))?;
+        let text = result.text.trim().to_owned();
+        if text.is_empty() {
+            continue;
+        }
+        let mut words = result.words;
+        crate::audio::word_timing::shift_words(&mut words, start - INTERJECTION_PAD_SECONDS);
+        transcripts.push((text, start * 1000.0, end * 1000.0, words));
+    }
+    log::info!("Recovered {} of {} short replies", transcripts.len(), gaps.len());
+    Ok(transcripts)
+}
+
+fn interjection_clip(samples: &[f32], start: f64, end: f64) -> Option<Vec<f32>> {
+    let from = ((start.max(0.0) * 16_000.0) as usize).min(samples.len());
+    let to = ((end.max(0.0) * 16_000.0) as usize).min(samples.len());
+    if to <= from || to - from < 1600 {
+        return None;
+    }
+    let pad = vec![0.0; (INTERJECTION_PAD_SECONDS * 16_000.0) as usize];
+    Some([pad.as_slice(), &samples[from..to], pad.as_slice()].concat())
 }
 
 /// Microphone and system tracks of a ru-meet recording (ADR 0005), for
