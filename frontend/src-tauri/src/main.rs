@@ -3,7 +3,6 @@
     windows_subsystem = "windows"
 )]
 
-use env_logger;
 use log;
 
 fn main() {
@@ -12,7 +11,7 @@ fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "info,ort::logging=warn");
     }
-    env_logger::init();
+    app_lib::logging::init();
     app_lib::run_background_worker();
 
     // Async logger will be initialized lazily when first needed (after Tauri runtime starts)

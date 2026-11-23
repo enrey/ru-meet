@@ -266,7 +266,7 @@ async fn execute(
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         let (process, stdout) = Process::spawn(&mut command)?;
         let stop = process.clone();
         permit.stop_on_recording(Arc::new(move || stop.stop()));

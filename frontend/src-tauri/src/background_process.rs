@@ -36,6 +36,18 @@ impl Process {
         };
         let stdout = child.stdout.take();
         let input = child.stdin.take();
+        // A piped stderr (the worker's log) goes into the app's log.
+        if let Some(stderr) = child.stderr.take() {
+            let _ = std::thread::Builder::new()
+                .name("child-stderr".into())
+                .spawn(move || {
+                    use std::io::BufRead;
+                    for line in std::io::BufReader::new(stderr).lines() {
+                        let Ok(line) = line else { break };
+                        crate::logging::forward_line(&line);
+                    }
+                });
+        }
         Ok((
             Arc::new(Self {
                 child: Mutex::new(Some(child)),

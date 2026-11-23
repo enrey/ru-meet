@@ -43,6 +43,7 @@ pub mod gigaam_engine;
 pub mod gigaam_onnx;
 pub mod groq;
 pub mod i18n;
+pub mod logging;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -408,6 +409,7 @@ pub fn run() {
         )))
         .manage(state::DatabaseStartupStatus::default())
         .setup(move |_app| {
+            logging::attach(_app.handle());
             #[cfg(target_os = "windows")]
             if let (Some(root), Some(window_config)) =
                 (portable::data_root(), portable_window.as_ref())
@@ -807,6 +809,8 @@ pub fn run() {
             api::debug_backend_connection,
             api::open_external_url,
             release_notes::fetch_release_history,
+            logging::get_log_tail,
+            logging::open_logs_folder,
             release_notes::get_cached_release_history,
             release_notes::save_release_history,
             // Custom OpenAI commands

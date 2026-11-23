@@ -3,7 +3,8 @@ import Image from 'next/image';
 import { UpdateDialog } from "./UpdateDialog";
 import { updateService, UpdateInfo, ReleaseNotesEntry } from '@/services/updateService';
 import { Button } from './ui/button';
-import { Loader2, CheckCircle2, Check, RefreshCw } from 'lucide-react';
+import { Loader2, CheckCircle2, Check, RefreshCw, ScrollText } from 'lucide-react';
+import { LogViewerDialog } from './LogViewerDialog';
 import { fetchReleaseHistory, getCachedReleaseHistory, ReleaseNotesList } from './ReleaseNotes';
 import { toast } from 'sonner';
 import { useAppVersion } from '@/hooks/useAppVersion';
@@ -28,6 +29,7 @@ export function About() {
     const [showUpdateDialog, setShowUpdateDialog] = useState(false);
     const [releases, setReleases] = useState<ReleaseNotesEntry[] | null>(null);
     const [isFetchingReleases, setIsFetchingReleases] = useState(false);
+    const [showLogs, setShowLogs] = useState(false);
 
     // Local cache first; it is filled by update checks. A version installed
     // without one (manual install) is missing from it: then GitHub is asked
@@ -177,7 +179,17 @@ export function About() {
                             )}
                         </Button>
                     )}
+                    <Button
+                        onClick={() => setShowLogs(true)}
+                        variant="ghost"
+                        size="sm"
+                        className="ml-auto h-6 px-2 text-xs text-slate-500 hover:text-slate-800"
+                    >
+                        <ScrollText className="mr-1.5 h-3 w-3" />
+                        {t('View logs')}
+                    </Button>
                 </div>
+                <LogViewerDialog open={showLogs} onOpenChange={setShowLogs} />
                 {releases && releases.length === 0 && (
                     <p className="text-xs text-slate-500">
                         {t('Release notes could not be loaded. Connect to the internet and press the refresh button.')}
