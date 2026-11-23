@@ -10,6 +10,8 @@ import { useAppVersion } from '@/hooks/useAppVersion';
 import { useI18n } from '@/lib/i18n';
 
 const RECENT_RELEASES = 5;
+/** Installed version for which release notes were already fetched from GitHub. */
+const FETCHED_FOR_KEY = 'releaseNotesFetchedFor';
 
 const ADVANTAGES = [
     { title: 'Privacy-first', detail: 'Data and AI processing stay on your computer' },
@@ -27,21 +29,33 @@ export function About() {
     const [releases, setReleases] = useState<ReleaseNotesEntry[] | null>(null);
     const [isFetchingReleases, setIsFetchingReleases] = useState(false);
 
-    // Only the local cache on open: the app goes online for release notes on request.
+    // Local cache first; it is filled by update checks. A version installed
+    // without one (manual install) is missing from it: then GitHub is asked
+    // once for that version, not on every open.
     useEffect(() => {
+        if (!currentVersion) return;
         let cancelled = false;
+        const show = (history: ReleaseNotesEntry[]) => {
+            if (!cancelled) setReleases(history.slice(0, RECENT_RELEASES));
+        };
         getCachedReleaseHistory()
-            .then((history) => {
-                if (!cancelled) setReleases(history.slice(0, RECENT_RELEASES));
-            })
             .catch((error) => {
                 console.warn('Failed to read cached release notes:', error);
-                if (!cancelled) setReleases([]);
+                return [] as ReleaseNotesEntry[];
+            })
+            .then((history) => {
+                show(history);
+                const known = history.some((entry) => entry.version === currentVersion);
+                if (known || localStorage.getItem(FETCHED_FOR_KEY) === currentVersion) return;
+                localStorage.setItem(FETCHED_FOR_KEY, currentVersion);
+                return fetchReleaseHistory()
+                    .then(show)
+                    .catch((error) => console.warn('Failed to load release notes:', error));
             });
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [currentVersion]);
 
     const handleFetchReleases = async () => {
         setIsFetchingReleases(true);
@@ -144,28 +158,29 @@ export function About() {
 
             {/* Release notes */}
             <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1">
                     <h2 className="text-sm font-semibold text-slate-800">{t("What's new")}</h2>
                     {releases && (
                         <Button
                             onClick={handleFetchReleases}
                             disabled={isFetchingReleases}
                             variant="ghost"
-                            size="sm"
-                            className="h-7 text-xs text-slate-500"
+                            size="icon"
+                            className="h-6 w-6 text-slate-400 hover:text-slate-700"
+                            title={t('Refresh release notes from GitHub')}
+                            aria-label={t('Refresh release notes from GitHub')}
                         >
                             {isFetchingReleases ? (
-                                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                                <Loader2 className="h-3 w-3 animate-spin" />
                             ) : (
-                                <RefreshCw className="h-3 w-3 mr-1.5" />
+                                <RefreshCw className="h-3 w-3" />
                             )}
-                            {t('Load from GitHub')}
                         </Button>
                     )}
                 </div>
                 {releases && releases.length === 0 && (
                     <p className="text-xs text-slate-500">
-                        {t('Release notes are saved when the app checks for updates. You can also load them from GitHub.')}
+                        {t('Release notes could not be loaded. Connect to the internet and press the refresh button.')}
                     </p>
                 )}
                 {releases && releases.length > 0 && (
