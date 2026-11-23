@@ -11,7 +11,7 @@ pub mod worker;
 // Re-export commonly used types
 pub use engine::{
     ensure_transcription_model_available, get_or_init_batch_engine,
-    get_or_init_transcription_engine, unload_batch_engine, unload_configured_engine, ProviderId,
+    get_or_init_transcription_engine, unload_configured_engine, ProviderId,
     TranscriptionEngine,
 };
 pub use provider::{TranscriptResult, TranscriptionError, TranscriptionProvider};

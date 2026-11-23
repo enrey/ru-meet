@@ -30,9 +30,9 @@ pub struct GigaAmEngine {
     models_dir: PathBuf,
     model: tokio::sync::Mutex<Option<GigaAMModel>>,
     downloading: AtomicBool,
-    // Persists across `unload_model()` - which `unload_engine_after_batch`
-    // (audio/common.rs) calls after *every* batch import/transcription job
-    // finishes, GPU or not - so the Settings status badge still reflects what
+    // Persists across `unload_model()` - which runs whenever a recording or a
+    // Settings probe finishes, GPU or not - so the Settings status badge still
+    // reflects what
     // the last run actually used instead of going blank the moment a user
     // checks Settings right after an import completes (which is exactly when
     // they're most likely to look).
@@ -367,8 +367,7 @@ pub async fn gigaam_load_model(model_name: String) -> Result<(), String> {
 /// Explicit unload, for the Settings "test which provider this actually
 /// uses" button (`GigaAMModelManager.tsx`): load, read the now-live status,
 /// unload again - so trying it doesn't leave the model sitting in memory
-/// afterward, matching what `unload_engine_after_batch` already does after a
-/// real transcription. Returns whether a model was actually loaded to unload.
+/// afterward, matching the unload after a recording stops. Returns whether a model was actually loaded to unload.
 #[command]
 pub async fn gigaam_unload_model() -> Result<bool, String> {
     Ok(engine()?.unload_model().await)

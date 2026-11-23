@@ -293,23 +293,6 @@ pub async fn get_or_init_batch_engine<R: Runtime>(
     }
 }
 
-/// Unload the batch provider unless a live recording is using the shared engine.
-pub async fn unload_batch_engine(provider: Option<&str>) {
-    if crate::audio::recording_session::RECORDING_SESSION.is_active() {
-        return;
-    }
-    let _permit = crate::background_work::acquire().await;
-    let _guard = ENGINE_LIFECYCLE_LOCK.lock().await;
-    if crate::audio::recording_commands::is_recording().await {
-        info!("Skipping model unload after batch: recording in progress");
-        return;
-    }
-
-    if let Ok(provider_id) = ProviderId::parse(provider, ProviderId::Whisper) {
-        unload_provider(provider_id).await;
-    }
-}
-
 /// Unload the configured recording provider. Provider details stay inside this module.
 pub async fn unload_configured_engine<R: Runtime>(app: &AppHandle<R>) {
     let local_default = crate::api::api::TranscriptConfig::local_default();
