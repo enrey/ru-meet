@@ -14,6 +14,7 @@ import {
 } from '@/lib/transcription-model-readiness';
 import { toast } from 'sonner';
 import { translate } from '@/lib/i18n';
+import { defaultMeetingTitle } from '@/lib/meetingTitle';
 
 const TRANSCRIPTION_RUNTIME_START_ERROR_CODE = 'TRANSCRIPTION_RUNTIME_INITIALIZATION_FAILED';
 const TRANSCRIPTION_RUNTIME_USER_MESSAGE = () => translate('Speech recognition could not initialize. Restart Ru-Meet. If the problem continues, repair or reinstall the app.');
@@ -56,17 +57,7 @@ export function useRecordingStart(
   const { selectedDevices } = useConfig();
   const { setStatus } = useRecordingState();
 
-  // Generate meeting title with timestamp
-  const generateMeetingTitle = useCallback(() => {
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = String(now.getFullYear()).slice(-2);
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    return `${translate('Meeting')} ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
-  }, []);
+  const generateMeetingTitle = useCallback(() => defaultMeetingTitle(), []);
 
   const getTranscriptionProvider = useCallback(async (): Promise<string> => {
     try {

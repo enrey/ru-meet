@@ -40,9 +40,10 @@ pub struct AutomationSettings {
     pub manual_silence_stop: bool,
     #[serde(default = "default_manual_silence_minutes")]
     pub manual_silence_minutes: u32,
-    /// After a recording, run the background processing (speakers, summary,
-    /// reading aloud) by itself; `crate::processing`.
-    #[serde(default = "default_enabled")]
+    /// After a recording, create the summary and its reading aloud by itself
+    /// (`crate::processing`). Transcription and speakers run regardless. Off by
+    /// default: the summary is optional and made on request from the meeting.
+    #[serde(default)]
     pub auto_summary: bool,
 }
 
@@ -67,7 +68,7 @@ impl Default for AutomationSettings {
             record_in_person: false,
             manual_silence_stop: true,
             manual_silence_minutes: default_manual_silence_minutes(),
-            auto_summary: true,
+            auto_summary: false,
         }
     }
 }

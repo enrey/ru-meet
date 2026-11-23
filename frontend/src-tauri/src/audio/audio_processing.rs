@@ -40,7 +40,14 @@ pub fn create_meeting_folder(
     let timestamp = Utc::now().format("%Y-%m-%d_%H-%M").to_string();
     let sanitized_name = sanitize_filename(meeting_name);
     let folder_name = format!("{}_{}", sanitized_name, timestamp);
-    let meeting_folder = base_path.join(folder_name);
+    // Titles are minute-precise, so two recordings started within the same
+    // minute must not share (and overwrite) one folder.
+    let mut meeting_folder = base_path.join(&folder_name);
+    let mut copy = 2;
+    while meeting_folder.exists() {
+        meeting_folder = base_path.join(format!("{folder_name}_{copy}"));
+        copy += 1;
+    }
 
     // Create main meeting folder
     std::fs::create_dir_all(&meeting_folder)?;

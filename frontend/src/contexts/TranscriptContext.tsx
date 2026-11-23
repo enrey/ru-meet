@@ -9,6 +9,7 @@ import { recordingService } from '@/services/recordingService';
 import { indexedDBService } from '@/services/indexedDBService';
 import { listen } from '@tauri-apps/api/event';
 import { translate } from '@/lib/i18n';
+import { defaultMeetingTitle } from '@/lib/meetingTitle';
 
 interface TranscriptContextType {
   transcripts: Transcript[];
@@ -89,8 +90,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             // Get meeting name
             const meetingName = await recordingService.getRecordingMeetingName();
 
-            // Use a better fallback that matches the backend's naming pattern
-            const effectiveTitle = meetingName || `${translate('Meeting')} ${new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-')}`;
+            const effectiveTitle = meetingName || defaultMeetingTitle();
 
             // Initialize meeting metadata in IndexedDB
             await indexedDBService.saveMeetingMetadata({

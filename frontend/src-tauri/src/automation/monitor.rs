@@ -394,10 +394,13 @@ pub fn start<R: Runtime>(app: AppHandle<R>) {
                 {
                     continue;
                 }
-                let title = format!(
-                    "Auto Meeting {} {}",
-                    chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"),
-                    uuid::Uuid::new_v4()
+                // Named after the call app when a call started it.
+                let call_app = holders
+                    .as_ref()
+                    .and_then(|holders| holders.holders.iter().find(|holder| holder.call))
+                    .and_then(|holder| crate::audio::meeting_title::app_display_name(&holder.name));
+                let title = crate::audio::meeting_title::default_meeting_title(
+                    call_active.then_some(call_app).flatten().as_deref(),
                 );
                 log::info!(
                     "Starting automatic recording (call: {call_active}, in-person: {in_person_start})"

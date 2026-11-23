@@ -104,6 +104,22 @@ export default function SettingsPage() {
     };
   }, []);
 
+  // `/settings#beta` opens on that section (links from elsewhere in the app).
+  useEffect(() => {
+    const index = TABS.findIndex(tab => `#${tab.value}` === window.location.hash);
+    if (index < 0) return;
+    const frame = requestAnimationFrame(() => {
+      const container = scrollRef.current;
+      const section = sectionRefs.current[index];
+      if (!container || !section) return;
+      container.scrollTo({
+        top: container.scrollTop + section.getBoundingClientRect().top - container.getBoundingClientRect().top - 24,
+        behavior: 'instant',
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
   const scrollToSection = (index: number) => {
     const container = scrollRef.current;
     const section = sectionRefs.current[index];

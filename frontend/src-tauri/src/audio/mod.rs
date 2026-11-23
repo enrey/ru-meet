@@ -28,6 +28,7 @@ pub mod level_monitor;
 pub mod pipeline;
 pub mod playback_monitor;
 pub mod post_processor;
+pub mod meeting_title;
 pub mod recording_commands;
 pub mod recording_manager;
 pub mod recording_preferences;

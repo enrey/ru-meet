@@ -30,6 +30,9 @@ import { useTemplates } from '@/hooks/meeting-details/useTemplates';
 import { useCopyOperations } from '@/hooks/meeting-details/useCopyOperations';
 import { useMeetingOperations } from '@/hooks/meeting-details/useMeetingOperations';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useProcessRecording } from '@/hooks/meeting-details/useProcessRecording';
+import { SummaryTabAction } from '@/components/MeetingDetails/SummaryTabAction';
+import { countManualSummary } from '@/lib/autoSummaryNudge';
 import type { SpokenWord } from '@/hooks/useSummaryAudio';
 
 const NO_WORDS: SpokenWord[] = [];
@@ -98,7 +101,7 @@ export default function PageContent({
   const { serverAddress } = useSidebar();
 
   // Get model config from ConfigContext
-  const { modelConfig, setModelConfig, isModelConfigLoading } = useConfig();
+  const { modelConfig, setModelConfig, isModelConfigLoading, isAutoSummary, toggleIsAutoSummary } = useConfig();
 
   // Custom hooks
   const meetingData = useMeetingData({ meeting, summaryData, onMeetingUpdated });
@@ -286,6 +289,24 @@ export default function PageContent({
     else prepareAndPlay();
   }, [meeting.id, summaryPlayback, summaryAudioStatus, prepareAndPlay]);
 
+  // --- Summary tab shortcut: create the summary, or listen to it ------------
+  const processing = useProcessRecording({
+    meetingId: meeting.id,
+    isDiarizing: false,
+    summaryStatus: summaryGeneration.summaryStatus,
+  });
+  const createSummary = useCallback(() => {
+    if (!modelConfig.provider || !modelConfig.model) {
+      setModelSettingsOpen(true);
+      return;
+    }
+    // The same run as "Process recording": the summary, then its reading when
+    // reading aloud is on and installed.
+    void processing.process();
+    if (!isAutoSummary) countManualSummary(() => toggleIsAutoSummary(true));
+  }, [modelConfig.provider, modelConfig.model, processing, isAutoSummary, toggleIsAutoSummary]);
+  const speechAvailable = summaryAudioStatus === null ? null : summaryAudioStatus.state !== 'unavailable';
+
   const handleRenameMeeting = async (title: string) => {
     try {
       await invoke('api_save_meeting_title', { meetingId: meeting.id, title });
@@ -386,6 +407,17 @@ export default function PageContent({
             activeTab={activeTab}
             onTabChange={setActiveTab}
             transcriptCount={totalCount}
+            summaryMissing={summaryState === 'none' || summaryState === 'error'}
+            summaryAction={(
+              <SummaryTabAction
+                summaryState={summaryState}
+                busy={processing.busy}
+                playing={Boolean(summaryPlayback?.isPlaying)}
+                speechAvailable={speechAvailable}
+                onCreate={createSummary}
+                onListen={listenToSummary}
+              />
+            )}
             tools={activeTab === 'transcript' ? (
               <TranscriptSearchBar
                 ref={searchInputRef}

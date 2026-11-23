@@ -161,8 +161,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
 
   // Summary configs
   // The backend owns this (it processes recordings on its own,
-  // `crate::processing`); on by default so the pipeline is not cut short.
-  const [isAutoSummary, setisAutoSummary] = useState<boolean>(true);
+  // `crate::processing`); off by default, the summary is made on request.
+  const [isAutoSummary, setisAutoSummary] = useState<boolean>(false);
   useEffect(() => {
     invoke<boolean>('get_auto_summary')
       .then(setisAutoSummary)

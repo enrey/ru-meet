@@ -55,6 +55,8 @@ pub struct RecordingSaver {
     incremental_saver: Option<Arc<AsyncMutex<IncrementalAudioSaver>>>,
     meeting_folder: Option<PathBuf>,
     meeting_name: Option<String>,
+    /// Started by meeting detection; only such a recording may be discarded.
+    automatic: bool,
     metadata: Option<MeetingMetadata>,
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     is_saving: Arc<Mutex<bool>>,
@@ -161,6 +163,7 @@ impl RecordingSaver {
             incremental_saver: None,
             meeting_folder: None,
             meeting_name: None,
+            automatic: false,
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             is_saving: Arc::new(Mutex::new(false)),
@@ -178,6 +181,10 @@ impl RecordingSaver {
     /// Set the meeting name for this recording session
     pub fn set_meeting_name(&mut self, name: Option<String>) {
         self.meeting_name = name;
+    }
+
+    pub fn set_automatic(&mut self, automatic: bool) {
+        self.automatic = automatic;
     }
 
     /// Set device information in metadata
@@ -344,7 +351,7 @@ impl RecordingSaver {
         }
     }
 
-    /// Discard only the uniquely named folder owned by this automatic session.
+    /// Discard only the folder owned by this automatic session.
     /// Capture and transcription have already stopped before this is called.
     pub async fn discard(&mut self) -> Result<()> {
         if let Ok(mut saving) = self.is_saving.lock() {
@@ -365,12 +372,7 @@ impl RecordingSaver {
                 target.parent() == Some(root.as_path()),
                 "Refusing to discard outside recordings directory"
             );
-            anyhow::ensure!(
-                self.meeting_name
-                    .as_ref()
-                    .is_some_and(|name| name.starts_with("Auto Meeting ")),
-                "Refusing to discard a manual recording"
-            );
+            anyhow::ensure!(self.automatic, "Refusing to discard a manual recording");
             tokio::fs::remove_dir_all(target).await?;
         }
         Ok(())

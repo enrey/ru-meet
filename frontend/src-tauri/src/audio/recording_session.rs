@@ -179,11 +179,10 @@ impl RecordingSession {
             .as_ref()
             .map_or(true, |preferences| preferences.auto_save)
             || !realtime_transcription;
-        let effective_meeting_name = meeting_name.unwrap_or_else(|| {
-            let now = chrono::Local::now();
-            format!("Meeting {}", now.format("%Y-%m-%d_%H-%M-%S"))
-        });
+        let effective_meeting_name =
+            meeting_name.unwrap_or_else(|| super::meeting_title::default_meeting_title(None));
         manager.set_meeting_name(Some(effective_meeting_name));
+        manager.set_automatic(automatic);
 
         let app_for_error = app.clone();
         manager.set_error_callback(move |error| {

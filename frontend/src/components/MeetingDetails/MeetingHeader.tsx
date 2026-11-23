@@ -231,11 +231,17 @@ export function MeetingTabs({
   activeTab,
   onTabChange,
   transcriptCount,
+  summaryMissing = false,
+  summaryAction,
   tools,
 }: {
   activeTab: MeetingDetailsTab;
   onTabChange: (tab: MeetingDetailsTab) => void;
   transcriptCount?: number;
+  /** No summary yet: the tab is drawn dashed, as something optional to create. */
+  summaryMissing?: boolean;
+  /** Small action right after the summary tab: create it, or listen to it. */
+  summaryAction?: ReactNode;
   tools?: ReactNode;
 }) {
   const { t } = useI18n();
@@ -244,17 +250,20 @@ export function MeetingTabs({
       <div role="tablist" aria-label={t('Meeting sections')} className="flex items-center gap-1">
         {TABS.map(({ value, label }) => {
           const selected = activeTab === value;
+          const dashed = value === 'summary' && summaryMissing && !selected;
           return (
+            <div key={value} className="flex items-center gap-0.5">
             <button
-              key={value}
               type="button"
               role="tab"
               id={`meeting-tab-${value}`}
               aria-selected={selected}
               aria-controls={`meeting-panel-${value}`}
               onClick={() => onTabChange(value)}
-              className={`flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
-                selected ? 'bg-slate-100 font-semibold text-indigo-700' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
+              className={`flex items-center gap-2 rounded-lg border px-3.5 py-1.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
+                selected ? 'border-transparent bg-slate-100 font-semibold text-indigo-700'
+                  : dashed ? 'border-dashed border-slate-300 text-slate-400 hover:bg-slate-50 hover:text-slate-700'
+                  : 'border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
               {t(label)}
@@ -264,6 +273,8 @@ export function MeetingTabs({
                 </span>
               )}
             </button>
+            {value === 'summary' && summaryAction}
+            </div>
           );
         })}
       </div>

@@ -587,6 +587,11 @@ impl RecordingManager {
         self.recording_saver.set_meeting_name(name);
     }
 
+    /// Mark a recording started by meeting detection, which may be discarded.
+    pub fn set_automatic(&mut self, automatic: bool) {
+        self.recording_saver.set_automatic(automatic);
+    }
+
     /// Add a structured transcript segment to be saved later
     pub fn add_transcript_segment(&self, segment: super::recording_saver::TranscriptSegment) {
         self.recording_saver.add_transcript_segment(segment);
